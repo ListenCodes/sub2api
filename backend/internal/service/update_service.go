@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/url"
 	"os"
+
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -172,7 +174,19 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 		return ErrNoUpdateAvailable
 	}
 
-	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
+	scriptPath := "/app/scripts/sync-upstream.sh"
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return fmt.Errorf("sync script not found at %s", scriptPath)
+	}
+
+	cmd := exec.CommandContext(ctx, "/bin/sh", scriptPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("upstream sync failed: %w", err)
+	}
+
+	return nil
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,

@@ -28,6 +28,11 @@ services:
     volumes:
       # Data persistence (config.yaml will be auto-generated here)
       - sub2api_data:/app/data
+      # Custom fork: mount repo, docker socket, and sync script for upstream sync
+      - /root/sub2api:/repo:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/sub2api-custom/sync-upstream.sh:/app/scripts/sync-upstream.sh:ro
+      - /usr/bin/docker:/usr/bin/docker:ro
       # Optional: Mount custom config.yaml (uncomment and create the file first)
       # Copy config.example.yaml to config.yaml, modify it, then uncomment:
       # - ./config.yaml:/app/data/config.yaml
