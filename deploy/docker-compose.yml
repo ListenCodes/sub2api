@@ -31,7 +31,7 @@ services:
       # Custom fork: mount repo, docker socket, and sync script for upstream sync
       - /root/sub2api:/repo:rw
       - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/sub2api-custom/sync-upstream.sh:/app/scripts/sync-upstream.sh:ro
+      - /opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro
       - /usr/bin/docker:/usr/bin/docker:ro
       # Optional: Mount custom config.yaml (uncomment and create the file first)
       # Copy config.example.yaml to config.yaml, modify it, then uncomment:
