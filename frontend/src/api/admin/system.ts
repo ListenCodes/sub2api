@@ -40,9 +40,12 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
   return data
 }
 
-export interface UpdateResult {
+export interface UpdateJob {
+  job_id: string
+  status: 'running' | 'success' | 'failed'
   message: string
-  need_restart: boolean
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 export interface RollbackVersionInfo {
@@ -65,9 +68,24 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
  * Perform system update
  * Downloads and applies the latest version
  */
-export async function performUpdate(): Promise<UpdateResult> {
-  const { data } = await apiClient.post<UpdateResult>('/admin/system/update', undefined, { timeout: 600000 })
+export async function performUpdate(): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>('/admin/system/update')
   return data
+}
+
+/**
+ * Get the current status of an asynchronous system update.
+ */
+export async function getUpdateStatus(jobID: string): Promise<UpdateJob> {
+  const { data } = await apiClient.get<UpdateJob>('/admin/system/update/status', {
+    params: { job_id: jobID }
+  })
+  return data
+}
+
+export interface UpdateResult {
+  message: string
+  need_restart: boolean
 }
 
 /**
@@ -94,6 +112,7 @@ export const systemAPI = {
   getVersion,
   checkUpdates,
   performUpdate,
+  getUpdateStatus,
   getRollbackVersions,
   rollback,
   restartService

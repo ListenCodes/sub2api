@@ -645,6 +645,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
   performUpdate,
+  getUpdateStatus,
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
@@ -686,6 +687,9 @@ const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
 const restartCountdown = ref(0)
+const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+let updatePollInFlight = false
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<'update' | 'rollback'>('update')
 
@@ -748,6 +752,7 @@ async function refreshVersion(force = true) {
   updateError.value = ''
   updateSuccess.value = false
   needRestart.value = false
+  stopUpdatePolling()
   resetRollbackState()
 
   await appStore.fetchVersion(force)
@@ -761,18 +766,70 @@ async function handleUpdate() {
   updateSuccess.value = false
 
   try {
-    const result = await performUpdate()
-    successKind.value = 'update'
-    updateSuccess.value = true
-    needRestart.value = result.need_restart
-    // Clear version cache to reflect update completed
-    appStore.clearVersionCache()
+    const job = await performUpdate()
+    startUpdatePolling(job.job_id)
   } catch (error: unknown) {
+    stopUpdatePolling()
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
-  } finally {
     updating.value = false
   }
+}
+
+function stopUpdatePolling() {
+  if (updatePollTimer.value) {
+    clearInterval(updatePollTimer.value)
+    updatePollTimer.value = null
+  }
+  if (updatePollDeadlineTimer.value) {
+    clearTimeout(updatePollDeadlineTimer.value)
+    updatePollDeadlineTimer.value = null
+  }
+  updatePollInFlight = false
+}
+
+function finishUpdateSuccess() {
+  stopUpdatePolling()
+  successKind.value = 'update'
+  updateSuccess.value = true
+  needRestart.value = true
+  updating.value = false
+  appStore.clearVersionCache()
+}
+
+function finishUpdateFailure(message: string) {
+  stopUpdatePolling()
+  updateError.value = message || t('version.updateFailed')
+  updating.value = false
+}
+
+async function pollUpdateStatus(jobID: string) {
+  if (updatePollInFlight) return
+  updatePollInFlight = true
+  try {
+    const status = await getUpdateStatus(jobID)
+    if (status.status === 'success') {
+      finishUpdateSuccess()
+    } else if (status.status === 'failed') {
+      finishUpdateFailure(status.message)
+    }
+  } catch {
+    // Keep polling transient request failures until the 15-minute deadline.
+  } finally {
+    updatePollInFlight = false
+  }
+}
+
+function startUpdatePolling(jobID: string) {
+  stopUpdatePolling()
+  updating.value = true
+  void pollUpdateStatus(jobID)
+  updatePollTimer.value = setInterval(() => {
+    void pollUpdateStatus(jobID)
+  }, 5000)
+  updatePollDeadlineTimer.value = setTimeout(() => {
+    finishUpdateFailure(`${t('version.updateFailed')}: status polling timed out`)
+  }, 15 * 60 * 1000)
 }
 
 function resetRollbackState() {
@@ -920,6 +977,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopUpdatePolling()
   document.removeEventListener('click', handleClickOutside)
 })
 </script>

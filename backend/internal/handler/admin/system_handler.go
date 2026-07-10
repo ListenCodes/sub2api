@@ -24,7 +24,8 @@ type SystemHandler struct {
 
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
-	PerformUpdate(ctx context.Context) error
+	PerformUpdate(ctx context.Context) (*service.UpdateJob, error)
+	GetUpdateStatus(ctx context.Context, jobID string) (*service.UpdateJob, error)
 	Rollback() error
 	ListRollbackVersions(ctx context.Context) ([]service.RollbackVersion, error)
 	RollbackToVersion(ctx context.Context, version string) error
@@ -64,18 +65,22 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 	operationID := buildSystemOperationID(c, "update")
 	payload := gin.H{"operation_id": operationID}
-	executeAdminIdempotentJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+	executeAdminIdempotentAcceptedJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
 			return nil, err
 		}
 		var releaseReason string
 		succeeded := false
+		releaseInBackground := false
 		defer func() {
-			release(releaseReason, succeeded)
+			if !releaseInBackground {
+				release(releaseReason, succeeded)
+			}
 		}()
 
-		if err := h.updateSvc.PerformUpdate(ctx); err != nil {
+		job, err := h.updateSvc.PerformUpdate(ctx)
+		if err != nil {
 			if errors.Is(err, service.ErrNoUpdateAvailable) {
 				info, checkErr := h.updateSvc.CheckUpdate(ctx, false)
 				if checkErr != nil {
@@ -94,14 +99,58 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			releaseReason = "SYSTEM_UPDATE_FAILED"
 			return nil, err
 		}
-		succeeded = true
+		releaseInBackground = true
+		go h.waitForUpdate(job.JobID, release)
 
 		return gin.H{
-			"message":      "Update completed. Please restart the service.",
+			"job_id":       job.JobID,
+			"status":       job.Status,
+			"message":      job.Message,
+			"started_at":   job.StartedAt,
+			"finished_at":  job.FinishedAt,
 			"need_restart": true,
 			"operation_id": lock.OperationID(),
 		}, nil
 	})
+}
+
+// GetUpdateStatus returns the current status for an asynchronous upstream update.
+// GET /api/v1/admin/system/update/status?job_id=...
+func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
+	job, err := h.updateSvc.GetUpdateStatus(c.Request.Context(), strings.TrimSpace(c.Query("job_id")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, job)
+}
+
+func (h *SystemHandler) waitForUpdate(jobID string, release func(string, bool)) {
+	deadline := time.NewTimer(15 * time.Minute)
+	ticker := time.NewTicker(5 * time.Second)
+	defer deadline.Stop()
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			job, err := h.updateSvc.GetUpdateStatus(context.Background(), jobID)
+			if err != nil {
+				continue
+			}
+			switch job.Status {
+			case service.UpdateStatusSuccess:
+				release(job.Message, true)
+				return
+			case service.UpdateStatusFailed:
+				release(job.Message, false)
+				return
+			}
+		case <-deadline.C:
+			release("update status polling timed out", false)
+			return
+		}
+	}
 }
 
 // GetRollbackVersions lists versions available for rollback

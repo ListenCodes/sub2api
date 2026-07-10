@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -67,6 +66,9 @@ type UpdateService struct {
 	githubClient   GitHubReleaseClient
 	currentVersion string
 	buildType      string // "source" for manual builds, "release" for CI builds
+	scriptPath     string
+	statusPath     string
+	jobIDPath      string
 }
 
 // NewUpdateService creates a new UpdateService
@@ -76,6 +78,9 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 		githubClient:   githubClient,
 		currentVersion: version,
 		buildType:      buildType,
+		scriptPath:     defaultUpdateScriptPath,
+		statusPath:     defaultUpdateStatusPath,
+		jobIDPath:      defaultUpdateJobIDPath,
 	}
 }
 
@@ -162,31 +167,62 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 	return info, nil
 }
 
-// PerformUpdate downloads and applies the update
-// Uses atomic file replacement pattern for safe in-place updates
-func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+// PerformUpdate starts an upstream sync job and returns before the build completes.
+func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !info.HasUpdate {
-		return ErrNoUpdateAvailable
+		return nil, ErrNoUpdateAvailable
 	}
 
-	scriptPath := "/app/scripts/sync-upstream.sh"
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return fmt.Errorf("sync script not found at %s", scriptPath)
+	if existing, readErr := readUpdateStatus(s.statusPath, ""); readErr == nil && existing.Status == UpdateStatusRunning {
+		return nil, ErrUpdateInProgress
+	}
+	if _, err := os.Stat(s.scriptPath); err != nil {
+		return nil, fmt.Errorf("sync script not found at %s: %w", s.scriptPath, err)
 	}
 
-	cmd := exec.CommandContext(ctx, "/bin/sh", scriptPath)
+	jobID, err := newUpdateJobID()
+	if err != nil {
+		return nil, err
+	}
+	startedAt := time.Now().UTC()
+	job := &UpdateJob{
+		JobID:     jobID,
+		Status:    UpdateStatusRunning,
+		Message:   "sync triggered",
+		Timestamp: startedAt,
+		StartedAt: &startedAt,
+	}
+	if err := writeUpdateStatus(s.statusPath, job); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(s.jobIDPath, []byte(jobID+"\n"), 0644); err != nil {
+		return nil, fmt.Errorf("write update job id: %w", err)
+	}
+
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", s.scriptPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("upstream sync failed: %w", err)
+	if err := cmd.Start(); err != nil {
+		finishedAt := time.Now().UTC()
+		_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "failed to start sync: "+err.Error(), &startedAt, &finishedAt)
+		return nil, fmt.Errorf("start upstream sync: %w", err)
 	}
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			if current, readErr := readUpdateStatus(s.statusPath, jobID); readErr == nil && current.Status != UpdateStatusRunning {
+				return
+			}
+			finishedAt := time.Now().UTC()
+			_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "sync trigger failed: "+err.Error(), &startedAt, &finishedAt)
+		}
+	}()
 
-	return nil
+	return job, nil
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,
