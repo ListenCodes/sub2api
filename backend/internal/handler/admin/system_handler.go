@@ -72,11 +72,8 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 		}
 		var releaseReason string
 		succeeded := false
-		releaseInBackground := false
 		defer func() {
-			if !releaseInBackground {
-				release(releaseReason, succeeded)
-			}
+			release(releaseReason, succeeded)
 		}()
 
 		job, err := h.updateSvc.PerformUpdate(ctx)
@@ -99,8 +96,7 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			releaseReason = "SYSTEM_UPDATE_FAILED"
 			return nil, err
 		}
-		releaseInBackground = true
-		go h.waitForUpdate(job.JobID, release)
+		succeeded = true
 
 		return gin.H{
 			"job_id":       job.JobID,
@@ -117,40 +113,17 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 // GetUpdateStatus returns the current status for an asynchronous upstream update.
 // GET /api/v1/admin/system/update/status?job_id=...
 func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
-	job, err := h.updateSvc.GetUpdateStatus(c.Request.Context(), strings.TrimSpace(c.Query("job_id")))
+	jobID := strings.TrimSpace(c.Query("job_id"))
+	if jobID == "" {
+		response.ErrorFrom(c, service.ErrUpdateJobIDRequired)
+		return
+	}
+	job, err := h.updateSvc.GetUpdateStatus(c.Request.Context(), jobID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, job)
-}
-
-func (h *SystemHandler) waitForUpdate(jobID string, release func(string, bool)) {
-	deadline := time.NewTimer(15 * time.Minute)
-	ticker := time.NewTicker(5 * time.Second)
-	defer deadline.Stop()
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			job, err := h.updateSvc.GetUpdateStatus(context.Background(), jobID)
-			if err != nil {
-				continue
-			}
-			switch job.Status {
-			case service.UpdateStatusSuccess:
-				release(job.Message, true)
-				return
-			case service.UpdateStatusFailed:
-				release(job.Message, false)
-				return
-			}
-		case <-deadline.C:
-			release("update status polling timed out", false)
-			return
-		}
-	}
 }
 
 // GetRollbackVersions lists versions available for rollback

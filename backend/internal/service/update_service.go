@@ -213,13 +213,9 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 		return nil, fmt.Errorf("start upstream sync: %w", err)
 	}
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			if current, readErr := readUpdateStatus(s.statusPath, jobID); readErr == nil && current.Status != UpdateStatusRunning {
-				return
-			}
-			finishedAt := time.Now().UTC()
-			_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "sync trigger failed: "+err.Error(), &startedAt, &finishedAt)
-		}
+		// The host sync script owns the terminal status. We only reap the child
+		// process here so an async update does not leave a zombie process.
+		_ = cmd.Wait()
 	}()
 
 	return job, nil

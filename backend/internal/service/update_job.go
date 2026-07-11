@@ -26,8 +26,9 @@ const (
 )
 
 var (
-	ErrUpdateJobNotFound = infraerrors.NotFound("UPDATE_JOB_NOT_FOUND", "update job not found")
-	ErrUpdateInProgress  = infraerrors.Conflict("UPDATE_IN_PROGRESS", "an upstream update is already running")
+	ErrUpdateJobNotFound   = infraerrors.NotFound("UPDATE_JOB_NOT_FOUND", "update job not found")
+	ErrUpdateJobIDRequired = infraerrors.BadRequest("UPDATE_JOB_ID_REQUIRED", "job id is required")
+	ErrUpdateInProgress    = infraerrors.Conflict("UPDATE_IN_PROGRESS", "an upstream update is already running")
 )
 
 type UpdateJob struct {
@@ -112,7 +113,11 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return readUpdateStatus(s.statusPath, strings.TrimSpace(jobID))
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil, ErrUpdateJobIDRequired
+	}
+	return readUpdateStatus(s.statusPath, jobID)
 }
 
 func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {

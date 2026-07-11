@@ -52,3 +52,11 @@ func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrUpdateJobNotFound))
 }
+
+func TestUpdateServiceGetUpdateStatusRequiresJobID(t *testing.T) {
+	svc := NewUpdateService(nil, nil, "0.1.132", "source")
+
+	_, err := svc.GetUpdateStatus(context.Background(), " ")
+
+	require.ErrorIs(t, err, ErrUpdateJobIDRequired)
+}
