@@ -48,6 +48,13 @@ export interface UpdateJob {
   finished_at?: string | null
 }
 
+function newUpdateIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `update-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 export interface RollbackVersionInfo {
   version: string
   published_at: string
@@ -69,7 +76,9 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
  * Downloads and applies the latest version
  */
 export async function performUpdate(): Promise<UpdateJob> {
-  const { data } = await apiClient.post<UpdateJob>('/admin/system/update')
+  const { data } = await apiClient.post<UpdateJob>('/admin/system/update', undefined, {
+    headers: { 'Idempotency-Key': newUpdateIdempotencyKey() }
+  })
   return data
 }
 
