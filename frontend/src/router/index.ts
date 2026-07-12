@@ -576,6 +576,96 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/risk-control/overview',
+    name: 'AdminUserRiskControlOverview',
+    component: () => import('@/views/admin/UserRiskControlOverviewView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'User Risk Control',
+      titleKey: 'admin.userRiskControl.title',
+      descriptionKey: 'admin.userRiskControl.description'
+    }
+  },
+  {
+    path: '/admin/risk-control/cases',
+    name: 'AdminUserRiskControlCases',
+    component: () => import('@/views/admin/UserRiskControlListView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Registration Review',
+      titleKey: 'admin.userRiskControl.casesTitle',
+      descriptionKey: 'admin.userRiskControl.casesDescription',
+      riskListKind: 'cases'
+    }
+  },
+  {
+    path: '/admin/risk-control/events',
+    name: 'AdminUserRiskControlEvents',
+    component: () => import('@/views/admin/UserRiskControlListView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Risk Events',
+      titleKey: 'admin.userRiskControl.eventsTitle',
+      descriptionKey: 'admin.userRiskControl.eventsDescription',
+      riskListKind: 'events'
+    }
+  },
+  {
+    path: '/admin/risk-control/scenarios',
+    name: 'AdminUserRiskControlScenarios',
+    component: () => import('@/views/admin/UserRiskControlListView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Risk Scenarios',
+      titleKey: 'admin.userRiskControl.scenariosTitle',
+      descriptionKey: 'admin.userRiskControl.scenariosDescription',
+      riskListKind: 'scenarios'
+    }
+  },
+  {
+    path: '/admin/risk-control/subjects',
+    name: 'AdminUserRiskControlSubjects',
+    component: () => import('@/views/admin/UserRiskControlListView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'User Profiles',
+      titleKey: 'admin.userRiskControl.subjectsTitle',
+      descriptionKey: 'admin.userRiskControl.subjectsDescription',
+      riskListKind: 'subjects'
+    }
+  },
+  {
+    path: '/admin/risk-control/lists',
+    name: 'AdminUserRiskControlLists',
+    component: () => import('@/views/admin/UserRiskControlListView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Risk Lists',
+      titleKey: 'admin.userRiskControl.listsTitle',
+      descriptionKey: 'admin.userRiskControl.listsDescription',
+      riskListKind: 'lists'
+    }
+  },
+  {
+    path: '/admin/risk-control/audit',
+    name: 'AdminUserRiskControlAudit',
+    component: () => import('@/views/admin/UserRiskControlListView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Risk Audit Log',
+      titleKey: 'admin.userRiskControl.auditTitle',
+      descriptionKey: 'admin.userRiskControl.auditDescription',
+      riskListKind: 'audit'
+    }
+  },
+  {
     path: '/admin/usage',
     name: 'AdminUsage',
     component: () => import('@/views/admin/UsageView.vue'),

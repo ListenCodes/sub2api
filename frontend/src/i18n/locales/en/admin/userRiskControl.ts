@@ -1,0 +1,14 @@
+export default {
+  userRiskControl: {
+    sectionLabel: 'Security & Risk',
+    title: 'User Risk Control',
+    description: 'Review registration risk, cases, and explainable signals. Shadow mode is active and will not reject normal registrations automatically.',
+    refresh: 'Refresh data',
+    loadFailed: 'The risk service is unavailable. Check service status.',
+    openCases: 'Open cases', openCasesHint: 'Prioritize high-risk registrations and multi-signal events.', viewAll: 'View all', noReason: 'No additional explanation', noOpenCases: 'No open cases', noEvents: 'No risk events yet', noData: 'No data', noCases: 'No cases',
+    serviceStatus: 'Service status', serviceStatusHint: 'Current policy of the independent risk service.', mode: 'Mode', failureMode: 'Failure mode', scenarioRevision: 'Scenario revision', shadowNotice: 'Shadow mode records and evaluates signals without automatically freezing or rejecting users. Any later enforcement requires an explicit rule release and human review.',
+    recentEvents: 'Recent risk events', recentEventsHint: 'Each event includes the matched scenario, evidence family, and decision reason.', eventsTitle: 'Risk Events', eventsDescription: 'Review risk evidence from registrations and usage over time.', casesTitle: 'Registration Review', casesDescription: 'Resolve registration risk cases that need human confirmation.', scenariosTitle: 'Scenarios & Rules', scenariosDescription: 'Review scenario revisions and their current run mode.', subjectsTitle: 'User Profiles', subjectsDescription: 'Review event counts, highest scores, and recent actions by subject.', listsTitle: 'List Management', listsDescription: 'Review active allow, watch, and deny list entries.', auditTitle: 'Audit Log', auditDescription: 'Review administrator actions for risk cases and configuration changes.', resolve: 'Mark resolved', resolving: 'Resolving...', resolved: 'Resolved', resolutionPrompt: 'Enter a resolution note', defaultResolution: 'Manual review completed; no restriction applied', resolveSuccess: 'The case was marked as resolved.',
+    table: { time: 'Time', scenario: 'Scenario', subject: 'Subject', action: 'Suggested action', reason: 'Reason', title: 'Case', priority: 'Priority', status: 'Status', updated: 'Updated', name: 'Name', code: 'Code', mode: 'Mode', revision: 'Revision', type: 'Type', events: 'Events', score: 'Max score', lastSeen: 'Last seen', actions: 'Actions', listType: 'List type', valueHash: 'Value digest', label: 'Label', actor: 'Actor', target: 'Target' },
+    metrics: { openCases: 'Open cases', openCasesMeta: 'Awaiting review', events24h: 'Events in 24h', events24hMeta: 'Recent signals', highRisk: 'High-risk subjects', highRiskMeta: 'In the last 24h', reviewRate: 'Review rate', reviewRateMeta: 'Current event window' },
+  },
+}

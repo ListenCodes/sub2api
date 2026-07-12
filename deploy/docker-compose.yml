@@ -54,6 +54,10 @@ services:
       - SERVER_MODE=${SERVER_MODE:-release}
       - RUN_MODE=${RUN_MODE:-standard}
 
+      # Independent registration risk service (shadow + baseline_allow by default)
+      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-}
+      - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:-}
+
       # =======================================================================
       # Database Configuration (PostgreSQL)
       # =======================================================================

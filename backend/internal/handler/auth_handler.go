@@ -27,6 +27,7 @@ type AuthHandler struct {
 	redeemService        *service.RedeemService
 	totpService          *service.TotpService
 	userAttributeService *service.UserAttributeService
+	riskControlClient    *service.RiskControlClient
 
 	dingTalkClientInstance *DingTalkClient
 	dingTalkClientMu       sync.Mutex
@@ -43,6 +44,7 @@ func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userSe
 		redeemService:        redeemService,
 		totpService:          totpService,
 		userAttributeService: userAttributeService,
+		riskControlClient:    service.NewRiskControlClientFromEnv(),
 	}
 }
 
@@ -166,7 +168,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	// Turnstile 验证（邮箱验证码注册场景避免重复校验一次性 token）
-	if err := h.authService.VerifyTurnstileForRegister(c.Request.Context(), req.TurnstileToken, ip.GetClientIP(c), req.VerifyCode); err != nil {
+	if err := h.authService.VerifyTurnstileForRegister(c.Request.Context(), req.TurnstileToken, ip.GetTrustedClientIP(c), req.VerifyCode); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -185,6 +187,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	h.reportRegistrationRisk(c, req, user)
 	h.respondWithTokenPair(c, user)
 }
 

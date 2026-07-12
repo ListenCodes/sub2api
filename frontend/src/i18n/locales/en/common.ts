@@ -190,6 +190,15 @@ export default {
     channelMonitor: 'Channel Monitor',
     channelStatus: 'Channel Status',
     riskControl: 'Risk Control',
+    securityRiskControl: 'Security & Risk',
+    userRiskControl: 'User Risk Control',
+    registrationReview: 'Registration Review',
+    riskEvents: 'Risk Events',
+    riskSubjects: 'User Profiles',
+    riskScenarios: 'Scenarios & Rules',
+    riskLists: 'Risk Lists',
+    riskAudit: 'Audit Log',
+    contentModeration: 'Content Moderation',
   },
 
   // Auth
