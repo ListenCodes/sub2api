@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SYNC_SCRIPT="$ROOT_DIR/deploy/ops/sync-upstream.sh"
 
 grep -Fq 'conflict_snapshot_dir="$CONFLICT_DIR/$JOB_ID"' "$SYNC_SCRIPT"
