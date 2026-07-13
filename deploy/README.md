@@ -159,6 +159,15 @@ install -m 0755 deploy/ops/auto-update.sh /opt/sub2api-custom/auto-update.sh
 install -m 0755 deploy/ops/publish-custom.sh /opt/sub2api-custom/publish-custom.sh
 ```
 
+Install these two root crontab entries as part of the same change. Do not
+point the per-minute trigger consumer at `sync-upstream.sh`; that script only
+prepares an integration branch and does not publish it.
+
+```cron
+0 3 * * * /bin/bash /opt/sub2api-custom/auto-update.sh >> /var/log/sub2api-update.log 2>&1
+* * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
+```
+
 The admin trigger and daily job use `sync-and-publish.sh`. It prepares an
 `origin/integration/upstream-*` branch, stops on conflicts or base drift, and
 automatically promotes and publishes only a clean integration. The publish

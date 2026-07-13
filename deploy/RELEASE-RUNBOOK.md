@@ -61,6 +61,15 @@ The admin trigger and the daily scheduled job both call
 `origin/custom` and production are changed. A clean merge promotes the
 integration branch and calls the same publish entrypoint automatically.
 
+The production crontab must keep the per-minute admin-trigger consumer on the
+same wrapper; calling `sync-upstream.sh` there produces preparation-only
+behavior and will not deploy the result:
+
+```cron
+0 3 * * * /bin/bash /opt/sub2api-custom/auto-update.sh >> /var/log/sub2api-update.log 2>&1
+* * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
+```
+
 ## VPS Fallback Release
 
 Use this path when the local development machine is unavailable or an urgent

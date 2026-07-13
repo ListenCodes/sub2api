@@ -19,10 +19,10 @@
 - Modify: `deploy/ops/README.md`
 - Modify: `E:\BaiduSyncdisk\Private\VPS\AGENTS.md`
 
-- [ ] State that clean upstream integrations may be promoted and published automatically by the unified wrapper.
-- [ ] State that conflicts, base drift, dirty worktrees, failed backups, failed builds, and failed health checks stop without publishing.
-- [ ] Document `sync-and-publish.sh` as the entrypoint for both the admin trigger and daily schedule.
-- [ ] Keep `publish-custom.sh` as the only image-build/deploy implementation.
+- [x] State that clean upstream integrations may be promoted and published automatically by the unified wrapper.
+- [x] State that conflicts, base drift, dirty worktrees, failed backups, failed builds, and failed health checks stop without publishing.
+- [x] Document `sync-and-publish.sh` as the entrypoint for both the admin trigger and daily schedule.
+- [x] Keep `publish-custom.sh` as the only image-build/deploy implementation.
 
 ### Task 2: Add the unified host flow
 
@@ -32,12 +32,12 @@
 - Modify: `deploy/ops/auto-update.sh`
 - Modify: `deploy/ops/tests/test-script-contract.ps1`
 
-- [ ] Add a failing shell-contract assertion that both scheduled and trigger paths call `sync-and-publish.sh`.
-- [ ] Add a deferred-result mode so the trigger result is written only after automatic publication finishes.
-- [ ] Record the integration base commit and branch in sync status.
-- [ ] Under one end-to-end lock, run integration, verify the base is unchanged, fast-forward `custom`, push `origin/custom`, and call `publish-custom.sh --commit <HEAD>`.
-- [ ] On conflict or any publish failure, preserve the integration branch and write a terminal failure result without retrying.
-- [ ] Run the contract test and `bash -n` before committing.
+- [x] Add a failing shell-contract assertion that both scheduled and trigger paths call `sync-and-publish.sh`.
+- [x] Add a deferred-result mode so the trigger result is written only after automatic publication finishes.
+- [x] Record the integration base commit and branch in sync status.
+- [x] Under one end-to-end lock, run integration, verify the base is unchanged, fast-forward `custom`, push `origin/custom`, and call `publish-custom.sh --commit <HEAD>`.
+- [x] On conflict or any publish failure, preserve the integration branch and write a terminal failure result; a later run may retry only the exact pending approved commit.
+- [x] Run the contract test and `bash -n` before committing.
 
 ### Task 3: Extend update status and UI
 
@@ -52,10 +52,10 @@
 - Test: `backend/internal/service/update_job_service_test.go`
 - Test: `frontend/src/components/common/__tests__/VersionBadge.spec.ts`
 
-- [ ] Add optional `published` and `published_commit` fields to the update job contract.
-- [ ] Make successful published jobs render “published” without a restart button; preparation-only status remains supported for direct script checks.
-- [ ] Keep admin-only access, idempotency, polling, and failure messages.
-- [ ] Run focused Go and frontend tests before full verification.
+- [x] Add optional `published` and `published_commit` fields to the update job contract.
+- [x] Make successful published jobs render “published” without a restart button; preparation-only status remains supported for direct script checks.
+- [x] Keep admin-only access, idempotency, polling, and failure messages.
+- [x] Run focused Go and frontend tests before full verification.
 
 ### Task 4: Install, test, and publish
 
