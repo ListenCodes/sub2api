@@ -62,6 +62,15 @@ func TestProxyRiskControlRejectsUnallowlistedPath(t *testing.T) {
 	}
 }
 
+func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
+	if !allowedRiskControlPath(http.MethodPost, "/rules") {
+		t.Fatal("POST /rules must be allowlisted for authenticated admin proxy")
+	}
+	if allowedRiskControlPath(http.MethodPost, "/rules/secret") {
+		t.Fatal("arbitrary POST rule path must remain blocked")
+	}
+}
+
 func TestProxyRiskControlPreservesUpstreamErrorBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

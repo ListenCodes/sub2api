@@ -45,7 +45,7 @@ func allowedRiskControlPath(method, path string) bool {
 		return true
 	case method == http.MethodPut && strings.HasPrefix(path, "/rules/"):
 		return true
-	case method == http.MethodPost && path == "/rules/test":
+	case method == http.MethodPost && (path == "/rules" || path == "/rules/test"):
 		return true
 	default:
 		return false
