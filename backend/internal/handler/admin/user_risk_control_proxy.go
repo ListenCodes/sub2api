@@ -3,6 +3,7 @@ package admin
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -45,11 +46,20 @@ func allowedRiskControlPath(method, path string) bool {
 		return true
 	case method == http.MethodPut && strings.HasPrefix(path, "/rules/"):
 		return true
-	case method == http.MethodPost && (path == "/rules" || path == "/rules/test"):
+	case method == http.MethodPost && (path == "/rules" || path == "/rules/test" || isProcessedUserPath(path)):
 		return true
 	default:
 		return false
 	}
+}
+
+func isProcessedUserPath(path string) bool {
+	if !strings.HasPrefix(path, "/users/") || !strings.HasSuffix(path, "/processed") {
+		return false
+	}
+	rawID := strings.TrimSuffix(strings.TrimPrefix(path, "/users/"), "/processed")
+	id, err := strconv.ParseInt(strings.Trim(rawID, "/"), 10, 64)
+	return err == nil && id > 0
 }
 
 func querySuffix(c *gin.Context) string {

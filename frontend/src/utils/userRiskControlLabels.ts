@@ -24,8 +24,13 @@ const riskActions: Record<string, string> = {
   observe: '仅记录',
   review: '人工复核',
   ban: '封禁账号',
+  unban: '解封账号',
   reject_candidate: '拒绝注册',
   auto_ban: '自动封禁',
+  create_rule: '新建规则',
+  update_rule: '修改规则',
+  rule_test: '规则测试',
+  mark_processed: '标记已处理',
 }
 
 const accountStatuses: Record<string, string> = {

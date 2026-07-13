@@ -17,20 +17,22 @@
           <template v-else-if="detail">
             <section class="grid grid-cols-2 gap-3">
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskScore') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.summary?.score ?? user.risk_score ?? 0 }}</p></div>
-              <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskLevel') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.summary?.level ?? user.risk_level ?? '-' }}</p></div>
+              <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskLevel') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatRiskLevel(detail.summary?.level ?? user.risk_level) }}</p></div>
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.ipAssociations') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.associations?.ip_count ?? 0 }}</p></div>
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.deviceAssociations') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.associations?.device_count ?? 0 }}</p></div>
             </section>
-            <p v-if="detail.summary?.reason || user.risk_reason" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">{{ detail.summary?.reason || user.risk_reason }}</p>
+            <p v-if="detail.summary?.reason || user.risk_reason" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">{{ formatRiskReason(detail.summary?.reason || user.risk_reason) }}</p>
 
             <section class="mt-6">
               <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.userRiskControl.drawer.timeline') }}</h3>
               <div v-if="detail.events.length" class="mt-3 space-y-3 border-l border-gray-200 pl-4 dark:border-dark-700">
                 <article v-for="event in detail.events" :key="event.id" class="relative rounded-lg border border-gray-200 p-3 dark:border-dark-700">
                   <span class="absolute -left-[1.35rem] top-4 h-2 w-2 rounded-full bg-primary-500" />
-                  <div class="flex items-center justify-between gap-3"><strong class="text-sm text-gray-900 dark:text-white">{{ event.risk_type || event.type }}</strong><time class="text-xs text-gray-500">{{ formatDate(event.occurred_at) }}</time></div>
-                  <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">{{ event.reason || '-' }}</p>
-                  <p class="mt-2 text-xs text-gray-500">{{ event.error_code || '-' }} · {{ event.endpoint || '-' }} · {{ event.model || '-' }}</p>
+                  <div class="flex flex-wrap items-center justify-between gap-3"><strong class="text-sm text-gray-900 dark:text-white">{{ formatRiskType(event.risk_type || event.type) }}</strong><time class="text-xs text-gray-500">{{ formatDate(event.occurred_at) }}</time></div>
+                  <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">{{ formatRiskReason(event.reason, { eventType: event.risk_type || event.type, ruleCode: event.rule_codes?.[0], errorCode: event.error_code }) }}</p>
+                  <p class="mt-2 text-xs text-gray-500">{{ event.error_code || '无错误代码' }} · {{ event.endpoint || '无接口信息' }} · {{ event.model || '无模型信息' }}<span v-if="event.risk_level"> · {{ formatRiskLevel(event.risk_level) }}</span><span v-if="event.score !== undefined"> · 风险分 {{ event.score }}</span></p>
+                  <p v-if="event.rule_codes?.length" class="mt-2 text-xs text-gray-500">命中规则：{{ event.rule_codes.join('、') }}</p>
+                  <details v-if="event.evidence && Object.keys(event.evidence).length" class="mt-2 text-xs text-gray-500"><summary class="cursor-pointer">查看原始证据</summary><pre class="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap">{{ JSON.stringify(event.evidence, null, 2) }}</pre></details>
                 </article>
               </div>
               <p v-else class="mt-3 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.drawer.noEvents') }}</p>
@@ -38,7 +40,7 @@
             <section class="mt-6">
               <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.userRiskControl.drawer.history') }}</h3>
               <div v-if="detail.audit.length" class="mt-3 space-y-2">
-                <div v-for="record in detail.audit" :key="record.id" class="flex items-start justify-between gap-3 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-700"><span>{{ record.action }} · {{ record.reason || '-' }}</span><span class="shrink-0 text-xs text-gray-500">{{ formatDate(record.created_at) }}</span></div>
+                <div v-for="record in detail.audit" :key="record.id" class="flex items-start justify-between gap-3 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-700"><span><strong>{{ formatRiskAction(record.action) }}</strong> · {{ formatAuditResult(record.result) }} · {{ record.reason || '无操作原因' }}<span v-if="record.failure_reason" class="block text-xs text-red-600">失败原因：{{ record.failure_reason }}</span></span><span class="shrink-0 text-xs text-gray-500">{{ formatDate(record.created_at) }}</span></div>
               </div>
               <p v-else class="mt-3 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.drawer.noHistory') }}</p>
             </section>
@@ -46,7 +48,7 @@
         </div>
 
         <footer v-if="detail" class="flex items-center justify-between border-t border-gray-200 px-5 py-4 dark:border-dark-700">
-          <span class="text-sm text-gray-500">{{ detail.user?.status }}</span>
+          <span class="text-sm text-gray-500">{{ formatAccountStatus(detail.user?.status) }}</span>
           <button v-if="detail.user?.status === 'active'" type="button" class="btn btn-danger" data-testid="ban-user" @click="openConfirmation">{{ t('admin.userRiskControl.ban') }}</button>
           <button v-else type="button" class="btn btn-secondary" data-testid="unban-user" @click="openConfirmation">{{ t('admin.userRiskControl.unban') }}</button>
         </footer>
@@ -68,6 +70,7 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { userRiskControlV2API, type RiskUserDetail, type RiskUserRow } from '@/api/admin/userRiskControlV2'
+import { formatAccountStatus, formatAuditResult, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType } from '@/utils/userRiskControlLabels'
 
 const props = defineProps<{ user: RiskUserRow }>()
 const emit = defineEmits<{ (event: 'close'): void; (event: 'updated', user: RiskUserRow): void }>()

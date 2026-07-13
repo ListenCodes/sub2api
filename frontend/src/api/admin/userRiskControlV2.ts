@@ -4,7 +4,7 @@ import { formatRiskReason } from '@/utils/userRiskControlLabels'
 export const mainAdminClient = apiClient
 
 export type RiskLevel = 'none' | 'low' | 'medium' | 'high' | 'critical'
-export type RiskAction = 'observe' | 'review' | 'ban' | 'reject_candidate' | 'auto_ban'
+export type RiskAction = 'observe' | 'review' | 'ban' | 'unban' | 'reject_candidate' | 'auto_ban'
 export type AccountStatus = 'active' | 'disabled' | 'pending'
 export type RiskSortBy = 'risk_score' | 'risk_level' | 'event_count' | 'last_event_at' | 'created_at'
 export type SortOrder = 'asc' | 'desc'
@@ -261,6 +261,32 @@ async function batchSetUserStatus(ids: number[], status: AccountStatus, reason: 
   return results
 }
 
+async function markUserProcessed(id: number, reason: string, batchId: string): Promise<void> {
+  await mainAdminClient.post(`/admin/user-risk-control/users/${id}/processed`, { reason: reason.trim(), batch_id: batchId })
+}
+
+async function markUsersProcessed(ids: number[], reason: string, concurrency = 4): Promise<BatchStatusResult[]> {
+  const trimmedReason = reason.trim()
+  if (!trimmedReason) throw new Error('操作原因不能为空')
+  const batchId = `risk-processed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const results: BatchStatusResult[] = new Array(ids.length)
+  let cursor = 0
+  async function worker() {
+    while (cursor < ids.length) {
+      const index = cursor++
+      const id = ids[index]
+      try {
+        await markUserProcessed(id, trimmedReason, batchId)
+        results[index] = { id, status: 'success' }
+      } catch (error) {
+        results[index] = { id, status: 'failed', reason: errorMessage(error) }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(concurrency, 1), 4, ids.length) }, () => worker()))
+  return results
+}
+
 async function listRules(): Promise<Rule[]> {
   const { data } = await mainAdminClient.get<{ items: Array<Record<string, unknown>> }>('/admin/user-risk-control/rules')
   return data.items.map((rule) => ({ id: Number(rule.id), code: String(rule.code), name: String(rule.name || rule.code), description: String(rule.description || ''), eventTypes: Array.isArray(rule.event_types) ? rule.event_types.map(String) : [String(rule.code)], enabled: Boolean(rule.enabled), windowSeconds: Number(rule.window_seconds || 0), threshold: Number(rule.threshold || 1), score: Number(rule.score || 0), riskLevel: String(rule.risk_level || 'low') as RiskLevel, action: String(rule.action || 'observe') as RiskAction, revision: Number(rule.revision || 1) }))
@@ -314,5 +340,5 @@ async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<R
   }) }
 }
 
-export const userRiskControlV2API = { listUsers, getUserDetail, setUserStatus, batchSetUserStatus, listRules, updateRule, createRule, testRule, listAudit }
+export const userRiskControlV2API = { listUsers, getUserDetail, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
 export default userRiskControlV2API

@@ -78,6 +78,8 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleUsers(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/users/"):
 		s.handleUserByPath(w, r, path)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/users/") && strings.HasSuffix(path, "/processed"):
+		s.handleMarkUserProcessedByPath(w, r, path)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/rules":
 		s.handleRules(w, r)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/rules":
@@ -136,4 +138,14 @@ func (s *HTTPServer) handleUserByPath(w http.ResponseWriter, r *http.Request, pa
 		return
 	}
 	s.handleUser(w, r, userID)
+}
+
+func (s *HTTPServer) handleMarkUserProcessedByPath(w http.ResponseWriter, r *http.Request, path string) {
+	rawID := strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/admin/users/"), "/processed")
+	userID, err := strconv.ParseInt(strings.Trim(rawID, "/"), 10, 64)
+	if err != nil || userID <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("invalid user id"))
+		return
+	}
+	s.handleMarkUserProcessed(w, r, userID)
 }

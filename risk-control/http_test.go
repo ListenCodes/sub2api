@@ -164,6 +164,29 @@ func TestAdminUsersAppliesRiskFiltersBeforePagination(t *testing.T) {
 	}
 }
 
+func TestAdminMarkUserProcessedClearsPendingAndWritesAudit(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	if err := repo.UpsertSubject(context.Background(), EventRecord{UserID: 42, RiskType: "login_failure", RiskLevel: "high", Score: 80, Decision: "review", OccurredAt: "2026-07-12T00:00:00Z"}); err != nil {
+		t.Fatalf("seed subject: %v", err)
+	}
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, repo)
+	body := []byte(`{"reason":"人工复核完成","batch_id":"batch-42"}`)
+	request := signedRequest(http.MethodPost, "/api/v1/admin/users/42/processed", body, testSecret, "nonce-processed", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	subject, found, err := repo.GetSubject(context.Background(), 42)
+	if err != nil || !found || subject.Pending {
+		t.Fatalf("subject = %+v, found=%v, error=%v", subject, found, err)
+	}
+	items, total, err := repo.ListAudit(context.Background(), 10, 0, "mark_processed", 42, "")
+	if err != nil || total != 1 || len(items) != 1 || items[0].ActorID != 7 || items[0].Reason != "人工复核完成" || items[0].AuditKey != "batch-42:42" {
+		t.Fatalf("audit = total %d items %+v error=%v", total, items, err)
+	}
+}
+
 func signedRequest(method, path string, body []byte, secret, nonce string, now time.Time) *http.Request {
 	request := httptest.NewRequest(method, path, bytes.NewReader(body))
 	timestamp := strconv.FormatInt(now.Unix(), 10)

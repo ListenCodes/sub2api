@@ -69,6 +69,12 @@ func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
 	if allowedRiskControlPath(http.MethodPost, "/rules/secret") {
 		t.Fatal("arbitrary POST rule path must remain blocked")
 	}
+	if !allowedRiskControlPath(http.MethodPost, "/users/42/processed") {
+		t.Fatal("POST /users/:id/processed must be allowlisted")
+	}
+	if allowedRiskControlPath(http.MethodPost, "/users/not-an-id/processed") {
+		t.Fatal("processed path must require a numeric user id")
+	}
 }
 
 func TestProxyRiskControlPreservesUpstreamErrorBody(t *testing.T) {

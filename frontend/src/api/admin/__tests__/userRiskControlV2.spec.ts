@@ -200,4 +200,11 @@ describe('userRiskControlV2API', () => {
       status: 'disabled', reason: '批量处置：重复登录失败', batch_id: expect.any(String),
     }))
   })
+
+  it('marks each processed risk subject through the risk-control proxy', async () => {
+    const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValue({ data: { id: 7, processed: true } } as never)
+
+    await expect(userRiskControlV2API.markUsersProcessed([7], '人工复核完成', 1)).resolves.toEqual([{ id: 7, status: 'success' }])
+    expect(post).toHaveBeenCalledWith('/admin/user-risk-control/users/7/processed', expect.objectContaining({ reason: '人工复核完成', batch_id: expect.any(String) }))
+  })
 })

@@ -78,6 +78,48 @@ func (s *HTTPServer) handleUser(w http.ResponseWriter, r *http.Request, userID i
 	})
 }
 
+type processUserRequest struct {
+	Reason    string `json:"reason"`
+	BatchID   string `json:"batch_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+func (s *HTTPServer) handleMarkUserProcessed(w http.ResponseWriter, r *http.Request, userID int64) {
+	var input processUserRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.Reason == "" {
+		writeError(w, http.StatusBadRequest, errors.New("reason is required"))
+		return
+	}
+	actor, _ := actorID(r)
+	metadata := map[string]any{}
+	if input.BatchID = strings.TrimSpace(input.BatchID); input.BatchID != "" {
+		metadata["batch_id"] = input.BatchID
+	}
+	if input.RequestID = strings.TrimSpace(input.RequestID); input.RequestID != "" {
+		metadata["request_id"] = input.RequestID
+	}
+	auditKey := ""
+	if input.BatchID != "" {
+		auditKey = input.BatchID + ":" + strconv.FormatInt(userID, 10)
+	}
+	if err := s.service.repo.SetSubjectPending(r.Context(), userID, false); err != nil {
+		metadata["failure_reason"] = err.Error()
+		_ = s.service.RecordAudit(r.Context(), AuditReport{AuditKey: auditKey, ActorID: actor, Action: "mark_processed", TargetType: "user", TargetID: formatUserID(userID), Result: "failed", Reason: input.Reason, Metadata: metadata})
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.service.RecordAudit(r.Context(), AuditReport{AuditKey: auditKey, ActorID: actor, Action: "mark_processed", TargetType: "user", TargetID: formatUserID(userID), Result: "success", Reason: input.Reason, Metadata: metadata}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": userID, "processed": true})
+}
+
 func (s *HTTPServer) handleRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := s.service.repo.ListRules(r.Context())
 	if err != nil {
