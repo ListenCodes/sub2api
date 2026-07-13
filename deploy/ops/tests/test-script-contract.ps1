@@ -46,6 +46,7 @@ Assert-NotMatches $syncScript 'git\s+push\s+[^\r\n]*\bcustom\b' 'sync must not p
 Assert-NotMatches $syncScript '--force' 'sync must not force-update refs'
 Assert-Matches $syncScript 'SUB2API_SYNC_DEFER_RESULT' 'sync supports deferred trigger results'
 Assert-Matches $syncScript 'base_commit' 'sync records the origin/custom base commit'
+Assert-Matches $syncScript 'SCHEDULED_RUN' 'scheduled syncs use an independent run mode'
 
 # Both the scheduled and admin-triggered paths must use the same auto-publish wrapper.
 Assert-Matches $autoUpdateScript 'sync-and-publish\.sh' 'scheduled updates use the unified wrapper'
@@ -55,6 +56,7 @@ Assert-Matches $syncPublishScript 'origin/custom' 'unified flow validates the ap
 Assert-Matches $syncPublishScript 'SUB2API_SYNC_PUBLISH_LOCK' 'unified flow has an end-to-end lock'
 Assert-Matches $syncPublishScript 'published_commit' 'unified flow records the published commit'
 Assert-Matches $syncPublishScript 'sync-pending-publish' 'unified flow preserves a failed publish for retry'
+Assert-Matches $syncPublishScript 'prepare_scheduled_status' 'scheduled runs initialize independent status metadata'
 Assert-NotMatches $syncPublishScript 'git\s+push\s+[^\r\n]*--force' 'unified flow must not force-push'
 
 # Production publishing must require an approved origin/custom commit and preserve rollback data.

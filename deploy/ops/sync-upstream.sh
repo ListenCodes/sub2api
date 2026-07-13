@@ -13,6 +13,7 @@ STATUS_FILE="$DATA_DIR/sync-status"
 RESULT_FILE="$DATA_DIR/sync-result"
 JOB_ID_FILE="$DATA_DIR/sync-job-id"
 DEFER_RESULT="${SUB2API_SYNC_DEFER_RESULT:-0}"
+SCHEDULED_RUN="${1:-}"
 
 mkdir -p "$DATA_DIR" "$WORKTREE_ROOT" "$(dirname "$LOG")" "$(dirname "$LOCK_FILE")"
 touch "$LOG" "$LOCK_FILE"
@@ -21,14 +22,18 @@ log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG"
 }
 
-JOB_ID="$(cat "$JOB_ID_FILE" 2>/dev/null || true)"
-if [[ -z "$JOB_ID" ]]; then
-  JOB_ID="sync-$(date -u +%Y%m%d-%H%M%S)-$$"
-  printf '%s\n' "$JOB_ID" > "$JOB_ID_FILE"
+if [[ "$SCHEDULED_RUN" == "--scheduled" ]]; then
+  JOB_ID="scheduled-$(date -u +%Y%m%d-%H%M%S)-$$"
+  STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+else
+  JOB_ID="$(cat "$JOB_ID_FILE" 2>/dev/null || true)"
+  if [[ -z "$JOB_ID" ]]; then
+    JOB_ID="sync-$(date -u +%Y%m%d-%H%M%S)-$$"
+    printf '%s\n' "$JOB_ID" > "$JOB_ID_FILE"
+  fi
+  STARTED_AT="$(jq -r '.started_at // empty' "$STATUS_FILE" 2>/dev/null || true)"
+  [[ -n "$STARTED_AT" ]] || STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 fi
-
-STARTED_AT="$(jq -r '.started_at // empty' "$STATUS_FILE" 2>/dev/null || true)"
-[[ -n "$STARTED_AT" ]] || STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 INTEGRATION_BRANCH=""
 BASE_COMMIT=""
 WORKTREE=""

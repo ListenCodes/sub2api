@@ -7,6 +7,7 @@ PUBLISH_SCRIPT="${SUB2API_PUBLISH_SCRIPT:-/opt/sub2api-custom/publish-custom.sh}
 DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 STATUS_FILE="$DATA_DIR/sync-status"
 RESULT_FILE="$DATA_DIR/sync-result"
+JOB_ID_FILE="$DATA_DIR/sync-job-id"
 PENDING_FILE="$DATA_DIR/sync-pending-publish"
 LOCK_FILE="${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-sync-publish.lock}"
 LOG="${SUB2API_SYNC_PUBLISH_LOG:-/var/log/sub2api-sync-publish.log}"
@@ -17,6 +18,20 @@ rm -f "$RESULT_FILE"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG"
+}
+
+prepare_scheduled_status() {
+  [[ "${1:-}" == "--scheduled" ]] || return 0
+
+  local job_id="scheduled-$(date -u +%Y%m%d-%H%M%S)-$$"
+  local now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '%s\n' "$job_id" > "$JOB_ID_FILE"
+  jq -n \
+    --arg job_id "$job_id" \
+    --arg now "$now" \
+    '{job_id:$job_id,status:"running",message:"scheduled sync starting",ts:$now,started_at:$now,finished_at:null,integration_branch:"",base_commit:"",need_restart:false,published:false,published_commit:""}' \
+    > "$STATUS_FILE.tmp.$$"
+  mv -f "$STATUS_FILE.tmp.$$" "$STATUS_FILE"
 }
 
 write_result() {
@@ -92,6 +107,8 @@ exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   fail_run 'FAILED: another sync-and-publish run is already running'
 fi
+
+prepare_scheduled_status "$@"
 
 [[ -x "$SYNC_SCRIPT" ]] || fail_run "FAILED: sync script not executable: $SYNC_SCRIPT"
 [[ -x "$PUBLISH_SCRIPT" ]] || fail_run "FAILED: publish script not executable: $PUBLISH_SCRIPT"
