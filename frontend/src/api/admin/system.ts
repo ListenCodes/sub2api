@@ -45,13 +45,20 @@ export interface UpdateJob {
   status: 'running' | 'success' | 'failed'
   message: string
   integration_branch?: string
+  base_commit?: string
   need_restart: boolean
+  published?: boolean
+  published_commit?: string
   started_at?: string | null
   finished_at?: string | null
 }
 
 export function updateNeedsRestart(job: Pick<UpdateJob, 'need_restart'>): boolean {
   return job.need_restart === true
+}
+
+export function updateWasPublished(job: Pick<UpdateJob, 'published'>): boolean {
+  return job.published === true
 }
 
 function newUpdateIdempotencyKey(): string {

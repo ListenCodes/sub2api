@@ -12,6 +12,7 @@ WORKTREE_ROOT="${SUB2API_SYNC_WORKTREE_ROOT:-/var/tmp/sub2api-sync}"
 STATUS_FILE="$DATA_DIR/sync-status"
 RESULT_FILE="$DATA_DIR/sync-result"
 JOB_ID_FILE="$DATA_DIR/sync-job-id"
+DEFER_RESULT="${SUB2API_SYNC_DEFER_RESULT:-0}"
 
 mkdir -p "$DATA_DIR" "$WORKTREE_ROOT" "$(dirname "$LOG")" "$(dirname "$LOCK_FILE")"
 touch "$LOG" "$LOCK_FILE"
@@ -29,6 +30,7 @@ fi
 STARTED_AT="$(jq -r '.started_at // empty' "$STATUS_FILE" 2>/dev/null || true)"
 [[ -n "$STARTED_AT" ]] || STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 INTEGRATION_BRANCH=""
+BASE_COMMIT=""
 WORKTREE=""
 
 write_status() {
@@ -45,8 +47,9 @@ write_status() {
     --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --arg started_at "$STARTED_AT" \
     --arg integration_branch "$INTEGRATION_BRANCH" \
+    --arg base_commit "$BASE_COMMIT" \
     --argjson finished_at "$finished_at" \
-    '{job_id:$job_id,status:$status,message:$message,ts:$ts,started_at:$started_at,finished_at:$finished_at,integration_branch:$integration_branch,need_restart:false}' \
+    '{job_id:$job_id,status:$status,message:$message,ts:$ts,started_at:$started_at,finished_at:$finished_at,integration_branch:$integration_branch,base_commit:$base_commit,need_restart:false,published:false,published_commit:""}' \
     > "$STATUS_FILE.tmp.$$"
   mv -f "$STATUS_FILE.tmp.$$" "$STATUS_FILE"
 }
@@ -66,7 +69,9 @@ result() {
   else
     write_status failed "$message"
   fi
-  printf '%s\n' "$message" > "$RESULT_FILE"
+  if [[ "$DEFER_RESULT" != 1 ]]; then
+    printf '%s\n' "$message" > "$RESULT_FILE"
+  fi
   log "RESULT: $message"
   exit "$code"
 }
@@ -92,6 +97,7 @@ git fetch "$ORIGIN_REMOTE" "$BRANCH" >> "$LOG" 2>&1 || result 'FAILED: fetch ori
 local_head="$(git rev-parse HEAD)"
 origin_head="$(git rev-parse "$ORIGIN_REMOTE/$BRANCH")"
 upstream_head="$(git rev-parse "$UPSTREAM_REMOTE/main")"
+BASE_COMMIT="$origin_head"
 if [[ "$local_head" != "$origin_head" ]]; then
   result "FAILED: VPS custom $local_head differs from origin/custom $origin_head" 1
 fi

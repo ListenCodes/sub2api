@@ -35,6 +35,7 @@ export default {
     updating: '正在检查上游...',
     updateComplete: '更新完成',
     updatePrepared: '已准备上游集成分支',
+    updatePublished: '已自动发布到生产',
     updateFailed: '更新失败',
     restartRequired: '请重启服务以应用更新',
     restartNow: '立即重启',

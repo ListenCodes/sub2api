@@ -2,6 +2,13 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $syncScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-upstream.sh')
+$syncPublishPath = Join-Path $repoRoot 'deploy\ops\sync-and-publish.sh'
+$syncPublishScript = if (Test-Path -LiteralPath $syncPublishPath) {
+    Get-Content -Raw -LiteralPath $syncPublishPath
+} else {
+    ''
+}
+$autoUpdateScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\auto-update.sh')
 $publishScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\publish-custom.sh')
 
 function Assert-Matches {
@@ -37,6 +44,18 @@ Assert-NotMatches $syncScript 'git\s+rebase' 'sync must not rebase'
 Assert-NotMatches $syncScript 'docker\s+(build|compose\s+up)' 'sync must not build or deploy'
 Assert-NotMatches $syncScript 'git\s+push\s+[^\r\n]*\bcustom\b' 'sync must not push custom'
 Assert-NotMatches $syncScript '--force' 'sync must not force-update refs'
+Assert-Matches $syncScript 'SUB2API_SYNC_DEFER_RESULT' 'sync supports deferred trigger results'
+Assert-Matches $syncScript 'base_commit' 'sync records the origin/custom base commit'
+
+# Both the scheduled and admin-triggered paths must use the same auto-publish wrapper.
+Assert-Matches $autoUpdateScript 'sync-and-publish\.sh' 'scheduled updates use the unified wrapper'
+Assert-Matches $syncPublishScript 'publish-custom\.sh' 'unified flow invokes the production publisher'
+Assert-Matches $syncPublishScript 'git\s+merge\s+--ff-only' 'unified flow promotes only by fast-forward'
+Assert-Matches $syncPublishScript 'origin/custom' 'unified flow validates the approved custom base'
+Assert-Matches $syncPublishScript 'SUB2API_SYNC_PUBLISH_LOCK' 'unified flow has an end-to-end lock'
+Assert-Matches $syncPublishScript 'published_commit' 'unified flow records the published commit'
+Assert-Matches $syncPublishScript 'sync-pending-publish' 'unified flow preserves a failed publish for retry'
+Assert-NotMatches $syncPublishScript 'git\s+push\s+[^\r\n]*--force' 'unified flow must not force-push'
 
 # Production publishing must require an approved origin/custom commit and preserve rollback data.
 Assert-Matches $publishScript -- '--commit' 'publish requires an explicit commit argument'

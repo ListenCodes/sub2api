@@ -167,7 +167,8 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 	return info, nil
 }
 
-// PerformUpdate starts an upstream sync job and returns before the build completes.
+// PerformUpdate starts the conflict-gated upstream sync/publish job and returns
+// before the host-side workflow completes.
 func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
@@ -195,6 +196,7 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 		Status:      UpdateStatusRunning,
 		Message:     "sync triggered",
 		NeedRestart: false,
+		Published:   false,
 		Timestamp:   startedAt,
 		StartedAt:   &startedAt,
 	}

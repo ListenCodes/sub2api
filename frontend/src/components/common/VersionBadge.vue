@@ -172,6 +172,8 @@
                       {{
                         successKind === 'rollback'
                           ? t('version.rollbackComplete')
+                          : published
+                            ? t('version.updatePublished')
                           : needRestart
                             ? t('version.updateComplete')
                             : t('version.updatePrepared')
@@ -179,6 +181,12 @@
                     </p>
                     <p class="text-xs text-green-600/70 dark:text-green-400/70">
                       {{ needRestart ? t('version.restartRequired') : updateSuccessMessage }}
+                    </p>
+                    <p
+                      v-if="published && publishedCommit"
+                      class="mt-1 text-[11px] text-green-600/60 dark:text-green-400/60"
+                    >
+                      commit {{ publishedCommit.slice(0, 12) }}
                     </p>
                   </div>
                 </div>
@@ -653,7 +661,9 @@ import {
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
-  type RollbackVersionInfo
+  type RollbackVersionInfo,
+  type UpdateJob,
+  updateWasPublished
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
@@ -691,6 +701,8 @@ const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
 const updateSuccessMessage = ref('')
+const published = ref(false)
+const publishedCommit = ref('')
 const restartCountdown = ref(0)
 const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -757,6 +769,8 @@ async function refreshVersion(force = true) {
   updateError.value = ''
   updateSuccess.value = false
   updateSuccessMessage.value = ''
+  published.value = false
+  publishedCommit.value = ''
   needRestart.value = false
   stopUpdatePolling()
   resetRollbackState()
@@ -771,6 +785,8 @@ async function handleUpdate() {
   updateError.value = ''
   updateSuccess.value = false
   updateSuccessMessage.value = ''
+  published.value = false
+  publishedCommit.value = ''
 
   try {
     const job = await performUpdate()
@@ -795,12 +811,16 @@ function stopUpdatePolling() {
   updatePollInFlight = false
 }
 
-function finishUpdateSuccess(needsRestart: boolean, message: string) {
+function finishUpdateSuccess(
+  status: Pick<UpdateJob, 'need_restart' | 'published' | 'published_commit' | 'message'>
+) {
   stopUpdatePolling()
   successKind.value = 'update'
   updateSuccess.value = true
-  needRestart.value = updateNeedsRestart({ need_restart: needsRestart })
-  updateSuccessMessage.value = message
+  needRestart.value = updateNeedsRestart({ need_restart: status.need_restart })
+  published.value = updateWasPublished(status)
+  publishedCommit.value = status.published_commit || ''
+  updateSuccessMessage.value = status.message
   updating.value = false
   appStore.clearVersionCache()
 }
@@ -817,7 +837,7 @@ async function pollUpdateStatus(jobID: string) {
   try {
     const status = await getUpdateStatus(jobID)
     if (status.status === 'success') {
-      finishUpdateSuccess(status.need_restart, status.message)
+      finishUpdateSuccess(status)
     } else if (status.status === 'failed') {
       finishUpdateFailure(status.message)
     }
@@ -904,6 +924,8 @@ async function handleRollback() {
     successKind.value = 'rollback'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    published.value = false
+    publishedCommit.value = ''
     updateSuccessMessage.value = result.message
     rollbackPanelOpen.value = false
     // Clear version cache so the next check reflects the rolled-back version

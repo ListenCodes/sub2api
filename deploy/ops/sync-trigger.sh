@@ -16,7 +16,7 @@ now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 started_at=$(sed -n 's/.*"started_at":"\([^"]*\)".*/\1/p' "$STATUS_FILE" 2>/dev/null || true)
 [ -n "$started_at" ] || started_at=$now
 tmp_file="$STATUS_FILE.tmp.$$"
-printf '{"job_id":"%s","status":"running","message":"sync triggered","ts":"%s","started_at":"%s","finished_at":null,"need_restart":false}\n' \
+printf '{"job_id":"%s","status":"running","message":"sync triggered","ts":"%s","started_at":"%s","finished_at":null,"integration_branch":"","base_commit":"","need_restart":false,"published":false,"published_commit":""}\n' \
   "$job_id" "$now" "$started_at" > "$tmp_file"
 mv -f "$tmp_file" "$STATUS_FILE"
 

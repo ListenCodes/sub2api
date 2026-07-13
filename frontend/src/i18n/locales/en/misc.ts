@@ -35,6 +35,7 @@ export default {
     updating: 'Checking upstream...',
     updateComplete: 'Update Complete',
     updatePrepared: 'Upstream integration branch prepared',
+    updatePublished: 'Automatically published to production',
     updateFailed: 'Update Failed',
     restartRequired: 'Please restart the service to apply the update',
     restartNow: 'Restart Now',

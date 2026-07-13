@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Scheduled jobs may check upstream, but they must not publish production.
-exec /opt/sub2api-custom/sync-upstream.sh --scheduled
+# Scheduled jobs use the same conflict-gated publish flow as the admin trigger.
+exec /opt/sub2api-custom/sync-and-publish.sh --scheduled

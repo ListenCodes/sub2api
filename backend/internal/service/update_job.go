@@ -36,7 +36,10 @@ type UpdateJob struct {
 	Status            string     `json:"status"`
 	Message           string     `json:"message"`
 	IntegrationBranch string     `json:"integration_branch,omitempty"`
+	BaseCommit        string     `json:"base_commit,omitempty"`
 	NeedRestart       bool       `json:"need_restart"`
+	Published         bool       `json:"published"`
+	PublishedCommit   string     `json:"published_commit,omitempty"`
 	Timestamp         time.Time  `json:"ts"`
 	StartedAt         *time.Time `json:"started_at"`
 	FinishedAt        *time.Time `json:"finished_at"`
@@ -128,6 +131,7 @@ func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt
 		Status:      status,
 		Message:     message,
 		NeedRestart: false,
+		Published:   false,
 		Timestamp:   time.Now().UTC(),
 		StartedAt:   startedAt,
 		FinishedAt:  finishedAt,

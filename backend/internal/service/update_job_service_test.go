@@ -39,6 +39,7 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 	require.NotEmpty(t, job.JobID)
 	require.Equal(t, UpdateStatusRunning, job.Status)
 	require.False(t, job.NeedRestart)
+	require.False(t, job.Published)
 	require.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
@@ -52,6 +53,21 @@ func TestReadUpdateStatusIncludesPreparationMetadata(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "integration/upstream-20260713", job.IntegrationBranch)
+	require.False(t, job.NeedRestart)
+}
+
+func TestReadUpdateStatusIncludesPublishedMetadata(t *testing.T) {
+	t.Parallel()
+
+	statusPath := filepath.Join(t.TempDir(), "sync-status")
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-published","status":"success","message":"PUBLISH OK: commit=abc123","integration_branch":"integration/upstream-20260713","base_commit":"base123","need_restart":false,"published":true,"published_commit":"abc123","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z"}`), 0644))
+
+	job, err := readUpdateStatus(statusPath, "update-published")
+
+	require.NoError(t, err)
+	require.Equal(t, "base123", job.BaseCommit)
+	require.True(t, job.Published)
+	require.Equal(t, "abc123", job.PublishedCommit)
 	require.False(t, job.NeedRestart)
 }
 
