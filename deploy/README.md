@@ -96,7 +96,7 @@ cd sub2api/deploy
 
 # Configure environment
 cp .env.example .env
-	chmod 600 .env
+chmod 600 .env
 	nano .env  # Set required variables, including the risk-control secret and DB password
 
 # Generate secure secrets (recommended)
