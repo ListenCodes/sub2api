@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 func evaluateRules(rules []Rule, event EventReport, recentCount func(Rule) int) Decision {
 	return evaluateRulesWithMode(rules, event, recentCount, "enforce")
@@ -12,7 +15,8 @@ func evaluateRulesWithMode(rules []Rule, event EventReport, recentCount func(Rul
 		recentCount = func(Rule) int { return 0 }
 	}
 	for _, rule := range rules {
-		if !rule.Enabled || rule.Threshold <= 0 || !ruleMatchesEvent(rule, event) || recentCount(rule) < rule.Threshold {
+		count := recentCount(rule)
+		if !rule.Enabled || rule.Threshold <= 0 || !ruleMatchesEvent(rule, event) || count < rule.Threshold {
 			continue
 		}
 		decision.Score += maxInt(rule.Score, 0)
@@ -23,10 +27,11 @@ func evaluateRulesWithMode(rules []Rule, event EventReport, recentCount func(Rul
 			decision.Action = normalizeRiskAction(rule.Action)
 		}
 		decision.RuleCodes = append(decision.RuleCodes, rule.Code)
+		reason := formatRuleReason(rule, event, count)
 		if decision.Reason == "" {
-			decision.Reason = fmt.Sprintf("规则 %s 命中", rule.Code)
+			decision.Reason = reason
 		} else {
-			decision.Reason += "; " + fmt.Sprintf("规则 %s 命中", rule.Code)
+			decision.Reason += "；" + reason
 		}
 	}
 	if decision.Score > 100 {
@@ -43,6 +48,32 @@ func evaluateRulesWithMode(rules []Rule, event EventReport, recentCount func(Rul
 		}
 	}
 	return decision
+}
+
+func formatRuleReason(rule Rule, event EventReport, count int) string {
+	name := strings.TrimSpace(rule.Name)
+	if name == "" {
+		name = rule.Code
+	}
+	if count <= 0 || rule.WindowSeconds <= 0 {
+		return fmt.Sprintf("命中规则：%s", name)
+	}
+	window := fmt.Sprintf("%d 秒", rule.WindowSeconds)
+	if rule.WindowSeconds >= 3600 && rule.WindowSeconds%3600 == 0 {
+		window = fmt.Sprintf("%d 小时", rule.WindowSeconds/3600)
+	} else if rule.WindowSeconds >= 60 && rule.WindowSeconds%60 == 0 {
+		window = fmt.Sprintf("%d 分钟", rule.WindowSeconds/60)
+	}
+	occurrence := fmt.Sprintf("%d 次事件", count)
+	switch event.EventType {
+	case "login_failure":
+		occurrence = fmt.Sprintf("失败 %d 次", count)
+	case "api_error":
+		occurrence = fmt.Sprintf("API 错误 %d 次", count)
+	case "registration_attempt", "registration_success":
+		occurrence = fmt.Sprintf("注册尝试 %d 次", count)
+	}
+	return fmt.Sprintf("命中规则：%s（%s内%s）", name, window, occurrence)
 }
 
 func ruleMatchesEvent(rule Rule, event EventReport) bool {

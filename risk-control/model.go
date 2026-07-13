@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -71,16 +73,31 @@ type RiskSubject struct {
 }
 
 type AuditRecord struct {
-	ID         int64          `json:"id"`
-	AuditKey   string         `json:"audit_key,omitempty"`
-	ActorID    int64          `json:"actor_id"`
-	Action     string         `json:"action"`
-	TargetType string         `json:"target_type"`
-	TargetID   string         `json:"target_id"`
-	Result     string         `json:"result"`
-	Reason     string         `json:"reason"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
-	CreatedAt  string         `json:"created_at"`
+	ID            int64          `json:"id"`
+	AuditKey      string         `json:"audit_key,omitempty"`
+	ActorID       int64          `json:"actor_id"`
+	Action        string         `json:"action"`
+	TargetType    string         `json:"target_type"`
+	TargetID      string         `json:"target_id"`
+	Result        string         `json:"result"`
+	Reason        string         `json:"reason"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	FailureReason string         `json:"failure_reason,omitempty"`
+	BatchID       string         `json:"batch_id,omitempty"`
+	RequestID     string         `json:"request_id,omitempty"`
+	CreatedAt     string         `json:"created_at"`
+}
+
+type AuditFilter struct {
+	Action       string
+	TargetUserID int64
+	Target       string
+	ActorID      int64
+	Result       string
+	From         time.Time
+	To           time.Time
+	SortBy       string
+	SortOrder    string
 }
 
 type RiskOverview struct {
@@ -106,6 +123,7 @@ type RiskRepository interface {
 	InsertAudit(context.Context, AuditRecord) error
 	SetSubjectPending(context.Context, int64, bool) error
 	ListAudit(context.Context, int, int, string, int64, string) ([]AuditRecord, int, error)
+	ListAuditFiltered(context.Context, int, int, AuditFilter) ([]AuditRecord, int, error)
 	Overview(context.Context, time.Time) (RiskOverview, error)
 }
 
@@ -357,6 +375,7 @@ func (r *MemoryRepository) ListEvents(_ context.Context, limit, offset int, user
 func (r *MemoryRepository) InsertAudit(_ context.Context, audit AuditRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	enrichAuditRecord(&audit)
 	if audit.AuditKey != "" {
 		if _, exists := r.auditKeys[audit.AuditKey]; exists {
 			return nil
@@ -387,20 +406,79 @@ func (r *MemoryRepository) SetSubjectPending(_ context.Context, userID int64, pe
 }
 
 func (r *MemoryRepository) ListAudit(_ context.Context, limit, offset int, action string, targetUserID int64, result string) ([]AuditRecord, int, error) {
+	return r.ListAuditFiltered(context.Background(), limit, offset, AuditFilter{Action: action, TargetUserID: targetUserID, Result: result})
+}
+
+func (r *MemoryRepository) ListAuditFiltered(_ context.Context, limit, offset int, filter AuditFilter) ([]AuditRecord, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	items := make([]AuditRecord, 0, len(r.audits))
 	for i := len(r.audits) - 1; i >= 0; i-- {
 		audit := r.audits[i]
-		if action != "" && audit.Action != action || result != "" && audit.Result != result {
+		enrichAuditRecord(&audit)
+		if filter.Action != "" && audit.Action != filter.Action || filter.Result != "" && audit.Result != filter.Result {
 			continue
 		}
-		if targetUserID > 0 && audit.TargetID != formatUserID(targetUserID) {
+		if filter.TargetUserID > 0 && audit.TargetID != formatUserID(filter.TargetUserID) {
+			continue
+		}
+		if filter.ActorID > 0 && audit.ActorID != filter.ActorID {
+			continue
+		}
+		if filter.Target != "" && !strings.Contains(strings.ToLower(audit.TargetID), strings.ToLower(filter.Target)) && !strings.Contains(strings.ToLower(audit.TargetType), strings.ToLower(filter.Target)) {
+			continue
+		}
+		created, err := parseTime(audit.CreatedAt)
+		if !filter.From.IsZero() && (err != nil || created.Before(filter.From)) {
+			continue
+		}
+		if !filter.To.IsZero() && (err != nil || created.After(filter.To)) {
 			continue
 		}
 		items = append(items, audit)
 	}
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := auditSortValue(items[i], filter.SortBy), auditSortValue(items[j], filter.SortBy)
+		if left == right {
+			return items[i].ID > items[j].ID
+		}
+		if strings.EqualFold(filter.SortOrder, "asc") {
+			return left < right
+		}
+		return left > right
+	})
 	return sliceAudits(items, limit, offset), len(items), nil
+}
+
+func auditSortValue(audit AuditRecord, sortBy string) string {
+	switch sortBy {
+	case "result":
+		return audit.Result
+	case "target":
+		if audit.TargetType == "user" {
+			if userID, err := strconv.ParseInt(audit.TargetID, 10, 64); err == nil {
+				return fmt.Sprintf("0:%020d", userID)
+			}
+		}
+		return "1:" + audit.TargetType + ":" + audit.TargetID
+	default:
+		return audit.CreatedAt
+	}
+}
+
+func enrichAuditRecord(audit *AuditRecord) {
+	if audit == nil || audit.Metadata == nil {
+		return
+	}
+	if audit.FailureReason == "" {
+		audit.FailureReason, _ = audit.Metadata["failure_reason"].(string)
+	}
+	if audit.BatchID == "" {
+		audit.BatchID, _ = audit.Metadata["batch_id"].(string)
+	}
+	if audit.RequestID == "" {
+		audit.RequestID, _ = audit.Metadata["request_id"].(string)
+	}
 }
 
 func (r *MemoryRepository) Overview(_ context.Context, since time.Time) (RiskOverview, error) {

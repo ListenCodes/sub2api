@@ -102,3 +102,19 @@ func TestAdminRuleCreateWritesAuditRecord(t *testing.T) {
 		t.Fatalf("audit = total %d items %+v error=%v", total, items, err)
 	}
 }
+
+func TestAdminRuleTestWritesAuditRecord(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, repo)
+	body := []byte(`{"event_type":"login_failure","count":5,"rule":{"code":"login_failure_test","name":"登录失败测试","threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
+	request := signedRequest(http.MethodPost, "/api/v1/admin/rules/test", body, testSecret, "nonce-rule-test-audit", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	items, total, err := repo.ListAudit(context.Background(), 10, 0, "rule_test", 0, "")
+	if err != nil || total != 1 || len(items) != 1 || items[0].ActorID != 7 || items[0].TargetID != "login_failure_test" {
+		t.Fatalf("audit = total %d items %+v error=%v", total, items, err)
+	}
+}

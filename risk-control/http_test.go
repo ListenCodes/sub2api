@@ -129,6 +129,34 @@ func TestAdminAuditSupportsPagination(t *testing.T) {
 	}
 }
 
+func TestAdminAuditSupportsActorFilterAndTargetSort(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	for _, audit := range []AuditRecord{
+		{ActorID: 7, Action: "ban", TargetType: "user", TargetID: "42", Result: "failed", CreatedAt: "2026-07-12T00:02:00Z"},
+		{ActorID: 7, Action: "ban", TargetType: "user", TargetID: "7", Result: "success", CreatedAt: "2026-07-12T00:01:00Z"},
+		{ActorID: 9, Action: "ban", TargetType: "user", TargetID: "1", Result: "success", CreatedAt: "2026-07-12T00:00:00Z"},
+	} {
+		if err := repo.InsertAudit(context.Background(), audit); err != nil {
+			t.Fatalf("InsertAudit() error = %v", err)
+		}
+	}
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, repo)
+	request := signedRequest(http.MethodGet, "/api/v1/admin/audit?actor_id=7&sort_by=target&sort_order=asc", nil, testSecret, "nonce-audit-filter", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Items []AuditRecord `json:"items"`
+		Total int           `json:"total"`
+	}
+	decodeBody(t, response, &payload)
+	if payload.Total != 2 || len(payload.Items) != 2 || payload.Items[0].TargetID != "7" || payload.Items[1].TargetID != "42" {
+		t.Fatalf("filtered/sorted audit = %+v", payload)
+	}
+}
+
 func TestAdminUsersAppliesRiskFiltersBeforePagination(t *testing.T) {
 	repo := NewMemoryRepository(nil)
 	if err := repo.UpsertSubject(context.Background(), EventRecord{

@@ -35,6 +35,14 @@ func TestEvaluateRulesReturnsAllowWhenThresholdIsNotReached(t *testing.T) {
 	}
 }
 
+func TestEvaluateRulesBuildsReadableChineseReason(t *testing.T) {
+	rule := Rule{Code: "login_failure_burst", Name: "登录失败爆发", EventTypes: []string{"login_failure"}, Enabled: true, WindowSeconds: 300, Threshold: 5, Score: 70, RiskLevel: "high", Action: "review"}
+	decision := evaluateRules([]Rule{rule}, EventReport{EventType: "login_failure"}, func(Rule) int { return 5 })
+	if decision.Reason != "命中规则：登录失败爆发（5 分钟内失败 5 次）" {
+		t.Fatalf("reason = %q", decision.Reason)
+	}
+}
+
 func TestEvaluateRulesShadowModeDowngradesBlockingAction(t *testing.T) {
 	rule := Rule{Code: "registration_abuse", EventTypes: []string{"registration_attempt"}, Enabled: true, WindowSeconds: 600, Threshold: 1, Score: 90, RiskLevel: "critical", Action: "reject_candidate"}
 	decision := evaluateRulesWithMode([]Rule{rule}, EventReport{EventType: "registration_attempt"}, func(Rule) int { return 1 }, "shadow")

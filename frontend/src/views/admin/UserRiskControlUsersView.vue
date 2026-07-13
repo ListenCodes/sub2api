@@ -213,7 +213,7 @@ function toggleSelection(id: number) {
   selectedIds.value = next
 }
 function clearSelection() { selectedIds.value = new Set() }
-function displayReason(user: RiskUserRow) { return formatRiskReason(user.risk_reason, { eventType: user.risk_type, count: user.event_count }) }
+function displayReason(user: RiskUserRow) { return formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
 function formatDate(value?: string | null) { return value ? new Date(value).toLocaleString() : '-' }
 function statusClass(status?: AccountStatus) { return status === 'disabled' ? 'bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-300' : status === 'pending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' }
 function handleUpdated(updated: RiskUserRow) {

@@ -129,14 +129,14 @@ export interface Rule {
 }
 
 export type RuleInput = Omit<Rule, 'id' | 'name'> & { code: string; name?: string }
-export type RuleCreateInput = Omit<Rule, 'id' | 'revision'> & { revision?: number; reason?: string }
+export type RuleCreateInput = Omit<Rule, 'id' | 'revision' | 'eventTypes'> & { eventTypes: string[]; revision?: number; reason?: string }
 
 function compactParams(params: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== '' && value !== false))
 }
 
 async function fetchAllRiskSignals(filters: UserRiskFilters, userIDs?: number[]) {
-  const items: Array<{ id: number; username?: string; account_status?: AccountStatus; risk_type?: string; risk_level?: RiskLevel; score?: number; reason?: string; last_action?: RiskAction; pending?: boolean; last_event_at?: string }> = []
+  const items: Array<{ id: number; username?: string; account_status?: AccountStatus; risk_type?: string; risk_level?: RiskLevel; score?: number; reason?: string; last_action?: RiskAction; pending?: boolean; event_count?: number; ip_count?: number; device_count?: number; last_event_at?: string }> = []
   let page = 1
   while (true) {
     const { data } = await mainAdminClient.get<{ items: typeof items; total: number }>('/admin/user-risk-control/users', {
@@ -194,7 +194,7 @@ async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListRespons
 
 async function getUserDetail(id: number): Promise<RiskUserDetail> {
   const riskPromise = mainAdminClient
-    .get<{ id: number; username: string; account_status: AccountStatus; risk_type: string; risk_level: RiskLevel; score: number; event_count: number; ip_count?: number; device_count?: number; timeline: Array<Record<string, unknown>> }>(`/admin/user-risk-control/users/${id}`)
+    .get<{ id: number; username: string; account_status: AccountStatus; risk_type: string; risk_level: RiskLevel; score: number; event_count: number; ip_count?: number; device_count?: number; last_event_at?: string; timeline: Array<Record<string, unknown>> }>(`/admin/user-risk-control/users/${id}`)
     .then(({ data }) => data)
     .catch((error) => {
       if (error?.response?.status === 404 || error?.status === 404) return null
@@ -300,7 +300,7 @@ async function updateRule(_id: number, rule: RuleInput): Promise<Pick<Rule, 'id'
 }
 
 async function createRule(rule: RuleCreateInput): Promise<Rule> {
-  const { data } = await mainAdminClient.post<Rule>('/admin/user-risk-control/rules', {
+  const { data } = await mainAdminClient.post<Record<string, unknown>>('/admin/user-risk-control/rules', {
     code: rule.code,
     name: rule.name,
     description: rule.description,
@@ -325,7 +325,7 @@ async function testRule(rule: Rule, input: Record<string, unknown>) {
 async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<RiskAuditRecord>> {
   const action = filters.action === 'rule_update' ? 'update_rule' : filters.action
   const { data } = await mainAdminClient.get<{ items: Array<Record<string, unknown>>; total: number; page?: number; page_size?: number }>('/admin/user-risk-control/audit', {
-    params: compactParams({ action, target_user_id: filters.targetUserId, target: filters.target, actor: filters.actor, result: filters.result, from: filters.from, to: filters.to, sort_by: filters.sortBy, sort_order: filters.sortOrder, page: filters.page || 1, limit: filters.pageSize || 20 }),
+    params: compactParams({ action, target_user_id: filters.targetUserId, target: filters.target, actor_id: filters.actor, result: filters.result, from: filters.from, to: filters.to, sort_by: filters.sortBy, sort_order: filters.sortOrder, page: filters.page || 1, limit: filters.pageSize || 20 }),
   })
   return { total: data.total, page: data.page || filters.page || 1, page_size: data.page_size || filters.pageSize || 20, items: data.items.map((record) => {
     const metadata = (record.metadata || {}) as Record<string, unknown>

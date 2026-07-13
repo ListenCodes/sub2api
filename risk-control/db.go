@@ -256,29 +256,63 @@ func (r *SQLRepository) SetSubjectPending(ctx context.Context, userID int64, pen
 }
 
 func (r *SQLRepository) ListAudit(ctx context.Context, limit, offset int, action string, targetUserID int64, result string) ([]AuditRecord, int, error) {
+	return r.ListAuditFiltered(ctx, limit, offset, AuditFilter{Action: action, TargetUserID: targetUserID, Result: result})
+}
+
+func (r *SQLRepository) ListAuditFiltered(ctx context.Context, limit, offset int, filter AuditFilter) ([]AuditRecord, int, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	index := 1
-	if action != "" {
+	if filter.Action != "" {
 		where = append(where, fmt.Sprintf("action=$%d", index))
-		args = append(args, action)
+		args = append(args, filter.Action)
 		index++
 	}
-	if targetUserID > 0 {
+	if filter.TargetUserID > 0 {
 		where = append(where, fmt.Sprintf("target_type='user' AND target_id=$%d", index))
-		args = append(args, formatUserID(targetUserID))
+		args = append(args, formatUserID(filter.TargetUserID))
 		index++
 	}
-	if result != "" {
-		where = append(where, fmt.Sprintf("result=$%d", index))
-		args = append(args, result)
+	if filter.Target != "" {
+		where = append(where, fmt.Sprintf("(target_type ILIKE $%d OR target_id ILIKE $%d)", index, index))
+		args = append(args, "%"+filter.Target+"%")
 		index++
+	}
+	if filter.ActorID > 0 {
+		where = append(where, fmt.Sprintf("actor_id=$%d", index))
+		args = append(args, filter.ActorID)
+		index++
+	}
+	if filter.Result != "" {
+		where = append(where, fmt.Sprintf("result=$%d", index))
+		args = append(args, filter.Result)
+		index++
+	}
+	if !filter.From.IsZero() {
+		where = append(where, fmt.Sprintf("created_at >= $%d", index))
+		args = append(args, filter.From)
+		index++
+	}
+	if !filter.To.IsZero() {
+		where = append(where, fmt.Sprintf("created_at <= $%d", index))
+		args = append(args, filter.To)
+		index++
+	}
+	sortColumn := "created_at"
+	if filter.SortBy == "result" {
+		sortColumn = "result"
+	} else if filter.SortBy == "target" {
+		sortColumn = "CASE WHEN target_type='user' AND target_id ~ '^[0-9]+$' THEN '0:' || LPAD(target_id, 20, '0') ELSE '1:' || target_type || ':' || target_id END"
+	}
+	sortDirection := "DESC"
+	if strings.EqualFold(filter.SortOrder, "asc") {
+		sortDirection = "ASC"
 	}
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_audit_logs WHERE `+strings.Join(where, " AND "), args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,actor_id,action,target_type,target_id,result,reason,metadata,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM risk_audit_logs WHERE `+strings.Join(where, " AND ")+fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", index, index+1), append(args, limit, offset)...)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,actor_id,action,target_type,target_id,result,reason,metadata,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM risk_audit_logs WHERE `+strings.Join(where, " AND ")+fmt.Sprintf(" ORDER BY %s %s LIMIT $%d OFFSET $%d", sortColumn, sortDirection, index, index+1), append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -291,6 +325,7 @@ func (r *SQLRepository) ListAudit(ctx context.Context, limit, offset int, action
 			return nil, 0, err
 		}
 		_ = json.Unmarshal(metadata, &item.Metadata)
+		enrichAuditRecord(&item)
 		items = append(items, item)
 	}
 	return items, total, rows.Err()

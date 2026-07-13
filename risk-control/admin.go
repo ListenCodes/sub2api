@@ -208,23 +208,63 @@ func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	input.Rule.EventTypes = []string{strings.TrimSpace(input.EventType)}
 	decision := evaluateRulesWithMode([]Rule{input.Rule}, EventReport{EventType: input.EventType}, func(Rule) int { return input.Count }, "enforce")
 	matched := len(decision.RuleCodes) > 0
+	actor, _ := actorID(r)
+	reason := decision.Reason
+	if reason == "" {
+		reason = "规则测试"
+	}
+	if err := s.service.RecordAudit(r.Context(), AuditReport{
+		ActorID: actor, Action: "rule_test", TargetType: "rule", TargetID: strings.TrimSpace(input.Rule.Code), Result: "success", Reason: reason,
+		Metadata: map[string]any{"matched": matched, "score": decision.Score, "risk_level": decision.RiskLevel, "action": decision.Action, "rule_codes": decision.RuleCodes},
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"matched": matched, "score": decision.Score, "decision": decision})
 }
 
 func (s *HTTPServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit, offset := pagination(r)
-	userID := int64(0)
+	filter := AuditFilter{Target: strings.TrimSpace(r.URL.Query().Get("target")), Action: strings.TrimSpace(r.URL.Query().Get("action")), Result: strings.TrimSpace(r.URL.Query().Get("result")), SortBy: strings.TrimSpace(r.URL.Query().Get("sort_by")), SortOrder: strings.TrimSpace(r.URL.Query().Get("sort_order"))}
 	if raw := strings.TrimSpace(r.URL.Query().Get("target_user_id")); raw != "" {
-		userID, _ = strconv.ParseInt(raw, 10, 64)
+		filter.TargetUserID, _ = strconv.ParseInt(raw, 10, 64)
 	}
-	action := strings.TrimSpace(r.URL.Query().Get("action"))
-	result := strings.TrimSpace(r.URL.Query().Get("result"))
-	items, total, err := s.service.repo.ListAudit(r.Context(), limit, offset, action, userID, result)
+	if raw := strings.TrimSpace(r.URL.Query().Get("actor_id")); raw != "" {
+		filter.ActorID, _ = strconv.ParseInt(raw, 10, 64)
+	}
+	var err error
+	if filter.From, err = parseAuditTime(r.URL.Query().Get("from"), false); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if filter.To, err = parseAuditTime(r.URL.Query().Get("to"), true); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, total, err := s.service.repo.ListAuditFiltered(r.Context(), limit, offset, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "page": offset/limit + 1, "page_size": limit})
+}
+
+func parseAuditTime(raw string, endOfDay bool) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed, nil
+	}
+	parsed, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return time.Time{}, errors.New("invalid audit time")
+	}
+	if endOfDay {
+		return parsed.Add(24*time.Hour - time.Nanosecond), nil
+	}
+	return parsed, nil
 }
 
 func pagination(r *http.Request) (int, int) {
