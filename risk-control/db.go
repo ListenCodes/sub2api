@@ -93,6 +93,31 @@ func (r *SQLRepository) ListRules(ctx context.Context) ([]Rule, error) {
 	return result, rows.Err()
 }
 
+func (r *SQLRepository) CreateRule(ctx context.Context, input Rule) (Rule, error) {
+	eventTypes, err := json.Marshal(input.EventTypes)
+	if err != nil {
+		return Rule{}, err
+	}
+	var rule Rule
+	var raw []byte
+	err = r.db.QueryRowContext(ctx, `INSERT INTO risk_rules (code,name,description,event_types,enabled,window_seconds,threshold,score,risk_level,action,revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,code,name,description,event_types,enabled,window_seconds,threshold,score,risk_level,action,revision`, input.Code, input.Name, input.Description, string(eventTypes), input.Enabled, input.WindowSeconds, input.Threshold, input.Score, input.RiskLevel, input.Action, 1).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
+	if err != nil {
+		if isRuleCodeConflict(err) {
+			return Rule{}, ErrRuleCodeConflict
+		}
+		return Rule{}, err
+	}
+	if err := json.Unmarshal(raw, &rule.EventTypes); err != nil {
+		return Rule{}, err
+	}
+	return rule, nil
+}
+
+func isRuleCodeConflict(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" && (pqErr.Constraint == "" || strings.Contains(pqErr.Constraint, "risk_rules"))
+}
+
 func (r *SQLRepository) UpdateRule(ctx context.Context, code string, expectedRevision int, update Rule) (Rule, error) {
 	eventTypes, _ := json.Marshal(update.EventTypes)
 	var rule Rule

@@ -80,6 +80,8 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleUserByPath(w, r, path)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/rules":
 		s.handleRules(w, r)
+	case r.Method == http.MethodPost && path == "/api/v1/admin/rules":
+		s.handleRuleCreate(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/admin/rules/"):
 		s.handleRuleUpdate(w, r, strings.TrimPrefix(path, "/api/v1/admin/rules/"))
 	case r.Method == http.MethodPost && path == "/api/v1/admin/rules/test":

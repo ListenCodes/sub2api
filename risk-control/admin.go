@@ -87,8 +87,45 @@ func (s *HTTPServer) handleRules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": rules})
 }
 
+type ruleMutationRequest struct {
+	Rule
+	Reason string `json:"reason"`
+}
+
+func (s *HTTPServer) handleRuleCreate(w http.ResponseWriter, r *http.Request) {
+	var input ruleMutationRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.Code = strings.TrimSpace(input.Code)
+	input.Name = strings.TrimSpace(input.Name)
+	for index := range input.EventTypes {
+		input.EventTypes[index] = strings.TrimSpace(input.EventTypes[index])
+	}
+	if err := validateRuleConfig(input.Rule); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	created, err := s.service.repo.CreateRule(r.Context(), input.Rule)
+	if errors.Is(err, ErrRuleCodeConflict) {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	actor, _ := actorID(r)
+	if err := s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "create_rule", TargetType: "rule", TargetID: created.Code, Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"revision": created.Revision}}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, created)
+}
+
 func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, code string) {
-	var input Rule
+	var input ruleMutationRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -97,11 +134,11 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		writeError(w, http.StatusBadRequest, errors.New("revision is required"))
 		return
 	}
-	if !validRiskAction(input.Action) || riskLevelRank(input.RiskLevel) == 0 || input.WindowSeconds <= 0 || input.Threshold <= 0 || input.Score < 0 || input.Score > 100 {
+	if err := validateRuleFields(input.Rule); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
 		return
 	}
-	updated, err := s.service.repo.UpdateRule(r.Context(), code, input.Revision, input)
+	updated, err := s.service.repo.UpdateRule(r.Context(), code, input.Revision, input.Rule)
 	if errors.Is(err, ErrRuleRevisionConflict) {
 		writeError(w, http.StatusConflict, err)
 		return
@@ -111,7 +148,7 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 	actor, _ := actorID(r)
-	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Metadata: map[string]any{"revision": updated.Revision}})
+	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"revision": updated.Revision}})
 	writeJSON(w, http.StatusOK, map[string]any{"id": updated.ID, "revision": updated.Revision})
 }
 

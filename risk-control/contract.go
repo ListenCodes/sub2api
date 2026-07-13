@@ -1,5 +1,12 @@
 package main
 
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
 type EventReport struct {
 	EventKey         string         `json:"event_key"`
 	EventType        string         `json:"event_type"`
@@ -48,9 +55,70 @@ type Decision struct {
 
 func validRiskAction(action string) bool {
 	switch action {
-	case "allow", "observe", "review", "ban", "reject_candidate":
+	case "allow", "observe", "review", "ban", "reject_candidate", "auto_ban":
 		return true
 	default:
 		return false
 	}
+}
+
+var safeRuleCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,79}$`)
+
+var validRiskEventTypes = map[string]struct{}{
+	"registration_attempt": {},
+	"registration_success": {},
+	"login_attempt":        {},
+	"login_failure":        {},
+	"api_error":            {},
+	"content_risk":         {},
+	"quota_exceeded":       {},
+	"upstream_error":       {},
+	"api_request":          {},
+}
+
+func validRuleAction(action string) bool {
+	switch action {
+	case "observe", "review", "ban", "reject_candidate", "auto_ban":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRuleConfig(rule Rule) error {
+	code := strings.TrimSpace(rule.Code)
+	if !safeRuleCodePattern.MatchString(code) {
+		return errors.New("invalid rule code")
+	}
+	if strings.TrimSpace(rule.Name) == "" {
+		return errors.New("rule name is required")
+	}
+	if len(rule.EventTypes) == 0 {
+		return errors.New("event type is required")
+	}
+	for _, eventType := range rule.EventTypes {
+		if _, ok := validRiskEventTypes[strings.TrimSpace(eventType)]; !ok {
+			return fmt.Errorf("invalid event type: %s", eventType)
+		}
+	}
+	return validateRuleFields(rule)
+}
+
+func validateRuleFields(rule Rule) error {
+	if rule.WindowSeconds <= 0 {
+		return errors.New("window seconds must be positive")
+	}
+	if rule.Threshold <= 0 {
+		return errors.New("threshold must be positive")
+	}
+	if rule.Score < 0 || rule.Score > 100 {
+		return errors.New("score must be between 0 and 100")
+	}
+	if riskLevelRank(rule.RiskLevel) == 0 {
+		return errors.New("invalid risk level")
+	}
+	if !validRuleAction(rule.Action) {
+		return errors.New("invalid rule action")
+	}
+	return nil
 }

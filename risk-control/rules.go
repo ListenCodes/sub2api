@@ -73,6 +73,8 @@ func normalizeRiskLevel(level string) string {
 
 func riskActionRank(action string) int {
 	switch action {
+	case "auto_ban":
+		return 5
 	case "ban":
 		return 4
 	case "reject_candidate":

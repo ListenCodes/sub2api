@@ -10,6 +10,7 @@ import (
 )
 
 var ErrRuleRevisionConflict = errors.New("rule revision conflict")
+var ErrRuleCodeConflict = errors.New("rule code already exists")
 
 type Rule struct {
 	ID            int64    `json:"id"`
@@ -96,6 +97,7 @@ type RiskRepository interface {
 	GetEventByKey(context.Context, string) (EventRecord, bool, error)
 	CountRecent(context.Context, int64, string, string, string, string, time.Time) (int, error)
 	ListRules(context.Context) ([]Rule, error)
+	CreateRule(context.Context, Rule) (Rule, error)
 	UpdateRule(context.Context, string, int, Rule) (Rule, error)
 	UpsertSubject(context.Context, EventRecord) error
 	ListSubjects(context.Context, int, int, string, string, []int64) ([]RiskSubject, int, error)
@@ -147,18 +149,23 @@ type MemoryRepository struct {
 	auditKeys     map[string]struct{}
 	nextEventID   int64
 	nextAuditID   int64
+	nextRuleID    int64
 }
 
 func NewMemoryRepository(seed []Rule) *MemoryRepository {
 	rules := make(map[string]Rule, len(seed))
+	nextRuleID := int64(1)
 	for _, rule := range seed {
 		rules[rule.Code] = rule
+		if rule.ID >= nextRuleID {
+			nextRuleID = rule.ID + 1
+		}
 	}
 	return &MemoryRepository{
 		rules: rules, eventByKey: make(map[string]EventRecord), subjects: make(map[int64]RiskSubject),
 		userIPs: make(map[int64]map[string]struct{}), userDevices: make(map[int64]map[string]struct{}),
 		subjectEvents: make(map[int64]map[string]struct{}), auditKeys: make(map[string]struct{}),
-		nextEventID: 1, nextAuditID: 1,
+		nextEventID: 1, nextAuditID: 1, nextRuleID: nextRuleID,
 	}
 }
 
@@ -213,6 +220,19 @@ func (r *MemoryRepository) ListRules(_ context.Context) ([]Rule, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Code < result[j].Code })
 	return result, nil
+}
+
+func (r *MemoryRepository) CreateRule(_ context.Context, rule Rule) (Rule, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.rules[rule.Code]; exists {
+		return Rule{}, ErrRuleCodeConflict
+	}
+	rule.ID = r.nextRuleID
+	r.nextRuleID++
+	rule.Revision = 1
+	r.rules[rule.Code] = rule
+	return rule, nil
 }
 
 func (r *MemoryRepository) UpdateRule(_ context.Context, code string, expectedRevision int, update Rule) (Rule, error) {
