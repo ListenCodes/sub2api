@@ -17,6 +17,21 @@ Optional variables:
 
 The service initializes `schema.sql` on startup and exposes `/healthz` for container health checks. Internal event and audit endpoints require HMAC timestamp/nonce signatures. Admin APIs are only intended to be reached through the authenticated Sub2API proxy. Startup rejects an internal secret shorter than 32 bytes.
 
+## Admin surface contract
+
+The Sub2API admin UI exposes exactly three risk-control pages. Their behavior,
+Chinese labels, API contract, batch actions, rule creation, sorting and audit
+requirements are defined in [`../docs/RISK-CONTROL-ADMIN-SPEC.md`](../docs/RISK-CONTROL-ADMIN-SPEC.md).
+The risk service remains responsible for risk events, subjects, rules and
+audit data; Sub2API remains authoritative for administrator authentication and
+the final user account status.
+
+The current implementation must be treated as incomplete until the user page
+shows account identity and explainable reasons, the rule page supports creating
+and testing rules, and the audit page shows the administrator, target, reason,
+result and failure detail. Raw values such as `login_failure` and `critical`
+are protocol values and must not be the primary text in the admin UI.
+
 The service owns only its risk database. Back it up separately from Sub2API:
 
 ```bash

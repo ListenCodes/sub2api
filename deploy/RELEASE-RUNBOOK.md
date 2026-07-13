@@ -116,6 +116,15 @@ The main application must use the dedicated network alias
 Docker network under the `risk-control` name during migration, so do not use
 the ambiguous legacy alias for the v2 integration.
 
+The admin product contract is defined in
+`docs/RISK-CONTROL-ADMIN-SPEC.md`. A risk-control release is not accepted when
+the pages only render a skeleton. Before production, verify the three admin
+flows together: a user row includes account identity, a Chinese risk reason,
+event evidence and account status; a rule can be created, validated, tested
+and audited; and an administrator can perform a reason-required single or
+batch status action with per-target results. Sort and filter controls must
+change the data query or stable result order, not only the visual state.
+
 The `.env` file is production-only and must never be committed. Update the
 service image and Compose file together, then validate:
 
@@ -140,6 +149,12 @@ been verified with real traffic.
 - [ ] Main `/health` returns success.
 - [ ] Public HTTPS endpoint returns success.
 - [ ] Admin risk pages load and show the expected user identity and reason.
+- [ ] Admin risk pages render Chinese labels for risk types, levels, actions,
+      statuses and audit results; raw enum values are not the primary text.
+- [ ] User page supports current-page selection, batch action confirmation,
+      required reason, partial-failure reporting and sortable columns.
+- [ ] Rule page supports creating a rule and records create/update actions.
+- [ ] Audit page shows administrator, target, reason, result and failure detail.
 - [ ] No unexpected Nginx configuration warnings exist.
 - [ ] Backup path and rollback image are recorded.
 

@@ -18,6 +18,28 @@ development conversations working in this repository.
 The independent risk-control service is deployed separately from the main
 repository. Do not copy its `.env` into this repository or commit secrets.
 
+## Risk-Control Admin Product Contract
+
+The risk-control admin surface is intentionally limited to three pages:
+
+- user risk: all users, risk events, evidence, filtering, sorting, and account actions;
+- scenario rules: create, edit, enable/disable, and test rules;
+- operation audit: administrator, target, reason, result, failure detail, filtering, and sorting.
+
+The implementation contract and current gaps are recorded in
+`docs/RISK-CONTROL-ADMIN-SPEC.md`. Every agent working on this feature must
+read that document before editing. Internal enum values such as
+`login_failure`, `critical`, and `reject_candidate` are API values only; the
+admin UI must render understandable Chinese labels and reasons. A code change
+is not complete when it only adds page skeletons or static buttons: the user,
+rule, and audit flows must be executable and covered by tests.
+
+The first release must support current-page selection and batch account
+actions with required reasons, rule creation with duplicate/validation checks,
+sortable tables, and per-target audit results. Automatic enforcement remains
+off or in review/shadow mode until real events, identities, reasons, and audit
+records have been verified.
+
 ## Source And Branch Rules
 
 1. Read this file and `deploy/RELEASE-RUNBOOK.md` before changing code or
