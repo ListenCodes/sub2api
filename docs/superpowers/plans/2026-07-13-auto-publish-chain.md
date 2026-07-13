@@ -88,9 +88,9 @@
 - Modify: `frontend/src/i18n/locales/en/misc.ts`
 - Test: `frontend/src/components/common/__tests__/VersionBadge.spec.ts`
 
-- [ ] Add a failing shell assertion for conflict metadata and saved artifacts.
-- [ ] Add failing backend and frontend tests for conflict status fields.
-- [ ] Capture conflict files, commits, and a diagnostic snapshot before aborting.
-- [ ] Expose conflict metadata through the admin update API.
-- [ ] Render actionable conflict details in the failure panel.
-- [ ] Run focused tests, full frontend checks, and script syntax checks.
+- [x] Add a failing shell assertion for conflict metadata and saved artifacts.
+- [x] Add failing backend and frontend tests for conflict status fields.
+- [x] Capture conflict files, commits, and a diagnostic snapshot before aborting.
+- [x] Expose conflict metadata through the admin update API.
+- [x] Render actionable conflict details in the failure panel.
+- [x] Run focused tests, full frontend checks, and script syntax checks.
