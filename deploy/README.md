@@ -193,8 +193,9 @@ The admin trigger and daily job use `sync-and-publish.sh`. It prepares an
 `origin/integration/upstream-*` branch, stops on conflicts or base drift, and
 automatically promotes and publishes only a clean integration. The publish
 step still uses the exact `origin/custom` commit, creates a production backup,
-and runs the normal health checks. A failed publish remains stopped for manual
-inspection and is not silently retried.
+and runs the normal health checks. A failed publish remains stopped for that
+run, retains the exact pending commit, and is retried by the next unified
+wrapper invocation only after the origin/custom and local-branch checks pass.
 
 When a merge conflict occurs, the update status and admin panel list the exact
 conflicted files, both commit IDs, the resolution hint, and the diagnostic

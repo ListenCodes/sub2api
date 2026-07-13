@@ -26,7 +26,8 @@ When Git cannot safely merge upstream, the status includes `conflict_files`,
 `conflict_base`, `conflict_upstream`, `conflict_log`, and `resolution_hint`.
 The host stores a diagnostic snapshot under
 `/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/<job-id>/`;
-the admin panel shows the conflicted files and states that production was not
+`conflict_log` points to that host-side `metadata.json` path, not the container
+mount path. The admin panel shows the conflicted files and states that production was not
 changed. The script never resolves conflicts with `ours` or `theirs` silently.
 
 ## Production Publish

@@ -56,7 +56,8 @@ describe('VersionBadge conflict reporting', () => {
       conflict_files: ['backend/internal/server/routes/gateway.go', 'deploy/README.md'],
       conflict_base: 'custom123',
       conflict_upstream: 'upstream456',
-      conflict_log: '/app/data/sync-conflicts/update-conflict/metadata.json',
+      conflict_log:
+        '/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json',
       resolution_hint: 'Resolve conflicts and retry.'
     })
 

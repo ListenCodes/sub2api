@@ -10,7 +10,6 @@ LOG="${SUB2API_SYNC_LOG:-/var/log/sub2api-sync.log}"
 LOCK_FILE="${SUB2API_SYNC_LOCK:-/var/lock/sub2api-sync.lock}"
 WORKTREE_ROOT="${SUB2API_SYNC_WORKTREE_ROOT:-/var/tmp/sub2api-sync}"
 CONFLICT_DIR="${SUB2API_SYNC_CONFLICT_DIR:-$DATA_DIR/sync-conflicts}"
-CONFLICT_LOG_PREFIX="${SUB2API_SYNC_CONFLICT_LOG_PREFIX:-/app/data/sync-conflicts}"
 STATUS_FILE="$DATA_DIR/sync-status"
 RESULT_FILE="$DATA_DIR/sync-result"
 JOB_ID_FILE="$DATA_DIR/sync-job-id"
@@ -137,7 +136,7 @@ if ! git -C "$WORKTREE" merge --no-ff --no-edit "$UPSTREAM_REMOTE/main" >> "$LOG
   conflict_files="$(jq -r 'join(", ")' <<< "$CONFLICT_FILES_JSON")"
   CONFLICT_BASE="$BASE_COMMIT"
   CONFLICT_UPSTREAM="$upstream_head"
-  CONFLICT_LOG="$CONFLICT_LOG_PREFIX/$JOB_ID/metadata.json"
+  CONFLICT_LOG="$conflict_snapshot_dir/metadata.json"
   RESOLUTION_HINT='Resolve the listed files in a local custom worktree, merge upstream/main, run tests, push origin/custom, then retry.'
   git -C "$WORKTREE" status --short > "$conflict_snapshot_dir/status.txt" || true
   git -C "$WORKTREE" diff --cc > "$conflict_snapshot_dir/conflict.diff" || true
