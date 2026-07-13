@@ -54,10 +54,10 @@ services:
       - SERVER_MODE=${SERVER_MODE:-release}
       - RUN_MODE=${RUN_MODE:-standard}
 
-       # Independent registration risk service (shadow + baseline_allow by default)
-       - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://risk-control:8090}
-       - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
-       - RISK_CONTROL_DECISION_FAIL_MODE=${RISK_CONTROL_DECISION_FAIL_MODE:-open}
+      # Independent registration risk service (shadow + baseline_allow by default)
+      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://risk-control:8090}
+      - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
+      - RISK_CONTROL_DECISION_FAIL_MODE=${RISK_CONTROL_DECISION_FAIL_MODE:-open}
 
       # =======================================================================
       # Database Configuration (PostgreSQL)
