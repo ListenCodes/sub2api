@@ -149,8 +149,8 @@
                 </button>
               </div>
 
-              <!-- Priority 2: Update success - need restart -->
-              <div v-else-if="updateSuccess && needRestart" class="space-y-2">
+              <!-- Priority 2: Update/preparation success -->
+              <div v-else-if="updateSuccess" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800/50 dark:bg-green-900/20"
                 >
@@ -172,17 +172,20 @@
                       {{
                         successKind === 'rollback'
                           ? t('version.rollbackComplete')
-                          : t('version.updateComplete')
+                          : needRestart
+                            ? t('version.updateComplete')
+                            : t('version.updatePrepared')
                       }}
                     </p>
                     <p class="text-xs text-green-600/70 dark:text-green-400/70">
-                      {{ t('version.restartRequired') }}
+                      {{ needRestart ? t('version.restartRequired') : updateSuccessMessage }}
                     </p>
                   </div>
                 </div>
 
                 <!-- Restart button with countdown -->
                 <button
+                  v-if="needRestart"
                   @click="handleRestart"
                   :disabled="restarting"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -646,6 +649,7 @@ import { useAuthStore, useAppStore } from '@/stores'
 import {
   performUpdate,
   getUpdateStatus,
+  updateNeedsRestart,
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
@@ -686,6 +690,7 @@ const restarting = ref(false)
 const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
+const updateSuccessMessage = ref('')
 const restartCountdown = ref(0)
 const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -751,6 +756,7 @@ async function refreshVersion(force = true) {
   // Reset update states when refreshing
   updateError.value = ''
   updateSuccess.value = false
+  updateSuccessMessage.value = ''
   needRestart.value = false
   stopUpdatePolling()
   resetRollbackState()
@@ -764,6 +770,7 @@ async function handleUpdate() {
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
+  updateSuccessMessage.value = ''
 
   try {
     const job = await performUpdate()
@@ -788,11 +795,12 @@ function stopUpdatePolling() {
   updatePollInFlight = false
 }
 
-function finishUpdateSuccess() {
+function finishUpdateSuccess(needsRestart: boolean, message: string) {
   stopUpdatePolling()
   successKind.value = 'update'
   updateSuccess.value = true
-  needRestart.value = true
+  needRestart.value = updateNeedsRestart({ need_restart: needsRestart })
+  updateSuccessMessage.value = message
   updating.value = false
   appStore.clearVersionCache()
 }
@@ -809,7 +817,7 @@ async function pollUpdateStatus(jobID: string) {
   try {
     const status = await getUpdateStatus(jobID)
     if (status.status === 'success') {
-      finishUpdateSuccess()
+      finishUpdateSuccess(status.need_restart, status.message)
     } else if (status.status === 'failed') {
       finishUpdateFailure(status.message)
     }
@@ -896,6 +904,7 @@ async function handleRollback() {
     successKind.value = 'rollback'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    updateSuccessMessage.value = result.message
     rollbackPanelOpen.value = false
     // Clear version cache so the next check reflects the rolled-back version
     appStore.clearVersionCache()

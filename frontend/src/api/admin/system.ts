@@ -44,8 +44,14 @@ export interface UpdateJob {
   job_id: string
   status: 'running' | 'success' | 'failed'
   message: string
+  integration_branch?: string
+  need_restart: boolean
   started_at?: string | null
   finished_at?: string | null
+}
+
+export function updateNeedsRestart(job: Pick<UpdateJob, 'need_restart'>): boolean {
+  return job.need_restart === true
 }
 
 function newUpdateIdempotencyKey(): string {

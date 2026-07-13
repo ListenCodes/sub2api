@@ -99,13 +99,14 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 		succeeded = true
 
 		return gin.H{
-			"job_id":       job.JobID,
-			"status":       job.Status,
-			"message":      job.Message,
-			"started_at":   job.StartedAt,
-			"finished_at":  job.FinishedAt,
-			"need_restart": true,
-			"operation_id": lock.OperationID(),
+			"job_id":             job.JobID,
+			"status":             job.Status,
+			"message":            job.Message,
+			"integration_branch": job.IntegrationBranch,
+			"need_restart":       job.NeedRestart,
+			"started_at":         job.StartedAt,
+			"finished_at":        job.FinishedAt,
+			"operation_id":       lock.OperationID(),
 		}, nil
 	})
 }

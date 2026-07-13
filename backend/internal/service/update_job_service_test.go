@@ -38,7 +38,21 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 	require.NoError(t, err)
 	require.NotEmpty(t, job.JobID)
 	require.Equal(t, UpdateStatusRunning, job.Status)
+	require.False(t, job.NeedRestart)
 	require.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
+func TestReadUpdateStatusIncludesPreparationMetadata(t *testing.T) {
+	t.Parallel()
+
+	statusPath := filepath.Join(t.TempDir(), "sync-status")
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","status":"success","message":"branch ready","integration_branch":"integration/upstream-20260713","need_restart":false,"ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
+
+	job, err := readUpdateStatus(statusPath, "update-a")
+
+	require.NoError(t, err)
+	require.Equal(t, "integration/upstream-20260713", job.IntegrationBranch)
+	require.False(t, job.NeedRestart)
 }
 
 func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {

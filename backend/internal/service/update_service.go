@@ -191,11 +191,12 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	}
 	startedAt := time.Now().UTC()
 	job := &UpdateJob{
-		JobID:     jobID,
-		Status:    UpdateStatusRunning,
-		Message:   "sync triggered",
-		Timestamp: startedAt,
-		StartedAt: &startedAt,
+		JobID:       jobID,
+		Status:      UpdateStatusRunning,
+		Message:     "sync triggered",
+		NeedRestart: false,
+		Timestamp:   startedAt,
+		StartedAt:   &startedAt,
 	}
 	if err := writeUpdateStatus(s.statusPath, job); err != nil {
 		return nil, err

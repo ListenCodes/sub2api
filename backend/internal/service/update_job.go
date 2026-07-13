@@ -32,12 +32,14 @@ var (
 )
 
 type UpdateJob struct {
-	JobID      string     `json:"job_id"`
-	Status     string     `json:"status"`
-	Message    string     `json:"message"`
-	Timestamp  time.Time  `json:"ts"`
-	StartedAt  *time.Time `json:"started_at"`
-	FinishedAt *time.Time `json:"finished_at"`
+	JobID            string     `json:"job_id"`
+	Status           string     `json:"status"`
+	Message          string     `json:"message"`
+	IntegrationBranch string     `json:"integration_branch,omitempty"`
+	NeedRestart      bool       `json:"need_restart"`
+	Timestamp        time.Time  `json:"ts"`
+	StartedAt        *time.Time `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at"`
 }
 
 func newUpdateJobID() (string, error) {
@@ -125,6 +127,7 @@ func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt
 		JobID:      jobID,
 		Status:     status,
 		Message:    message,
+		NeedRestart: false,
 		Timestamp:  time.Now().UTC(),
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
