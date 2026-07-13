@@ -3,14 +3,22 @@
 These scripts are the versioned source for the VPS operations under
 `/opt/sub2api-custom/`.
 
-## Upstream Sync
+## Unified Upstream Flow
 
-`sync-upstream.sh` fetches the official `upstream/main`, checks that the VPS
-`custom` branch matches `origin/custom`, and tries a merge in a temporary
-worktree. A clean merge is pushed only as `origin/integration/upstream-*` for
-local review. A conflict reports the exact files and leaves production alone.
+`sync-and-publish.sh` is the entrypoint used by both the admin trigger and the
+scheduled job. It runs `sync-upstream.sh` in a temporary worktree first. A
+conflict, changed `origin/custom` base, or dirty VPS tree stops the flow and
+leaves the integration branch for manual resolution.
 
-It never builds an image, restarts a container, changes `custom`, or force-pushes.
+When the merge is clean and the base is unchanged, it fast-forwards `custom`,
+pushes `origin/custom` without force, and invokes `publish-custom.sh` with the
+exact new commit. The publish script backs up production, builds the main and
+v2 risk-control images, recreates only the affected services, and verifies
+health. A publish failure is terminal for that run; it is not silently retried.
+
+`sync-upstream.sh` is the preparation component. It never builds an image or
+restarts a container by itself. `sync-trigger.sh` is the container-mounted
+admin trigger and waits until the unified host flow has completed.
 
 ## Production Publish
 

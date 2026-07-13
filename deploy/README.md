@@ -154,14 +154,17 @@ The versioned scripts in `deploy/ops/` are installed on the VPS as follows:
 ```bash
 install -m 0755 deploy/ops/sync-upstream.sh /opt/sub2api-custom/sync-upstream.sh
 install -m 0755 deploy/ops/sync-trigger.sh /opt/sub2api-custom/sync-trigger.sh
+install -m 0755 deploy/ops/sync-and-publish.sh /opt/sub2api-custom/sync-and-publish.sh
 install -m 0755 deploy/ops/auto-update.sh /opt/sub2api-custom/auto-update.sh
 install -m 0755 deploy/ops/publish-custom.sh /opt/sub2api-custom/publish-custom.sh
 ```
 
-The upstream action prepares an `origin/integration/upstream-*` branch for
-local conflict resolution. Production is published only after the resolved
-changes are merged into `origin/custom` and the VPS publish script is run with
-that exact commit.
+The admin trigger and daily job use `sync-and-publish.sh`. It prepares an
+`origin/integration/upstream-*` branch, stops on conflicts or base drift, and
+automatically promotes and publishes only a clean integration. The publish
+step still uses the exact `origin/custom` commit, creates a production backup,
+and runs the normal health checks. A failed publish remains stopped for manual
+inspection and is not silently retried.
 
 ### Database Migration Notes (PostgreSQL)
 

@@ -89,10 +89,18 @@ are the coordination mechanism.
 
 ## Release Boundary
 
-The admin upstream action is preparation-only. It may fetch `upstream/main`,
-test a merge in a temporary worktree, and push `origin/integration/upstream-*`.
-It must not change `custom`, build images, deploy containers, or force-push.
+The admin upstream action and the scheduled upstream job use the unified
+`sync-and-publish.sh` flow. It fetches `upstream/main`, tests a merge in a
+temporary worktree, and pushes `origin/integration/upstream-*`. When the merge
+is conflict-free and the recorded `origin/custom` base has not changed, the
+flow may fast-forward `custom` to that integration branch, push `origin/custom`,
+and invoke `publish-custom.sh` for production.
 
-Production publishing uses `deploy/ops/publish-custom.sh` and accepts only the
-approved `origin/custom` commit. The VPS must fast-forward to that commit and
-must not fetch or merge `upstream/main` during a release.
+Any merge conflict, changed custom base, dirty VPS tree, failed push, failed
+backup, failed build, or failed health check stops the flow without publishing.
+The integration branch and rollback artifacts remain available for manual
+resolution. No step may use a rebase, force-push, or an arbitrary commit.
+
+`publish-custom.sh` remains the only production build/deploy entrypoint. It
+accepts only the exact approved `origin/custom` commit and must not fetch or
+merge `upstream/main` during a release.

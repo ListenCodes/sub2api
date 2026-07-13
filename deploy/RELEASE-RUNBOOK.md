@@ -29,10 +29,11 @@ git merge --ff-only integration/upstream-YYYYMMDD
 git push origin custom
 ```
 
-The production deployment then uses the approved `origin/custom` commit. Do
-not deploy an uncommitted worktree or an arbitrary upstream commit. The admin
-"upstream update" action only prepares an integration branch; it does not
-publish production.
+The production deployment uses the approved `origin/custom` commit. Do not
+deploy an uncommitted worktree or an arbitrary upstream commit. The VPS
+unified flow may promote a clean integration branch and publish it
+automatically, but only after the base commit, clean-tree, backup, build, and
+health checks pass.
 
 ## Versioned VPS Operations
 
@@ -40,8 +41,9 @@ Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
 sync-trigger.sh    container-mounted trigger; waits for the cron result
-sync-upstream.sh   fetches upstream and prepares origin/integration/* only
-auto-update.sh     scheduled check-only wrapper
+sync-upstream.sh   fetches upstream and prepares origin/integration/*
+sync-and-publish.sh shared trigger/scheduled sync-then-publish wrapper
+auto-update.sh     scheduled wrapper for sync-and-publish.sh
 publish-custom.sh  approved production release entrypoint
 ```
 
@@ -53,6 +55,11 @@ The normal publish command is:
 
 It backs up production, builds the approved source, recreates only the main
 and v2 risk-control services, and verifies health and the running version.
+
+The admin trigger and the daily scheduled job both call
+`sync-and-publish.sh`. A conflict or changed custom base stops before
+`origin/custom` and production are changed. A clean merge promotes the
+integration branch and calls the same publish entrypoint automatically.
 
 ## VPS Fallback Release
 
