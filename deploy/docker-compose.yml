@@ -319,7 +319,7 @@ services:
       risk-control-postgres:
         condition: service_healthy
     networks:
-      - name: sub2api-network
+      sub2api-network:
         aliases:
           - risk-control-v2
     healthcheck:
