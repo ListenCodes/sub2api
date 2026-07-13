@@ -142,6 +142,27 @@ docker compose -f docker-compose.local.yml exec -T risk-control-postgres \
 
 Restore with the service stopped using `pg_restore --clean --if-exists`. The risk service runs its idempotent schema at startup and records schema version `1`; do not delete `risk_control_postgres_data` during rollback. A schema change must include a new versioned migration before production rollout.
 
+### Custom fork update and release
+
+For this deployment, `upstream/main` is only an input to local integration.
+The approved release branch is `origin/custom` on the user's fork. Do not use
+`git pull`, a direct upstream rebase, or `docker compose up` as a production
+update procedure.
+
+The versioned scripts in `deploy/ops/` are installed on the VPS as follows:
+
+```bash
+install -m 0755 deploy/ops/sync-upstream.sh /opt/sub2api-custom/sync-upstream.sh
+install -m 0755 deploy/ops/sync-trigger.sh /opt/sub2api-custom/sync-trigger.sh
+install -m 0755 deploy/ops/auto-update.sh /opt/sub2api-custom/auto-update.sh
+install -m 0755 deploy/ops/publish-custom.sh /opt/sub2api-custom/publish-custom.sh
+```
+
+The upstream action prepares an `origin/integration/upstream-*` branch for
+local conflict resolution. Production is published only after the resolved
+changes are merged into `origin/custom` and the VPS publish script is run with
+that exact commit.
+
 ### Database Migration Notes (PostgreSQL)
 
 - Migrations are applied in lexicographic order (e.g. `001_...sql`, `002_...sql`).

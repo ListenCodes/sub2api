@@ -24,11 +24,35 @@ git fetch origin
 
 # Integrate upstream in a feature or integration branch.
 # Resolve conflicts locally and run tests before merging to custom.
+git switch custom
+git merge --ff-only integration/upstream-YYYYMMDD
 git push origin custom
 ```
 
 The production deployment then uses the approved `origin/custom` commit. Do
-not deploy an uncommitted worktree or an arbitrary upstream commit.
+not deploy an uncommitted worktree or an arbitrary upstream commit. The admin
+"upstream update" action only prepares an integration branch; it does not
+publish production.
+
+## Versioned VPS Operations
+
+Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
+
+```text
+sync-trigger.sh    container-mounted trigger; waits for the cron result
+sync-upstream.sh   fetches upstream and prepares origin/integration/* only
+auto-update.sh     scheduled check-only wrapper
+publish-custom.sh  approved production release entrypoint
+```
+
+The normal publish command is:
+
+```bash
+/opt/sub2api-custom/publish-custom.sh --commit "$(git rev-parse origin/custom)"
+```
+
+It backs up production, builds the approved source, recreates only the main
+and v2 risk-control services, and verifies health and the running version.
 
 ## VPS Fallback Release
 
@@ -42,11 +66,12 @@ Before changing the VPS:
 3. Confirm no other deployment is running.
 4. Create `emergency/vps-YYYYMMDD` from the deployed `custom` branch.
 
-After the change:
+After an emergency change:
 
 1. Run focused tests or at minimum a successful image build.
-2. Build `sub2api:custom` from `/root/sub2api`.
-3. Run `docker compose -f /root/sub2api/deploy/docker-compose.yml up -d sub2api`.
+2. Build and publish with the versioned `publish-custom.sh` after committing
+   the emergency change and pushing the approved commit to `origin`.
+3. Do not run the upstream preparation script as a production release.
 4. Wait for the container health check and `http://127.0.0.1:8081/health`.
 5. Check the public HTTPS endpoint and the risk-control container.
 6. Commit the change and push it to `origin`.

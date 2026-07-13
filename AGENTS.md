@@ -11,6 +11,7 @@ development conversations working in this repository.
 - Integration branch: `custom`
 - Production main source tree: `/root/sub2api`
 - Production main image: `sub2api:custom`
+- Versioned operations scripts: `deploy/ops/`
 - Independent risk-control service source: `/root/sub2api-risk-control`
 - Independent risk-control image: `sub2api-risk-control:<release>`
 
@@ -86,9 +87,12 @@ are the coordination mechanism.
 - If the task says "暂不修改" or does not authorize a release, do not deploy.
 - For remote work, also follow `E:\BaiduSyncdisk\Private\VPS\AGENTS.md`.
 
-## Known Legacy Boundary
+## Release Boundary
 
-The VPS still contains legacy update scripts under `/opt/sub2api-custom`.
-Until those scripts are changed to fetch an approved `origin/custom` commit,
-do not treat a blind `upstream/main` rebase as a normal custom release. The
-desired release behavior is documented in `deploy/RELEASE-RUNBOOK.md`.
+The admin upstream action is preparation-only. It may fetch `upstream/main`,
+test a merge in a temporary worktree, and push `origin/integration/upstream-*`.
+It must not change `custom`, build images, deploy containers, or force-push.
+
+Production publishing uses `deploy/ops/publish-custom.sh` and accepts only the
+approved `origin/custom` commit. The VPS must fast-forward to that commit and
+must not fetch or merge `upstream/main` during a release.

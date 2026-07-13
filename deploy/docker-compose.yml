@@ -28,7 +28,7 @@ services:
     volumes:
       # Data persistence (config.yaml will be auto-generated here)
       - sub2api_data:/app/data
-      # Custom fork: mount repo, docker socket, and sync script for upstream sync
+      # Custom fork: mount repo, docker socket, and preparation-only sync trigger
       - /root/sub2api:/repo:rw
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro
