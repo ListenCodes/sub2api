@@ -363,6 +363,10 @@ func (h *AuthHandler) completeEmailOAuthRegistration(c *gin.Context, provider st
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := h.preflightRegistrationRisk(c, session.ResolvedEmail, session.ProviderType); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	affiliateCode := strings.TrimSpace(req.AffCode)
 	if affiliateCode == "" {
@@ -437,6 +441,7 @@ func (h *AuthHandler) completeEmailOAuthRegistration(c *gin.Context, provider st
 	}
 	h.authService.ApplyOAuthSignupPromoCode(c.Request.Context(), user.ID, pendingOAuthPromoCode(session))
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportOAuthRegistrationRisk(c, user, session.ProviderType, session.ResolvedEmail)
 	clearCookies()
 	writeOAuthTokenPairResponse(c, tokenPair)
 }

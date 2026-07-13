@@ -104,6 +104,9 @@ func RegisterAdminRoutes(
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
 
+		// 用户风险控制代理（主站鉴权后转发到独立风险服务）
+		admin.Group("/user-risk-control").Any("/*path", h.Admin.User.ProxyRiskControl)
+
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
 	}
@@ -247,6 +250,7 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		users.GET("", h.Admin.User.List)
 		users.GET("/:id", h.Admin.User.GetByID)
+		users.POST("/:id/risk-status", h.Admin.User.SetRiskStatus)
 		users.POST("/:id/auth-identities", h.Admin.User.BindAuthIdentity)
 		users.POST("", h.Admin.User.Create)
 		users.PUT("/:id", h.Admin.User.Update)

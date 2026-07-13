@@ -576,6 +576,49 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/user-risk-control/users',
+    name: 'AdminUserRiskControlUsers',
+    component: () => import('@/views/admin/UserRiskControlUsersView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'User Risk Control', titleKey: 'admin.userRiskControl.usersTitle', descriptionKey: 'admin.userRiskControl.usersDescription' }
+  },
+  {
+    path: '/admin/user-risk-control/rules',
+    name: 'AdminUserRiskControlRules',
+    component: () => import('@/views/admin/UserRiskControlRulesView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Scenario Rules', titleKey: 'admin.userRiskControl.rulesTitle', descriptionKey: 'admin.userRiskControl.rulesDescription' }
+  },
+  {
+    path: '/admin/user-risk-control/audit',
+    name: 'AdminUserRiskControlAuditV2',
+    component: () => import('@/views/admin/UserRiskControlAuditView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Operation Audit', titleKey: 'admin.userRiskControl.auditPageTitle', descriptionKey: 'admin.userRiskControl.auditPageDescription' }
+  },
+  {
+    path: '/admin/risk-control/cases',
+    redirect: '/admin/user-risk-control/users'
+  },
+  {
+    path: '/admin/risk-control/events',
+    redirect: '/admin/user-risk-control/users'
+  },
+  {
+    path: '/admin/risk-control/scenarios',
+    redirect: '/admin/user-risk-control/rules'
+  },
+  {
+    path: '/admin/risk-control/subjects',
+    redirect: '/admin/user-risk-control/users'
+  },
+  {
+    path: '/admin/risk-control/lists',
+    redirect: '/admin/user-risk-control/rules'
+  },
+  {
+    path: '/admin/risk-control/audit',
+    redirect: '/admin/user-risk-control/audit'
+  },
+  { path: '/admin/risk-control/overview', redirect: '/admin/user-risk-control/users' },
+  {
     path: '/admin/usage',
     name: 'AdminUsage',
     component: () => import('@/views/admin/UsageView.vue'),

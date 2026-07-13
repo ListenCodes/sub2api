@@ -54,6 +54,11 @@ services:
       - SERVER_MODE=${SERVER_MODE:-release}
       - RUN_MODE=${RUN_MODE:-standard}
 
+      # Independent registration risk service (shadow + baseline_allow by default)
+      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://risk-control:8090}
+      - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
+      - RISK_CONTROL_DECISION_FAIL_MODE=${RISK_CONTROL_DECISION_FAIL_MODE:-open}
+
       # =======================================================================
       # Database Configuration (PostgreSQL)
       # =======================================================================
@@ -266,6 +271,61 @@ services:
       start_period: 5s
     # 注意：不暴露端口到宿主机，应用通过内部网络连接
     # 如需调试，可临时添加：ports: ["127.0.0.1:6379:6379"]
+
+  # ===========================================================================
+  # Independent Risk Control PostgreSQL
+  # ===========================================================================
+  risk-control-postgres:
+    image: postgres:18-alpine
+    container_name: risk-control-postgres
+    restart: unless-stopped
+    volumes:
+      - risk_control_postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${RISK_CONTROL_POSTGRES_USER:-risk_control_app}
+      - POSTGRES_PASSWORD=${RISK_CONTROL_POSTGRES_PASSWORD:?RISK_CONTROL_POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=${RISK_CONTROL_POSTGRES_DB:-risk_control}
+      - PGDATA=/var/lib/postgresql/data
+      - TZ=${TZ:-Asia/Shanghai}
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RISK_CONTROL_POSTGRES_USER:-risk_control_app} -d ${RISK_CONTROL_POSTGRES_DB:-risk_control}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ===========================================================================
+  # Independent Risk Control Service
+  # ===========================================================================
+  risk-control:
+    build:
+      context: ../risk-control
+      dockerfile: Dockerfile
+    container_name: risk-control
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    cpus: "0.50"
+    expose:
+      - "8090"
+    environment:
+      - RISK_CONTROL_LISTEN=:8090
+      - RISK_CONTROL_MODE=${RISK_CONTROL_MODE:-shadow}
+      - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
+      - RISK_CONTROL_DATABASE_URL=postgres://${RISK_CONTROL_POSTGRES_USER:-risk_control_app}:${RISK_CONTROL_POSTGRES_PASSWORD:?RISK_CONTROL_POSTGRES_PASSWORD is required}@risk-control-postgres:5432/${RISK_CONTROL_POSTGRES_DB:-risk_control}?sslmode=disable
+    depends_on:
+      risk-control-postgres:
+        condition: service_healthy
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8090/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 # =============================================================================
 # Volumes
 # =============================================================================
@@ -275,6 +335,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  risk_control_postgres_data:
     driver: local
 
 # =============================================================================

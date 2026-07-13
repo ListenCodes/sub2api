@@ -45,9 +45,9 @@ chmod +x docker-deploy.sh
 
 **What the script does:**
 - Downloads `docker-compose.local.yml` and `.env.example`
-- Automatically generates secure secrets (JWT_SECRET, TOTP_ENCRYPTION_KEY, POSTGRES_PASSWORD)
+- Automatically generates secure secrets for Sub2API and the independent risk-control service
 - Creates `.env` file with generated secrets
-- Creates necessary data directories (data/, postgres_data/, redis_data/)
+- Creates necessary data directories (data/, postgres_data/, redis_data/, risk_control_postgres_data/)
 - **Displays generated credentials** (POSTGRES_PASSWORD, JWT_SECRET, etc.)
 
 **After running the script:**
@@ -76,16 +76,20 @@ cd sub2api/deploy
 
 # Configure environment
 cp .env.example .env
-nano .env  # Set POSTGRES_PASSWORD and other required variables
+nano .env  # Set required variables, including the risk-control secret and DB password
 
 # Generate secure secrets (recommended)
 JWT_SECRET=$(openssl rand -hex 32)
 TOTP_ENCRYPTION_KEY=$(openssl rand -hex 32)
+RISK_CONTROL_INTERNAL_SECRET=$(openssl rand -hex 32)
+RISK_CONTROL_POSTGRES_PASSWORD=$(openssl rand -hex 32)
 echo "JWT_SECRET=${JWT_SECRET}" >> .env
 echo "TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}" >> .env
+echo "RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET}" >> .env
+echo "RISK_CONTROL_POSTGRES_PASSWORD=${RISK_CONTROL_POSTGRES_PASSWORD}" >> .env
 
 # Create data directories
-mkdir -p data postgres_data redis_data
+mkdir -p data postgres_data redis_data risk_control_postgres_data
 
 # Start all services using local directory version
 docker compose -f docker-compose.local.yml up -d
@@ -101,8 +105,8 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 | Version | Data Storage | Migration | Best For |
 |---------|-------------|-----------|----------|
-| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
-| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/) | ⚠️ Requires docker commands | Simple setup, don't need migration |
+| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data, ./risk_control_postgres_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
+| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/, including risk_control_postgres_data) | ⚠️ Requires docker commands | Simple setup, don't need migration |
 
 **Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
 
@@ -123,6 +127,20 @@ When using Docker Compose with `AUTO_SETUP=true`:
    ```bash
    docker compose logs sub2api | grep "admin password"
    ```
+
+### Risk-control operations
+
+The risk-control service is internal-only. It has no host `ports` mapping; Sub2API reaches it over the Compose network after normal administrator authentication. Keep `RISK_CONTROL_MODE=shadow` for the first rollout and switch to `review` only after confirming real events and reasons in the three user-risk pages.
+
+Before an upgrade, back up its dedicated database:
+
+```bash
+docker compose -f docker-compose.local.yml exec -T risk-control-postgres \
+  pg_dump -U "$RISK_CONTROL_POSTGRES_USER" -d "$RISK_CONTROL_POSTGRES_DB" -Fc \
+  > risk-control-$(date +%Y%m%d-%H%M%S).dump
+```
+
+Restore with the service stopped using `pg_restore --clean --if-exists`. The risk service runs its idempotent schema at startup and records schema version `1`; do not delete `risk_control_postgres_data` during rollback. A schema change must include a new versioned migration before production rollout.
 
 ### Database Migration Notes (PostgreSQL)
 
