@@ -9,6 +9,8 @@ DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}
 LOG="${SUB2API_SYNC_LOG:-/var/log/sub2api-sync.log}"
 LOCK_FILE="${SUB2API_SYNC_LOCK:-/var/lock/sub2api-sync.lock}"
 WORKTREE_ROOT="${SUB2API_SYNC_WORKTREE_ROOT:-/var/tmp/sub2api-sync}"
+CONFLICT_DIR="${SUB2API_SYNC_CONFLICT_DIR:-$DATA_DIR/sync-conflicts}"
+CONFLICT_LOG_PREFIX="${SUB2API_SYNC_CONFLICT_LOG_PREFIX:-/app/data/sync-conflicts}"
 STATUS_FILE="$DATA_DIR/sync-status"
 RESULT_FILE="$DATA_DIR/sync-result"
 JOB_ID_FILE="$DATA_DIR/sync-job-id"
@@ -37,6 +39,11 @@ fi
 INTEGRATION_BRANCH=""
 BASE_COMMIT=""
 WORKTREE=""
+CONFLICT_FILES_JSON='[]'
+CONFLICT_BASE=""
+CONFLICT_UPSTREAM=""
+CONFLICT_LOG=""
+RESOLUTION_HINT=""
 
 write_status() {
   local state="$1"
@@ -53,8 +60,13 @@ write_status() {
     --arg started_at "$STARTED_AT" \
     --arg integration_branch "$INTEGRATION_BRANCH" \
     --arg base_commit "$BASE_COMMIT" \
+    --arg conflict_base "$CONFLICT_BASE" \
+    --arg conflict_upstream "$CONFLICT_UPSTREAM" \
+    --arg conflict_log "$CONFLICT_LOG" \
+    --arg resolution_hint "$RESOLUTION_HINT" \
+    --argjson conflict_files "$CONFLICT_FILES_JSON" \
     --argjson finished_at "$finished_at" \
-    '{job_id:$job_id,status:$status,message:$message,ts:$ts,started_at:$started_at,finished_at:$finished_at,integration_branch:$integration_branch,base_commit:$base_commit,need_restart:false,published:false,published_commit:""}' \
+    '{job_id:$job_id,status:$status,message:$message,ts:$ts,started_at:$started_at,finished_at:$finished_at,integration_branch:$integration_branch,base_commit:$base_commit,conflict_files:$conflict_files,conflict_base:$conflict_base,conflict_upstream:$conflict_upstream,conflict_log:$conflict_log,resolution_hint:$resolution_hint,need_restart:false,published:false,published_commit:""}' \
     > "$STATUS_FILE.tmp.$$"
   mv -f "$STATUS_FILE.tmp.$$" "$STATUS_FILE"
 }
@@ -119,7 +131,28 @@ git -C "$WORKTREE" switch -c "$INTEGRATION_BRANCH" >> "$LOG" 2>&1 || result 'FAI
 
 write_status running "checking merge into $INTEGRATION_BRANCH"
 if ! git -C "$WORKTREE" merge --no-ff --no-edit "$UPSTREAM_REMOTE/main" >> "$LOG" 2>&1; then
-  conflict_files="$(git -C "$WORKTREE" diff --name-only --diff-filter=U | paste -sd ',' - || true)"
+  conflict_snapshot_dir="$CONFLICT_DIR/$JOB_ID"
+  mkdir -p "$conflict_snapshot_dir"
+  CONFLICT_FILES_JSON="$(git -C "$WORKTREE" diff --name-only --diff-filter=U | jq -R -s 'split("\n") | map(select(length > 0))')"
+  conflict_files="$(jq -r 'join(", ")' <<< "$CONFLICT_FILES_JSON")"
+  CONFLICT_BASE="$BASE_COMMIT"
+  CONFLICT_UPSTREAM="$upstream_head"
+  CONFLICT_LOG="$CONFLICT_LOG_PREFIX/$JOB_ID/metadata.json"
+  RESOLUTION_HINT='Resolve the listed files in a local custom worktree, merge upstream/main, run tests, push origin/custom, then retry.'
+  git -C "$WORKTREE" status --short > "$conflict_snapshot_dir/status.txt" || true
+  git -C "$WORKTREE" diff --cc > "$conflict_snapshot_dir/conflict.diff" || true
+  git -C "$WORKTREE" ls-files -u > "$conflict_snapshot_dir/unmerged-stages.txt" || true
+  jq -n \
+    --arg job_id "$JOB_ID" \
+    --arg integration_branch "$INTEGRATION_BRANCH" \
+    --arg base_commit "$CONFLICT_BASE" \
+    --arg upstream_commit "$CONFLICT_UPSTREAM" \
+    --arg log "$CONFLICT_LOG" \
+    --arg artifact_path "$conflict_snapshot_dir/metadata.json" \
+    --arg resolution_hint "$RESOLUTION_HINT" \
+    --argjson files "$CONFLICT_FILES_JSON" \
+    '{job_id:$job_id,integration_branch:$integration_branch,base_commit:$base_commit,upstream_commit:$upstream_commit,conflict_files:$files,conflict_log:$log,artifact_path:$artifact_path,resolution_hint:$resolution_hint}' \
+    > "$CONFLICT_LOG"
   git -C "$WORKTREE" merge --abort >> "$LOG" 2>&1 || true
   if [[ -n "$conflict_files" ]]; then
     result "FAILED: upstream merge conflict; files: $conflict_files" 1

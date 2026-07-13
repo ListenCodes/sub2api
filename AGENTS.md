@@ -101,6 +101,12 @@ backup, failed build, or failed health check stops the flow without publishing.
 The integration branch and rollback artifacts remain available for manual
 resolution. No step may use a rebase, force-push, or an arbitrary commit.
 
+For merge conflicts, `sync-upstream.sh` also records the conflicted files,
+both commit IDs, a resolution hint, and a diagnostic snapshot under the sync
+data directory. The admin update panel must expose these details and state
+that production was not changed. Never hide a conflict behind a generic
+failure message or resolve it with a blanket `ours`/`theirs` strategy.
+
 `publish-custom.sh` remains the only production build/deploy entrypoint. It
 accepts only the exact approved `origin/custom` commit and must not fetch or
 merge `upstream/main` during a release.

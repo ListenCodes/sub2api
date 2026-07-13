@@ -71,6 +71,22 @@ func TestReadUpdateStatusIncludesPublishedMetadata(t *testing.T) {
 	require.False(t, job.NeedRestart)
 }
 
+func TestReadUpdateStatusIncludesConflictMetadata(t *testing.T) {
+	t.Parallel()
+
+	statusPath := filepath.Join(t.TempDir(), "sync-status")
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-conflict","status":"failed","message":"upstream merge conflict","conflict_files":["backend/internal/server/routes/gateway.go","deploy/README.md"],"conflict_base":"custom123","conflict_upstream":"upstream456","conflict_log":"/app/data/sync-conflicts/update-conflict/metadata.json","resolution_hint":"Resolve conflicts and retry.","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z","finished_at":"2026-07-13T00:01:00Z"}`), 0644))
+
+	job, err := readUpdateStatus(statusPath, "update-conflict")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"backend/internal/server/routes/gateway.go", "deploy/README.md"}, job.ConflictFiles)
+	require.Equal(t, "custom123", job.ConflictBase)
+	require.Equal(t, "upstream456", job.ConflictUpstream)
+	require.Equal(t, "/app/data/sync-conflicts/update-conflict/metadata.json", job.ConflictLog)
+	require.Equal(t, "Resolve conflicts and retry.", job.ResolutionHint)
+}
+
 func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {
 	t.Parallel()
 

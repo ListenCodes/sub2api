@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $syncScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-upstream.sh')
+$triggerScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-trigger.sh')
 $syncPublishPath = Join-Path $repoRoot 'deploy\ops\sync-and-publish.sh'
 $syncPublishScript = if (Test-Path -LiteralPath $syncPublishPath) {
     Get-Content -Raw -LiteralPath $syncPublishPath
@@ -47,6 +48,11 @@ Assert-NotMatches $syncScript '--force' 'sync must not force-update refs'
 Assert-Matches $syncScript 'SUB2API_SYNC_DEFER_RESULT' 'sync supports deferred trigger results'
 Assert-Matches $syncScript 'base_commit' 'sync records the origin/custom base commit'
 Assert-Matches $syncScript 'SCHEDULED_RUN' 'scheduled syncs use an independent run mode'
+Assert-Matches $syncScript 'CONFLICT_DIR' 'sync stores conflict artifacts under a configured directory'
+Assert-Matches $syncScript 'conflict_files' 'sync records conflicted files'
+Assert-Matches $syncScript 'conflict_log' 'sync records the conflict artifact path'
+Assert-Matches $syncScript 'conflict_upstream' 'sync records the conflicting upstream commit'
+Assert-Matches $triggerScript 'conflict_files' 'admin trigger initializes conflict metadata fields'
 
 # Both the scheduled and admin-triggered paths must use the same auto-publish wrapper.
 Assert-Matches $autoUpdateScript 'sync-and-publish\.sh' 'scheduled updates use the unified wrapper'

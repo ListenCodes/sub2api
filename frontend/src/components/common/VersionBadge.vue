@@ -136,6 +136,26 @@
                     <p class="truncate text-xs text-red-600/70 dark:text-red-400/70">
                       {{ updateError }}
                     </p>
+                    <div
+                      v-if="conflictFiles.length"
+                      class="mt-2 rounded-md border border-red-200 bg-white/70 p-2 text-xs text-red-700 dark:border-red-800/60 dark:bg-dark-900/30 dark:text-red-300"
+                    >
+                      <p class="font-medium">{{ t('version.updateConflict') }}</p>
+                      <p class="mt-1">{{ t('version.updateConflictNoProductionChange') }}</p>
+                      <p class="mt-2 font-medium">{{ t('version.updateConflictFiles') }}</p>
+                      <ul class="mt-1 list-disc space-y-0.5 pl-4 break-words">
+                        <li v-for="file in conflictFiles" :key="file">{{ file }}</li>
+                      </ul>
+                      <p v-if="conflictBase || conflictUpstream" class="mt-2 break-all text-[11px] opacity-75">
+                        {{ t('version.updateConflictCommits') }}:
+                        {{ conflictBase.slice(0, 12) || '-' }} ->
+                        {{ conflictUpstream.slice(0, 12) || '-' }}
+                      </p>
+                      <p v-if="resolutionHint" class="mt-2">{{ resolutionHint }}</p>
+                      <p v-if="conflictLog" class="mt-2 break-all text-[11px] opacity-75">
+                        {{ t('version.updateConflictLog') }}: {{ conflictLog }}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -703,6 +723,11 @@ const updateSuccess = ref(false)
 const updateSuccessMessage = ref('')
 const published = ref(false)
 const publishedCommit = ref('')
+const conflictFiles = ref<string[]>([])
+const conflictBase = ref('')
+const conflictUpstream = ref('')
+const conflictLog = ref('')
+const resolutionHint = ref('')
 const restartCountdown = ref(0)
 const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -771,6 +796,11 @@ async function refreshVersion(force = true) {
   updateSuccessMessage.value = ''
   published.value = false
   publishedCommit.value = ''
+  conflictFiles.value = []
+  conflictBase.value = ''
+  conflictUpstream.value = ''
+  conflictLog.value = ''
+  resolutionHint.value = ''
   needRestart.value = false
   stopUpdatePolling()
   resetRollbackState()
@@ -787,6 +817,11 @@ async function handleUpdate() {
   updateSuccessMessage.value = ''
   published.value = false
   publishedCommit.value = ''
+  conflictFiles.value = []
+  conflictBase.value = ''
+  conflictUpstream.value = ''
+  conflictLog.value = ''
+  resolutionHint.value = ''
 
   try {
     const job = await performUpdate()
@@ -825,9 +860,24 @@ function finishUpdateSuccess(
   appStore.clearVersionCache()
 }
 
-function finishUpdateFailure(message: string) {
+function finishUpdateFailure(
+  status: Pick<
+    UpdateJob,
+    | 'message'
+    | 'conflict_files'
+    | 'conflict_base'
+    | 'conflict_upstream'
+    | 'conflict_log'
+    | 'resolution_hint'
+  >
+) {
   stopUpdatePolling()
-  updateError.value = message || t('version.updateFailed')
+  updateError.value = status.message || t('version.updateFailed')
+  conflictFiles.value = status.conflict_files || []
+  conflictBase.value = status.conflict_base || ''
+  conflictUpstream.value = status.conflict_upstream || ''
+  conflictLog.value = status.conflict_log || ''
+  resolutionHint.value = status.resolution_hint || ''
   updating.value = false
 }
 
@@ -839,7 +889,7 @@ async function pollUpdateStatus(jobID: string) {
     if (status.status === 'success') {
       finishUpdateSuccess(status)
     } else if (status.status === 'failed') {
-      finishUpdateFailure(status.message)
+      finishUpdateFailure(status)
     }
   } catch {
     // Keep polling transient request failures until the 15-minute deadline.
@@ -856,7 +906,7 @@ function startUpdatePolling(jobID: string) {
     void pollUpdateStatus(jobID)
   }, 5000)
   updatePollDeadlineTimer.value = setTimeout(() => {
-    finishUpdateFailure(`${t('version.updateFailed')}: status polling timed out`)
+    finishUpdateFailure({ message: `${t('version.updateFailed')}: status polling timed out` })
   }, 15 * 60 * 1000)
 }
 

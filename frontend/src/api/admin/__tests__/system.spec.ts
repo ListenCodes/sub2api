@@ -29,4 +29,25 @@ describe('upstream preparation jobs', () => {
     expect(updateWasPublished(job)).toBe(true)
     expect(updateNeedsRestart(job)).toBe(false)
   })
+
+  it('carries actionable conflict metadata without treating the job as published', () => {
+    const job: UpdateJob = {
+      job_id: 'update-conflict',
+      status: 'failed',
+      message: 'upstream merge conflict',
+      need_restart: false,
+      conflict_files: ['backend/internal/server/routes/gateway.go', 'deploy/README.md'],
+      conflict_base: 'custom123',
+      conflict_upstream: 'upstream456',
+      conflict_log: '/app/data/sync-conflicts/update-conflict/metadata.json',
+      resolution_hint: 'Resolve conflicts and retry.'
+    }
+
+    expect(updateWasPublished(job)).toBe(false)
+    expect(job.conflict_files).toEqual([
+      'backend/internal/server/routes/gateway.go',
+      'deploy/README.md'
+    ])
+    expect(job.resolution_hint).toBe('Resolve conflicts and retry.')
+  })
 })

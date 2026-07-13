@@ -22,6 +22,13 @@ approved commit before attempting another upstream merge.
 restarts a container by itself. `sync-trigger.sh` is the container-mounted
 admin trigger and waits until the unified host flow has completed.
 
+When Git cannot safely merge upstream, the status includes `conflict_files`,
+`conflict_base`, `conflict_upstream`, `conflict_log`, and `resolution_hint`.
+The host stores a diagnostic snapshot under
+`/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/<job-id>/`;
+the admin panel shows the conflicted files and states that production was not
+changed. The script never resolves conflicts with `ours` or `theirs` silently.
+
 ## Production Publish
 
 `publish-custom.sh --commit <sha>` is the only normal VPS release entrypoint.

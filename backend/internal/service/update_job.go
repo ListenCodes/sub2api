@@ -37,6 +37,11 @@ type UpdateJob struct {
 	Message           string     `json:"message"`
 	IntegrationBranch string     `json:"integration_branch,omitempty"`
 	BaseCommit        string     `json:"base_commit,omitempty"`
+	ConflictFiles     []string   `json:"conflict_files,omitempty"`
+	ConflictBase      string     `json:"conflict_base,omitempty"`
+	ConflictUpstream  string     `json:"conflict_upstream,omitempty"`
+	ConflictLog       string     `json:"conflict_log,omitempty"`
+	ResolutionHint    string     `json:"resolution_hint,omitempty"`
 	NeedRestart       bool       `json:"need_restart"`
 	Published         bool       `json:"published"`
 	PublishedCommit   string     `json:"published_commit,omitempty"`

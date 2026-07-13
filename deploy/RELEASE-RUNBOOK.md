@@ -70,6 +70,12 @@ behavior and will not deploy the result:
 * * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
 ```
 
+If an upstream merge conflicts, the update status reports the exact files,
+both commit IDs, and the diagnostic artifact path. The admin panel must show
+that production was not changed. Resolve the conflict in a local `custom`
+worktree, run the normal tests, push `origin/custom`, and retry the update;
+do not use `git reset --hard` or a forced `ours`/`theirs` merge.
+
 ## VPS Fallback Release
 
 Use this path when the local development machine is unavailable or an urgent
