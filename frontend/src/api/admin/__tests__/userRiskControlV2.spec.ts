@@ -72,7 +72,7 @@ describe('userRiskControlV2API', () => {
     const rule = { code: 'login_failure', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high' as const, action: 'review' as const, revision: 3 }
 
     await userRiskControlV2API.updateRule(1, rule)
-    await expect(userRiskControlV2API.testRule(rule, { count: 5, event_type: 'login_failure' })).resolves.toEqual({ matched: true, score: 80 })
+    await expect(userRiskControlV2API.testRule(rule, { count: 5, event_type: 'login_failure' })).resolves.toMatchObject({ matched: true, score: 80, riskLevel: 'high', action: 'review' })
 
     expect(put).toHaveBeenCalledWith('/admin/user-risk-control/rules/login_failure', expect.objectContaining({ window_seconds: 300, threshold: 5, revision: 3 }))
     expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules/test', expect.objectContaining({ count: 5, event_type: 'login_failure' }))
@@ -128,5 +128,76 @@ describe('userRiskControlV2API', () => {
       .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
 
     await expect(userRiskControlV2API.getUserDetail(9)).rejects.toThrow('main service unavailable')
+  })
+
+  it('sorts risk-aware users after loading the complete candidate set', async () => {
+    const get = vi.spyOn(mainAdminClient, 'get')
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            { id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' },
+            { id: 8, username: 'Bob', email: 'bob@example.com', status: 'active' },
+          ],
+          total: 2,
+        },
+      } as never)
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            { id: 7, risk_type: 'login_failure', risk_level: 'high', score: 40, event_count: 2 },
+            { id: 8, risk_type: 'api_error', risk_level: 'medium', score: 90, event_count: 4 },
+          ],
+          total: 2,
+        },
+      } as never)
+
+    const result = await userRiskControlV2API.listUsers({ sortBy: 'risk_score', sortOrder: 'desc', page: 1, pageSize: 20 })
+
+    expect(result.items.map((user) => user.id)).toEqual([8, 7])
+    expect(get).toHaveBeenCalledWith('/admin/user-risk-control/users', expect.objectContaining({
+      params: expect.objectContaining({ sort_by: 'risk_score', sort_order: 'desc' }),
+    }))
+  })
+
+  it('creates a rule through the authenticated admin proxy', async () => {
+    const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { id: 12, revision: 1, code: 'login_failure_burst' } } as never)
+
+    await expect(userRiskControlV2API.createRule({
+      code: 'login_failure_burst',
+      name: '登录失败爆发',
+      description: '短时间内连续登录失败',
+      eventTypes: ['login_failure'],
+      enabled: true,
+      windowSeconds: 300,
+      threshold: 5,
+      score: 80,
+      riskLevel: 'high',
+      action: 'review',
+      revision: 1,
+    })).resolves.toMatchObject({ id: 12, revision: 1 })
+
+    expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules', expect.objectContaining({
+      code: 'login_failure_burst',
+      event_types: ['login_failure'],
+      window_seconds: 300,
+    }))
+  })
+
+  it('keeps one result per target for a partial batch status action', async () => {
+    const post = vi.spyOn(mainAdminClient, 'post').mockImplementation(async (url, payload) => {
+      const id = Number(String(url).match(/users\/(\d+)/)?.[1])
+      if (id === 8) throw Object.assign(new Error('目标账号已被其他管理员处理'), { response: { data: { error: '目标账号已被其他管理员处理' } } })
+      return { data: { user: { id, status: 'disabled' }, batch_id: (payload as { batch_id: string }).batch_id } } as never
+    })
+
+    const results = await userRiskControlV2API.batchSetUserStatus([7, 8], 'disabled', '批量处置：重复登录失败')
+
+    expect(results).toEqual([
+      expect.objectContaining({ id: 7, status: 'success' }),
+      expect.objectContaining({ id: 8, status: 'failed', reason: '目标账号已被其他管理员处理' }),
+    ])
+    expect(post).toHaveBeenCalledWith('/admin/users/7/risk-status', expect.objectContaining({
+      status: 'disabled', reason: '批量处置：重复登录失败', batch_id: expect.any(String),
+    }))
   })
 })
