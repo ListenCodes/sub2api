@@ -71,3 +71,26 @@
 - [x] Run local frontend, backend-focused, risk-control, shell, and Compose checks.
 - [x] Push the approved `custom` commit and invoke the publish script with its exact SHA.
 - [x] Verify source equality, container health, `risk-control-v2`, database/Redis, public `/health`, risk counts, backup, rollback tags, and sync status.
+
+### Task 5: Report unresolved upstream conflicts
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-07-13-conflict-reporting-design.md`
+- Modify: `deploy/ops/sync-upstream.sh`
+- Modify: `deploy/ops/sync-trigger.sh`
+- Modify: `deploy/ops/tests/test-script-contract.ps1`
+- Modify: `backend/internal/service/update_job.go`
+- Modify: `backend/internal/handler/admin/system_handler.go`
+- Modify: `backend/internal/service/update_job_service_test.go`
+- Modify: `frontend/src/api/admin/system.ts`
+- Modify: `frontend/src/components/common/VersionBadge.vue`
+- Modify: `frontend/src/i18n/locales/zh/misc.ts`
+- Modify: `frontend/src/i18n/locales/en/misc.ts`
+- Test: `frontend/src/components/common/__tests__/VersionBadge.spec.ts`
+
+- [ ] Add a failing shell assertion for conflict metadata and saved artifacts.
+- [ ] Add failing backend and frontend tests for conflict status fields.
+- [ ] Capture conflict files, commits, and a diagnostic snapshot before aborting.
+- [ ] Expose conflict metadata through the admin update API.
+- [ ] Render actionable conflict details in the failure panel.
+- [ ] Run focused tests, full frontend checks, and script syntax checks.
