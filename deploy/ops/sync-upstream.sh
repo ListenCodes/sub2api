@@ -152,7 +152,7 @@ if ! git -C "$WORKTREE" merge --no-ff --no-edit "$UPSTREAM_REMOTE/main" >> "$LOG
     --arg resolution_hint "$RESOLUTION_HINT" \
     --argjson files "$CONFLICT_FILES_JSON" \
     '{job_id:$job_id,integration_branch:$integration_branch,base_commit:$base_commit,upstream_commit:$upstream_commit,conflict_files:$files,conflict_log:$log,artifact_path:$artifact_path,resolution_hint:$resolution_hint}' \
-    > "$CONFLICT_LOG"
+    > "$conflict_snapshot_dir/metadata.json"
   git -C "$WORKTREE" merge --abort >> "$LOG" 2>&1 || true
   if [[ -n "$conflict_files" ]]; then
     result "FAILED: upstream merge conflict; files: $conflict_files" 1
