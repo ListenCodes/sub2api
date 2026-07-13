@@ -65,9 +65,9 @@
 - Remote: `/opt/sub2api-custom/auto-update.sh`
 - Remote: crontab
 
-- [ ] Back up the current production state before replacing scripts or cron.
-- [ ] Install the unified wrapper root-owned and executable.
-- [ ] Change both the daily cron and trigger-processing cron to call the wrapper.
-- [ ] Run local frontend, backend-focused, risk-control, shell, and Compose checks.
-- [ ] Push the approved `custom` commit and invoke the publish script with its exact SHA.
-- [ ] Verify source equality, container health, `risk-control-v2`, database/Redis, public `/health`, risk counts, backup, rollback tags, and sync status.
+- [x] Back up the current production state before replacing scripts or cron.
+- [x] Install the unified wrapper root-owned and executable.
+- [x] Change both the daily cron and trigger-processing cron to call the wrapper.
+- [x] Run local frontend, backend-focused, risk-control, shell, and Compose checks.
+- [x] Push the approved `custom` commit and invoke the publish script with its exact SHA.
+- [x] Verify source equality, container health, `risk-control-v2`, database/Redis, public `/health`, risk counts, backup, rollback tags, and sync status.
