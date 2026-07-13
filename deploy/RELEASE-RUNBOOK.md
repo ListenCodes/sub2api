@@ -64,6 +64,11 @@ The independent service is intentionally outside the main Git worktree:
 /root/sub2api-risk-control/.env
 ```
 
+The main application must use the dedicated network alias
+`http://risk-control-v2:8090`. The legacy risk service may still share the
+Docker network under the `risk-control` name during migration, so do not use
+the ambiguous legacy alias for the v2 integration.
+
 The `.env` file is production-only and must never be committed. Update the
 service image and Compose file together, then validate:
 
