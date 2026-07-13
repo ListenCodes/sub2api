@@ -4,7 +4,7 @@
 # =============================================================================
 # This script prepares deployment files for Sub2API:
 #   - Downloads docker-compose.local.yml and .env.example
-#   - Generates secure secrets (JWT_SECRET, TOTP_ENCRYPTION_KEY, POSTGRES_PASSWORD)
+#   - Generates secure secrets (including the independent risk-control service)
 #   - Creates necessary data directories
 #
 # After running this script, you can start services with:
@@ -104,6 +104,8 @@ main() {
     JWT_SECRET=$(generate_secret)
     TOTP_ENCRYPTION_KEY=$(generate_secret)
     POSTGRES_PASSWORD=$(generate_secret)
+    RISK_CONTROL_INTERNAL_SECRET=$(generate_secret)
+    RISK_CONTROL_POSTGRES_PASSWORD=$(generate_secret)
 
     # Create .env from .env.example
     cp .env.example .env
@@ -114,16 +116,20 @@ main() {
         sed -i "s/^JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" .env
         sed -i "s/^TOTP_ENCRYPTION_KEY=.*/TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}/" .env
         sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${POSTGRES_PASSWORD}/" .env
+        sed -i "s/^RISK_CONTROL_INTERNAL_SECRET=.*/RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET}/" .env
+        sed -i "s/^RISK_CONTROL_POSTGRES_PASSWORD=.*/RISK_CONTROL_POSTGRES_PASSWORD=${RISK_CONTROL_POSTGRES_PASSWORD}/" .env
     else
         # BSD sed (macOS)
         sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" .env
         sed -i '' "s/^TOTP_ENCRYPTION_KEY=.*/TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}/" .env
         sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${POSTGRES_PASSWORD}/" .env
+        sed -i '' "s/^RISK_CONTROL_INTERNAL_SECRET=.*/RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET}/" .env
+        sed -i '' "s/^RISK_CONTROL_POSTGRES_PASSWORD=.*/RISK_CONTROL_POSTGRES_PASSWORD=${RISK_CONTROL_POSTGRES_PASSWORD}/" .env
     fi
 
     # Create data directories
     print_info "Creating data directories..."
-    mkdir -p data postgres_data redis_data
+    mkdir -p data postgres_data redis_data risk_control_postgres_data
     print_success "Created data directories"
 
     # Set secure permissions for .env file (readable/writable only by owner)
@@ -139,6 +145,8 @@ main() {
     echo "  POSTGRES_PASSWORD:     ${POSTGRES_PASSWORD}"
     echo "  JWT_SECRET:            ${JWT_SECRET}"
     echo "  TOTP_ENCRYPTION_KEY:   ${TOTP_ENCRYPTION_KEY}"
+    echo "  RISK_CONTROL_INTERNAL_SECRET: ${RISK_CONTROL_INTERNAL_SECRET}"
+    echo "  RISK_CONTROL_POSTGRES_PASSWORD: ${RISK_CONTROL_POSTGRES_PASSWORD}"
     echo ""
     print_warning "These credentials have been saved to .env file."
     print_warning "Please keep them secure and do not share publicly!"
@@ -150,6 +158,7 @@ main() {
     echo "  data/                     - Application data (will be created on first run)"
     echo "  postgres_data/            - PostgreSQL data"
     echo "  redis_data/               - Redis data"
+    echo "  risk_control_postgres_data/ - Risk-control PostgreSQL data"
     echo ""
     echo "Next steps:"
     echo "  1. (Optional) Edit .env to customize configuration"

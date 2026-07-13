@@ -1,0 +1,137 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type HTTPServer struct {
+	service *RiskService
+	repo    RiskRepository
+	cfg     Config
+	nonces  *nonceStore
+}
+
+func NewHTTPServer(cfg Config, repo RiskRepository) *HTTPServer {
+	if cfg.MaxBodyBytes <= 0 {
+		cfg.MaxBodyBytes = 256 * 1024
+	}
+	cfg.Mode = normalizeMode(cfg.Mode)
+	return &HTTPServer{service: NewRiskService(cfg, repo), repo: repo, cfg: cfg, nonces: newNonceStore()}
+}
+
+func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.URL.Path == "/healthz" {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "risk-control"})
+		return
+	}
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, s.cfg.MaxBodyBytes+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if int64(len(body)) > s.cfg.MaxBodyBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, errors.New("request body too large"))
+		return
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	if err := verifyInternalSignature(r, body, s.cfg.InternalSecret, s.nonces, time.Now().UTC()); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/") {
+		if _, err := actorID(r); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+	}
+	s.dispatch(w, r, body)
+}
+
+func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byte) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodPost && path == "/api/v1/internal/events/evaluate":
+		s.handleEvaluateEvent(w, r, body, true)
+	case r.Method == http.MethodPost && path == "/api/v1/internal/events":
+		s.handleEvaluateEvent(w, r, body, false)
+	case r.Method == http.MethodPost && path == "/api/v1/internal/audit":
+		s.handleAuditIngest(w, r, body)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/overview":
+		s.handleOverview(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/users":
+		s.handleUsers(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/users/"):
+		s.handleUserByPath(w, r, path)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/rules":
+		s.handleRules(w, r)
+	case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/admin/rules/"):
+		s.handleRuleUpdate(w, r, strings.TrimPrefix(path, "/api/v1/admin/rules/"))
+	case r.Method == http.MethodPost && path == "/api/v1/admin/rules/test":
+		s.handleRuleTest(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/audit":
+		s.handleAudit(w, r)
+	default:
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	}
+}
+
+func (s *HTTPServer) handleEvaluateEvent(w http.ResponseWriter, r *http.Request, body []byte, includeDecision bool) {
+	var input EventReport
+	if err := json.Unmarshal(body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	decision, err := s.service.EvaluateEvent(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if includeDecision {
+		writeJSON(w, http.StatusOK, decision)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "event_id": decision.EventID, "decision": decision.Action})
+}
+
+func (s *HTTPServer) handleAuditIngest(w http.ResponseWriter, r *http.Request, body []byte) {
+	var input AuditReport
+	if err := json.Unmarshal(body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(input.Action) == "" || strings.TrimSpace(input.TargetType) == "" || strings.TrimSpace(input.TargetID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("invalid audit record"))
+		return
+	}
+	if err := s.service.RecordAudit(r.Context(), input); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+}
+
+func (s *HTTPServer) handleUserByPath(w http.ResponseWriter, r *http.Request, path string) {
+	rawID := strings.TrimPrefix(path, "/api/v1/admin/users/")
+	userID, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || userID <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("invalid user id"))
+		return
+	}
+	s.handleUser(w, r, userID)
+}

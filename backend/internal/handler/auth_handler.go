@@ -28,10 +28,15 @@ type AuthHandler struct {
 	totpService          *service.TotpService
 	userAttributeService *service.UserAttributeService
 	riskControlClient    *service.RiskControlClient
+	riskBanHandler       RiskBanHandler
 
 	dingTalkClientInstance *DingTalkClient
 	dingTalkClientMu       sync.Mutex
 }
+
+// SetRiskBanHandler wires the main-site account enforcement callback into
+// authentication risk handling. The risk service never writes main user rows.
+func (h *AuthHandler) SetRiskBanHandler(handler RiskBanHandler) { h.riskBanHandler = handler }
 
 // NewAuthHandler creates a new AuthHandler
 func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userService *service.UserService, settingService *service.SettingService, promoService *service.PromoService, redeemService *service.RedeemService, totpService *service.TotpService, userAttributeService *service.UserAttributeService) *AuthHandler {
@@ -166,6 +171,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if err := h.preflightRegistrationRisk(c, req.Email, "email"); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// Turnstile 验证（邮箱验证码注册场景避免重复校验一次性 token）
 	if err := h.authService.VerifyTurnstileForRegister(c.Request.Context(), req.TurnstileToken, ip.GetTrustedClientIP(c), req.VerifyCode); err != nil {
@@ -199,7 +208,6 @@ func (h *AuthHandler) SendVerifyCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-
 	// Turnstile 验证
 	if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, ip.GetClientIP(c)); err != nil {
 		response.ErrorFrom(c, err)
@@ -226,6 +234,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if err := h.preflightLoginRisk(c, req); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// Turnstile 验证
 	if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, ip.GetClientIP(c)); err != nil {
@@ -235,6 +247,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	token, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
 	if err != nil {
+		h.reportLoginRisk(c, req, user, err)
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -263,6 +276,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportLoginRisk(c, req, user, nil)
 
 	h.respondWithTokenPair(c, user)
 }

@@ -27,9 +27,69 @@ type UserWithConcurrency struct {
 // UserHandler handles admin user management
 type UserHandler struct {
 	adminService          service.AdminService
+	authService           *service.AuthService
+	riskControlClient     *service.RiskControlClient
 	concurrencyService    *service.ConcurrencyService
 	userPlatformQuotaRepo service.UserPlatformQuotaRepository // T13 admin quota view
 	billingCache          service.BillingCache                // T17/T18 缓存失效（PUT/POST 路径）
+}
+
+// SetAuthService wires token revocation into the dedicated risk status action
+// without changing the existing constructor used by the broader admin surface.
+func (h *UserHandler) SetAuthService(authService *service.AuthService) { h.authService = authService }
+func (h *UserHandler) SetRiskControlClient(client *service.RiskControlClient) {
+	h.riskControlClient = client
+}
+
+type RiskStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=active disabled"`
+	Reason string `json:"reason" binding:"required,min=2,max=500"`
+}
+
+// SetRiskStatus changes the authoritative account status. Disabling also
+// invalidates stateless access tokens and refresh sessions immediately.
+func (h *UserHandler) SetRiskStatus(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || userID <= 0 {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+	var req RiskStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	before, err := h.adminService.GetUser(c.Request.Context(), userID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	updated, err := h.adminService.UpdateUser(c.Request.Context(), userID, &service.UpdateUserInput{Status: req.Status, ActorAdminID: getAdminIDFromContext(c)})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if shouldRevokeTokensForStatusChange(before.Status, req.Status) && h.authService != nil {
+		if err := h.authService.RevokeAllUserTokens(c.Request.Context(), userID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	if h.riskControlClient != nil {
+		actorID := getAdminIDFromContext(c)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			if err := h.riskControlClient.ReportAudit(ctx, service.RiskAuditReport{ActorID: actorID, Action: map[bool]string{true: "ban", false: "unban"}[req.Status == service.StatusDisabled], TargetType: "user", TargetID: strconv.FormatInt(userID, 10), Result: "success", Reason: req.Reason, Metadata: map[string]any{"before_status": before.Status, "after_status": updated.Status}}); err != nil {
+				slog.Warn("risk control audit report failed", "error", err, "user_id", userID)
+			}
+		}()
+	}
+	response.Success(c, gin.H{"user": dto.UserFromServiceAdmin(updated), "before_status": before.Status, "after_status": updated.Status, "reason": req.Reason})
+}
+
+func shouldRevokeTokensForStatusChange(beforeStatus, requestedStatus string) bool {
+	return beforeStatus != service.StatusDisabled && requestedStatus == service.StatusDisabled
 }
 
 // NewUserHandler creates a new admin user handler

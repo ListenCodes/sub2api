@@ -4,40 +4,188 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 func (h *AuthHandler) reportRegistrationRisk(c *gin.Context, req RegisterRequest, user *service.User) {
-	if h == nil || h.riskControlClient == nil || c == nil || user == nil { return }
+	if h == nil || h.riskControlClient == nil || c == nil || user == nil {
+		return
+	}
+	h.reportRegistrationEvent(c, strings.TrimSpace(req.Email), "email", user, "/api/v1/auth/register")
+}
+
+func (h *AuthHandler) reportOAuthRegistrationRisk(c *gin.Context, user *service.User, provider string, email string) {
+	if user == nil {
+		return
+	}
+	h.reportRegistrationEvent(c, email, provider, user, "/api/v1/auth/oauth/"+strings.TrimSpace(provider)+"/complete-registration")
+}
+
+func (h *AuthHandler) reportRegistrationEvent(c *gin.Context, email, source string, user *service.User, endpoint string) {
+	if h == nil || h.riskControlClient == nil || c == nil || user == nil {
+		return
+	}
 	deviceID := ensureRiskDeviceCookie(c)
-	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID")); if requestID == "" { requestID = randomRiskID() }
-	input := service.RiskRegistrationReport{RequestID: requestID, SubjectID: formatRiskSubjectID(user.ID), Email: req.Email, IP: ip.GetTrustedClientIP(c), DeviceID: deviceID}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+	if requestID == "" {
+		requestID = randomRiskID()
+	}
+	clientIP := ip.GetTrustedClientIP(c)
+	emailHash := service.HashRiskValue(email)
+	input := service.RiskEventReport{EventKey: requestID + ":registration_success:" + strings.TrimSpace(source), EventType: "registration_success", RiskType: "registration_success", UserID: user.ID, SubjectID: emailHash, UsernameSnapshot: user.Username, AccountStatusSnapshot: user.Status, EmailHash: emailHash, IPHash: service.HashRiskValue(clientIP), DeviceHash: service.HashRiskValue(deviceID), Endpoint: endpoint, HTTPStatus: http.StatusOK, OccurredAt: time.Now().UTC(), Evidence: map[string]any{"source": strings.TrimSpace(source)}}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond); defer cancel()
-		if err := h.riskControlClient.ReportRegistration(ctx, input); err != nil { slog.Warn("risk control shadow report failed", "error", err, "user_id", user.ID) }
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		if err := h.riskControlClient.ReportEvent(ctx, input); err != nil {
+			slog.Warn("risk control shadow report failed", "error", err, "user_id", user.ID)
+		}
+	}()
+}
+
+func (h *AuthHandler) preflightRegistrationRisk(c *gin.Context, email, source string) error {
+	if h == nil || h.riskControlClient == nil || c == nil {
+		return nil
+	}
+	deviceID := ensureRiskDeviceCookie(c)
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+	if requestID == "" {
+		requestID = randomRiskID()
+	}
+	input := service.RiskEventReport{EventKey: requestID + ":registration_attempt:" + strings.TrimSpace(source), EventType: "registration_attempt", RiskType: "registration_attempt", SubjectID: service.HashRiskValue(email), EmailHash: service.HashRiskValue(email), IPHash: service.HashRiskValue(ip.GetTrustedClientIP(c)), DeviceHash: service.HashRiskValue(deviceID), Endpoint: "/api/v1/auth/register", HTTPStatus: http.StatusOK, OccurredAt: time.Now().UTC(), Evidence: map[string]any{"source": strings.TrimSpace(source)}}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+	defer cancel()
+	decision, err := h.riskControlClient.EvaluateEvent(ctx, input)
+	if err != nil {
+		return riskControlFailureError(err, riskControlFailClosed())
+	}
+	return riskDecisionError(decision, "registration")
+}
+
+func (h *AuthHandler) preflightLoginRisk(c *gin.Context, req LoginRequest) error {
+	if h == nil || h.riskControlClient == nil || c == nil {
+		return nil
+	}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+	if requestID == "" {
+		requestID = randomRiskID()
+	}
+	input := service.RiskEventReport{EventKey: requestID + ":login_attempt", EventType: "login_attempt", RiskType: "login_attempt", SubjectID: service.HashRiskValue(req.Email), EmailHash: service.HashRiskValue(req.Email), IPHash: service.HashRiskValue(ip.GetTrustedClientIP(c)), Endpoint: "/api/v1/auth/login", HTTPStatus: http.StatusOK, OccurredAt: time.Now().UTC()}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+	defer cancel()
+	decision, err := h.riskControlClient.EvaluateEvent(ctx, input)
+	if err != nil {
+		return riskControlFailureError(err, riskControlFailClosed())
+	}
+	return riskDecisionError(decision, "login")
+}
+
+func riskDecisionError(decision *service.RiskDecision, operation string) error {
+	if decision == nil || (decision.Action != "reject_candidate" && decision.Action != "ban") {
+		return nil
+	}
+	if operation == "login" {
+		return infraerrors.Unauthorized("INVALID_CREDENTIALS", "Invalid email or password")
+	}
+	return infraerrors.Forbidden("RISK_CONTROL_BLOCKED", "This request was rejected by the risk control policy")
+}
+
+func riskControlFailureError(err error, failClosed bool) error {
+	if !failClosed {
+		return nil
+	}
+	return infraerrors.ServiceUnavailable("RISK_CONTROL_UNAVAILABLE", "Risk control service is temporarily unavailable").WithCause(err)
+}
+
+func riskControlFailClosed() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("RISK_CONTROL_DECISION_FAIL_MODE")), "closed")
+}
+
+func (h *AuthHandler) reportLoginRisk(c *gin.Context, req LoginRequest, user *service.User, err error) {
+	if h == nil || h.riskControlClient == nil || c == nil {
+		return
+	}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+	if requestID == "" {
+		requestID = randomRiskID()
+	}
+	eventType := "login_success"
+	status := http.StatusOK
+	errorCode := ""
+	reason := ""
+	userID := int64(0)
+	username := ""
+	accountStatus := ""
+	if err != nil {
+		eventType = "login_failure"
+		status = http.StatusUnauthorized
+		errorCode = infraerrors.Reason(err)
+		reason = infraerrors.Message(err)
+	}
+	if user != nil {
+		userID, username, accountStatus = user.ID, user.Username, user.Status
+	}
+	input := service.RiskEventReport{
+		EventKey: requestID + ":" + eventType, EventType: eventType, RiskType: eventType, UserID: userID,
+		SubjectID:        service.HashRiskValue(req.Email),
+		UsernameSnapshot: username, AccountStatusSnapshot: accountStatus, EmailHash: service.HashRiskValue(req.Email),
+		ErrorCode: errorCode, Reason: reason, Endpoint: "/api/v1/auth/login", HTTPStatus: status, OccurredAt: time.Now().UTC(),
+	}
+	if err != nil && user != nil && user.ID > 0 && h.riskBanHandler != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 700*time.Millisecond)
+		defer cancel()
+		decision, evaluateErr := h.riskControlClient.EvaluateEvent(ctx, input)
+		if evaluateErr != nil {
+			slog.Warn("risk control login failure evaluation failed", "error", evaluateErr, "user_id", user.ID)
+			return
+		}
+		if shouldApplyRiskBan(decision) {
+			if banErr := h.riskBanHandler(ctx, user.ID, decision.Reason); banErr != nil {
+				slog.Warn("risk control login failure auto-ban failed", "error", banErr, "user_id", user.ID)
+			}
+		}
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		if reportErr := h.riskControlClient.ReportEvent(ctx, input); reportErr != nil {
+			slog.Warn("risk control login report failed", "error", reportErr, "user_id", userID)
+		}
 	}()
 }
 
 func ensureRiskDeviceCookie(c *gin.Context) string {
-	if cookie, err := c.Request.Cookie("risk_device"); err == nil && strings.TrimSpace(cookie.Value) != "" { return cookie.Value }
+	if cookie, err := c.Request.Cookie("risk_device"); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		return cookie.Value
+	}
 	value := randomRiskID()
 	http.SetCookie(c.Writer, &http.Cookie{Name: "risk_device", Value: value, Path: "/", HttpOnly: true, Secure: requestIsHTTPS(c), SameSite: http.SameSiteLaxMode, MaxAge: 180 * 24 * 60 * 60})
 	return value
 }
 
 func requestIsHTTPS(c *gin.Context) bool {
-	if c == nil || c.Request == nil { return false }
-	if c.Request.TLS != nil { return true }
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if c.Request.TLS != nil {
+		return true
+	}
 	return strings.EqualFold(strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0]), "https")
 }
 
-func randomRiskID() string { var buf [18]byte; if _, err := rand.Read(buf[:]); err != nil { return "unavailable" }; return hex.EncodeToString(buf[:]) }
-func formatRiskSubjectID(id int64) string { return fmt.Sprintf("%d", id) }
+func randomRiskID() string {
+	var buf [18]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "unavailable"
+	}
+	return hex.EncodeToString(buf[:])
+}
