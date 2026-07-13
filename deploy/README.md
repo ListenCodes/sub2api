@@ -175,6 +175,13 @@ step still uses the exact `origin/custom` commit, creates a production backup,
 and runs the normal health checks. A failed publish remains stopped for manual
 inspection and is not silently retried.
 
+When a merge conflict occurs, the update status and admin panel list the exact
+conflicted files, both commit IDs, the resolution hint, and the diagnostic
+artifact path. The snapshot is stored under
+`/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/<job-id>/`;
+production remains unchanged until the conflict is resolved and a new update
+is approved.
+
 ### Database Migration Notes (PostgreSQL)
 
 - Migrations are applied in lexicographic order (e.g. `001_...sql`, `002_...sql`).
