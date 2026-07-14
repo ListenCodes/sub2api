@@ -172,11 +172,16 @@ func RiskEventMiddleware(client *service.RiskControlClient, banHandlers ...RiskB
 		if requestID == "" {
 			requestID = randomRiskEventID()
 		}
+		fallbackDevice := ""
+		if apiKey != nil && apiKey.ID > 0 {
+			fallbackDevice = "api-key:" + strconv.FormatInt(apiKey.ID, 10)
+		}
+		ipHash, deviceHash := riskAssociationHashes(c, fallbackDevice)
 		input := service.RiskEventReport{
 			EventKey:  requestID + ":risk:" + endpoint,
 			EventType: eventType, RiskType: eventType, UserID: subject.UserID,
 			UsernameSnapshot: username, AccountStatusSnapshot: accountStatus,
-			EmailHash: emailHash, ErrorCode: errorCodeValue, Reason: errorMessageValue,
+			EmailHash: emailHash, IPHash: ipHash, DeviceHash: deviceHash, ErrorCode: errorCodeValue, Reason: errorMessageValue,
 			Endpoint: endpoint, Model: strings.TrimSpace(modelName), HTTPStatus: status,
 			Evidence: evidence, OccurredAt: time.Now().UTC(),
 		}

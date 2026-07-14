@@ -32,4 +32,8 @@ describe('user risk-control labels', () => {
       windowSeconds: 300,
     })).toBe('命中规则：登录失败爆发（5 分钟内失败 5 次）')
   })
+
+  it('translates legacy rule-hit reasons into direct administrator language', () => {
+    expect(formatRiskReason('规则 api_request_observation 命中')).toBe('API 请求观察：请求达到观察记录条件，仅用于行为观察，不代表账号异常。')
+  })
 })

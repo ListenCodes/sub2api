@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import UserRiskControlUsersView from '@/views/admin/UserRiskControlUsersView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
+import Pagination from '@/components/common/Pagination.vue'
 
 vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
@@ -19,7 +20,7 @@ vi.mock('vue-i18n', async (importOriginal) => ({
 }))
 
 describe('UserRiskControlUsersView', () => {
-  it('renders real account risk rows and updates results after filtering', async () => {
+  it('renders real account risk rows and updates results automatically after filtering', async () => {
     vi.mocked(userRiskControlV2API.listUsers)
       .mockResolvedValueOnce({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', risk_type: 'login_failure', risk_level: 'high', risk_score: 80, risk_reason: '命中规则：登录失败爆发（5 分钟内失败 5 次）', event_count: 5, ip_count: 2, device_count: 1, last_event_at: '2026-07-12T12:00:00Z', pending: true }], total: 1, page: 1, page_size: 20 })
       .mockResolvedValueOnce({ items: [], total: 0, page: 1, page_size: 20 })
@@ -32,12 +33,61 @@ describe('UserRiskControlUsersView', () => {
     expect(wrapper.text()).toContain('高风险')
     expect(wrapper.text()).toContain('命中规则：登录失败爆发')
 
-    await wrapper.get('[data-testid="risk-type-filter"]').setValue('login_failure')
-    await wrapper.get('[data-testid="apply-filters"]').trigger('click')
+    const riskTypeFilter = wrapper.getComponent('[data-testid="risk-type-filter"]')
+    riskTypeFilter.vm.$emit('update:modelValue', 'login_failure')
+    riskTypeFilter.vm.$emit('change', 'login_failure')
     await flushPromises()
 
     expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ riskType: 'login_failure' }))
     expect(wrapper.text()).toContain('admin.userRiskControl.empty')
+    expect(wrapper.find('[data-testid="apply-filters"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('common.apply')
+  })
+
+  it('prioritizes the account identifier and fills the available table width', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1, page: 1, page_size: 20 })
+
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="account-primary-7"]').text()).toBe('alice@example.com')
+    expect(wrapper.get('[data-testid="account-secondary-7"]').text()).toBe('Alice')
+    expect(wrapper.get('[data-testid="risk-users-table"]').classes()).toEqual(expect.arrayContaining(['w-full', 'table-fixed', 'min-w-[1280px]']))
+  })
+
+  it('resets to the first page when the page size changes', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 80, page: 1, page_size: 20 })
+
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    wrapper.getComponent(Pagination).vm.$emit('update:pageSize', 50)
+    await flushPromises()
+
+    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, pageSize: 50 }))
+  })
+
+  it('keeps the latest filter result when an older request finishes later', async () => {
+    let resolveInitial!: (value: Awaited<ReturnType<typeof userRiskControlV2API.listUsers>>) => void
+    let resolveLatest!: (value: Awaited<ReturnType<typeof userRiskControlV2API.listUsers>>) => void
+    const initialRequest = new Promise<Awaited<ReturnType<typeof userRiskControlV2API.listUsers>>>((resolve) => { resolveInitial = resolve })
+    const latestRequest = new Promise<Awaited<ReturnType<typeof userRiskControlV2API.listUsers>>>((resolve) => { resolveLatest = resolve })
+    vi.mocked(userRiskControlV2API.listUsers)
+      .mockReturnValueOnce(initialRequest)
+      .mockReturnValueOnce(latestRequest)
+
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    wrapper.getComponent('[data-testid="risk-type-filter"]').vm.$emit('update:modelValue', 'login_failure')
+
+    resolveLatest({ items: [{ id: 8, username: 'Bob', email: 'bob@example.com', status: 'active', risk_type: 'login_failure' }], total: 1, page: 1, page_size: 20 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('bob@example.com')
+
+    resolveInitial({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', risk_type: 'api_request' }], total: 1, page: 1, page_size: 20 })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('bob@example.com')
+    expect(wrapper.text()).not.toContain('alice@example.com')
   })
 
   it('opens detail drawer and requires confirmation before banning', async () => {

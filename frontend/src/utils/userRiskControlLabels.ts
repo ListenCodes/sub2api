@@ -54,6 +54,16 @@ const processingStatuses: Record<string, string> = {
   unbanned: '已解封',
 }
 
+const legacyRuleReasons: Record<string, string> = {
+  registration_abuse: '注册滥用：短时间内出现大量注册尝试，需要核查来源。',
+  login_failure_burst: '登录失败爆发：短时间内连续登录失败，可能存在密码猜测或账号异常。',
+  api_error_burst: 'API 错误爆发：短时间内接口错误明显增多，需要检查调用参数或上游状态。',
+  content_risk: '内容风险：请求内容命中安全策略，需要人工核查。',
+  quota_abuse: '配额滥用：配额超限行为达到规则阈值，需要检查调用量。',
+  upstream_error_burst: '上游错误爆发：短时间内上游服务错误明显增多。',
+  api_request_observation: 'API 请求观察：请求达到观察记录条件，仅用于行为观察，不代表账号异常。',
+}
+
 export const riskTypeOptions: RiskLabelOption[] = Object.entries(riskTypes).map(([value, label]) => ({ value, label }))
 export const riskLevelOptions: RiskLabelOption[] = Object.entries(riskLevels).filter(([value]) => value !== 'none').map(([value, label]) => ({ value, label }))
 export const riskActionOptions: RiskLabelOption[] = Object.entries(riskActions).map(([value, label]) => ({ value, label }))
@@ -115,7 +125,11 @@ function reasonVerb(eventType: string): string {
 
 export function formatRiskReason(rawReason: unknown, evidence: RiskReasonEvidence = {}): string {
   const reason = String(rawReason ?? '').trim()
-  if (reason) return reason
+  if (reason) {
+    const legacyRule = reason.match(/^规则\s+([a-z0-9_-]+)\s+命中$/i)
+    if (legacyRule) return legacyRuleReasons[legacyRule[1]] || `命中规则：${legacyRule[1]}`
+    return reason
+  }
   const rule = String(evidence.ruleName || evidence.ruleCode || '').trim()
   const count = Number(evidence.count || evidence.threshold || 0)
   const windowSeconds = Number(evidence.windowSeconds || 0)

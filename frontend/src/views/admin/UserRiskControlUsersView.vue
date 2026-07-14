@@ -25,33 +25,33 @@
         </ul>
       </div>
 
-      <section class="card p-4">
-        <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          <input v-model="draft.search" class="form-input lg:col-span-2" :placeholder="t('admin.userRiskControl.searchPlaceholder')" @keyup.enter="applyFilters" />
-          <select v-model="draft.status" class="form-input" data-testid="account-status-filter">
-            <option value="">{{ t('admin.userRiskControl.allStatuses') }}</option>
-            <option v-for="option in accountStatusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-          <select v-model="draft.riskType" class="form-input" data-testid="risk-type-filter">
-            <option value="">{{ t('admin.userRiskControl.allRiskTypes') }}</option>
-            <option v-for="option in riskTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-          <select v-model="draft.riskLevel" class="form-input" data-testid="risk-level-filter">
-            <option value="">{{ t('admin.userRiskControl.allRiskLevels') }}</option>
-            <option v-for="option in riskLevelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-          <select v-model="draft.processingStatus" class="form-input" data-testid="processing-status-filter">
-            <option value="">全部处理状态</option>
-            <option v-for="option in processingStatusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-          <input v-model.number="draft.minScore" type="number" min="0" max="100" class="form-input" placeholder="最低风险分" />
-          <input v-model.number="draft.maxScore" type="number" min="0" max="100" class="form-input" placeholder="最高风险分" />
-          <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-            <input v-model="draft.riskOnly" type="checkbox" class="rounded border-gray-300 text-primary-600" />
+      <section class="border-y border-gray-200 py-3 dark:border-dark-700" data-testid="risk-user-filters">
+        <div class="flex flex-wrap items-center gap-3">
+          <SearchInput
+            :model-value="draft.search || ''"
+            :placeholder="t('admin.userRiskControl.searchPlaceholder')"
+            class="w-full sm:w-72"
+            data-testid="risk-user-search"
+            @update:model-value="draft.search = $event"
+            @search="applyFilters"
+          />
+          <Select :model-value="draft.status || ''" class="w-40" data-testid="account-status-filter" :options="accountStatusFilterOptions" @update:model-value="setFilter('status', $event)" />
+          <Select :model-value="draft.riskType || ''" class="w-44" data-testid="risk-type-filter" :options="riskTypeFilterOptions" @update:model-value="setFilter('riskType', $event)" />
+          <Select :model-value="draft.riskLevel || ''" class="w-40" data-testid="risk-level-filter" :options="riskLevelFilterOptions" @update:model-value="setFilter('riskLevel', $event)" />
+          <Select :model-value="draft.processingStatus || ''" class="w-40" data-testid="processing-status-filter" :options="processingStatusFilterOptions" @update:model-value="setFilter('processingStatus', $event)" />
+          <div class="flex h-10 items-center overflow-hidden rounded-md border border-gray-300 bg-white dark:border-dark-600 dark:bg-dark-800" aria-label="风险分范围">
+            <input v-model.number="draft.minScore" type="number" min="0" max="100" class="h-full w-24 border-0 bg-transparent px-3 text-sm focus:ring-0" placeholder="最低分" data-testid="min-score-filter" @change="applyFilters" />
+            <span class="text-gray-300 dark:text-dark-500">-</span>
+            <input v-model.number="draft.maxScore" type="number" min="0" max="100" class="h-full w-24 border-0 bg-transparent px-3 text-sm focus:ring-0" placeholder="最高分" data-testid="max-score-filter" @change="applyFilters" />
+          </div>
+          <label class="flex h-10 items-center gap-2 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+            <input v-model="draft.riskOnly" type="checkbox" class="rounded border-gray-300 text-primary-600" data-testid="risk-only-filter" @change="applyFilters" />
             只看有风险记录
           </label>
+          <button type="button" class="btn-ghost btn-icon" :disabled="!hasFilters || loading" title="重置筛选" aria-label="重置筛选" data-testid="reset-filters" @click="resetFilters">
+            <Icon name="x" size="md" />
+          </button>
         </div>
-        <button type="button" class="btn btn-primary mt-4" data-testid="apply-filters" @click="applyFilters">{{ t('common.apply') }}</button>
       </section>
 
       <section v-if="selectedIds.size" class="flex flex-col gap-3 rounded-lg border border-primary-200 bg-primary-50 p-3 dark:border-primary-900/50 dark:bg-primary-950/20 sm:flex-row sm:items-center sm:justify-between" data-testid="batch-action-bar">
@@ -68,26 +68,26 @@
         <div v-if="loading" class="px-5 py-16 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</div>
         <div v-else-if="!users.length" class="px-5 py-16 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.empty') }}</div>
         <div v-else class="overflow-x-auto">
-          <table class="min-w-[1280px] divide-y divide-gray-200 dark:divide-dark-700">
+          <table class="w-full min-w-[1280px] table-fixed divide-y divide-gray-200 dark:divide-dark-700" data-testid="risk-users-table">
             <thead class="bg-gray-50 dark:bg-dark-800">
               <tr>
                 <th class="w-12 px-4 py-3 text-center"><input v-model="allSelected" type="checkbox" data-testid="select-current-page" class="rounded border-gray-300 text-primary-600" aria-label="选择当前页" /></th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.account') }}</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.id') }}</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.status') }}</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.riskType') }}</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-risk-score" :aria-sort="sortAria('risk_score')" @click="toggleSort('risk_score')">风险分 {{ sortIndicator('risk_score') }}</button></th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-risk-level" :aria-sort="sortAria('risk_level')" @click="toggleSort('risk_level')">{{ t('admin.userRiskControl.level') }} {{ sortIndicator('risk_level') }}</button></th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-event-count" :aria-sort="sortAria('event_count')" @click="toggleSort('event_count')">事件次数 {{ sortIndicator('event_count') }}</button></th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-last-event" :aria-sort="sortAria('last_event_at')" @click="toggleSort('last_event_at')">最近事件 {{ sortIndicator('last_event_at') }}</button></th>
-                <th class="min-w-72 px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.reason') }}</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500">处理状态</th>
+                <th class="w-56 px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.account') }}</th>
+                <th class="w-20 px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.id') }}</th>
+                <th class="w-24 px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.status') }}</th>
+                <th class="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.riskType') }}</th>
+                <th class="w-20 px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-risk-score" :aria-sort="sortAria('risk_score')" @click="toggleSort('risk_score')">风险分 {{ sortIndicator('risk_score') }}</button></th>
+                <th class="w-28 px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-risk-level" :aria-sort="sortAria('risk_level')" @click="toggleSort('risk_level')">{{ t('admin.userRiskControl.level') }} {{ sortIndicator('risk_level') }}</button></th>
+                <th class="w-36 px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-event-count" :aria-sort="sortAria('event_count')" @click="toggleSort('event_count')">事件次数 {{ sortIndicator('event_count') }}</button></th>
+                <th class="w-44 px-4 py-3 text-left text-xs font-medium text-gray-500"><button type="button" data-testid="sort-last-event" :aria-sort="sortAria('last_event_at')" @click="toggleSort('last_event_at')">最近事件 {{ sortIndicator('last_event_at') }}</button></th>
+                <th class="w-auto min-w-80 px-4 py-3 text-left text-xs font-medium text-gray-500">{{ t('admin.userRiskControl.table.reason') }}</th>
+                <th class="w-28 px-4 py-3 text-left text-xs font-medium text-gray-500">处理状态</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
               <tr v-for="user in users" :key="user.id" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-dark-800/60" :data-testid="`user-row-${user.id}`" @click="selectedUser = user">
                 <td class="px-4 py-4 text-center" @click.stop><input :checked="selectedIds.has(user.id)" type="checkbox" :data-testid="`user-select-${user.id}`" class="rounded border-gray-300 text-primary-600" @change="toggleSelection(user.id)" /></td>
-                <td class="px-4 py-4"><p class="font-medium text-gray-900 dark:text-white">{{ user.username || '未设置用户名' }}</p><p class="text-xs text-gray-500">{{ user.email || '暂无账号标识' }}</p></td>
+                <td class="px-4 py-4"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p v-if="user.email && user.username" class="mt-0.5 truncate text-xs text-gray-500" :title="user.username" :data-testid="`account-secondary-${user.id}`">{{ user.username }}</p></td>
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">#{{ user.id }}</td>
                 <td class="px-4 py-4"><span class="rounded-full px-2 py-1 text-xs font-medium" :class="statusClass(user.status)">{{ formatAccountStatus(user.status) }}</span></td>
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ formatRiskType(user.risk_type) }}</td>
@@ -95,16 +95,13 @@
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ formatRiskLevel(user.risk_level) }}</td>
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ user.event_count ?? 0 }}<span class="block text-xs text-gray-400">IP {{ user.ip_count ?? 0 }} / 设备 {{ user.device_count ?? 0 }}</span></td>
                 <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{{ formatDate(user.last_event_at) }}</td>
-                <td class="max-w-md px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ displayReason(user) }}</td>
+                <td class="break-words px-4 py-4 text-sm leading-5 text-gray-600 dark:text-gray-300">{{ displayReason(user) }}</td>
                 <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ formatProcessingStatus(user.processing_status || (user.pending ? 'pending' : user.last_action ? 'observed' : '')) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <footer v-if="total" class="flex flex-col gap-3 border-t border-gray-200 px-5 py-3 text-sm text-gray-500 dark:border-dark-700 sm:flex-row sm:items-center sm:justify-between">
-          <span>{{ t('admin.userRiskControl.total', { total }) }}</span>
-          <div class="flex items-center gap-2"><button type="button" class="btn btn-secondary btn-sm" :disabled="page <= 1 || loading" @click="changePage(page - 1)">{{ t('common.previous') }}</button><span>{{ page }} / {{ totalPages }}</span><button type="button" class="btn btn-secondary btn-sm" :disabled="page >= totalPages || loading" @click="changePage(page + 1)">{{ t('common.next') }}</button></div>
-        </footer>
+        <Pagination v-if="total" :page="page" :total="total" :page-size="pageSize" @update:page="changePage" @update:page-size="changePageSize" />
       </section>
     </div>
 
@@ -129,6 +126,11 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import UserRiskControlUserDrawer from '@/components/admin/UserRiskControlUserDrawer.vue'
+import Icon from '@/components/icons/Icon.vue'
+import Pagination from '@/components/common/Pagination.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
+import Select from '@/components/common/Select.vue'
+import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { userRiskControlV2API, type AccountStatus, type RiskSortBy, type RiskUserRow, type UserRiskFilters } from '@/api/admin/userRiskControlV2'
 import { accountStatusOptions, formatAccountStatus, formatAuditResult, formatProcessingStatus, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType, processingStatusOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
@@ -140,7 +142,7 @@ const loading = ref(true)
 const batchSaving = ref(false)
 const error = ref('')
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(getPersistedPageSize(20))
 const total = ref(0)
 const sortBy = ref<RiskSortBy | undefined>(undefined)
 const sortOrder = ref<'asc' | 'desc'>('desc')
@@ -150,8 +152,13 @@ const batchValidationError = ref('')
 const batchResults = ref<Array<{ id: number; status: 'success' | 'failed'; reason?: string }>>([])
 const draft = reactive<UserRiskFilters>({ search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false })
 const activeFilters = reactive<UserRiskFilters>({ ...draft })
+let loadRequestID = 0
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const accountStatusFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allStatuses') }, ...accountStatusOptions])
+const riskTypeFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allRiskTypes') }, ...riskTypeOptions])
+const riskLevelFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allRiskLevels') }, ...riskLevelOptions])
+const processingStatusFilterOptions = computed(() => [{ value: '', label: '全部处理状态' }, ...processingStatusOptions])
+const hasFilters = computed(() => Boolean(draft.search || draft.status || draft.riskType || draft.riskLevel || draft.processingStatus || normalizeScore(draft.minScore) !== undefined || normalizeScore(draft.maxScore) !== undefined || draft.riskOnly))
 const allSelected = computed({
   get: () => users.value.length > 0 && users.value.every((user) => selectedIds.value.has(user.id)),
   set: (value: boolean) => {
@@ -168,27 +175,54 @@ function errorMessage(err: unknown) {
 }
 
 async function loadUsers() {
+  const requestID = ++loadRequestID
   loading.value = true
   error.value = ''
   try {
-    const response = await userRiskControlV2API.listUsers({ ...activeFilters, page: page.value, pageSize, sortBy: sortBy.value, sortOrder: sortOrder.value })
+    const response = await userRiskControlV2API.listUsers({ ...activeFilters, page: page.value, pageSize: pageSize.value, sortBy: sortBy.value, sortOrder: sortOrder.value })
+    if (requestID !== loadRequestID) return
     users.value = response.items
     total.value = response.total
   } catch (err) {
-    error.value = errorMessage(err)
+    if (requestID === loadRequestID) error.value = errorMessage(err)
   } finally {
-    loading.value = false
+    if (requestID === loadRequestID) loading.value = false
   }
 }
 
 async function applyFilters() {
-  Object.assign(activeFilters, draft)
+  Object.assign(activeFilters, draft, { minScore: normalizeScore(draft.minScore), maxScore: normalizeScore(draft.maxScore) })
   page.value = 1
+  clearSelection()
   await loadUsers()
+}
+
+function normalizeScore(value: unknown): number | undefined {
+  if (value === '' || value === null || value === undefined) return undefined
+  const score = Number(value)
+  return Number.isFinite(score) ? score : undefined
+}
+
+function setFilter(key: 'status' | 'riskType' | 'riskLevel' | 'processingStatus', value: string | number | boolean | null) {
+  Object.assign(draft, { [key]: String(value ?? '') })
+  void applyFilters()
+}
+
+async function resetFilters() {
+  Object.assign(draft, { search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false, minScore: undefined, maxScore: undefined })
+  await applyFilters()
 }
 
 async function changePage(next: number) {
   page.value = next
+  clearSelection()
+  await loadUsers()
+}
+
+async function changePageSize(next: number) {
+  pageSize.value = next
+  page.value = 1
+  clearSelection()
   await loadUsers()
 }
 

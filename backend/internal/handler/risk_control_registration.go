@@ -16,6 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const riskDeviceContextKey = "risk_device_id"
+
 func (h *AuthHandler) reportRegistrationRisk(c *gin.Context, req RegisterRequest, user *service.User) {
 	if h == nil || h.riskControlClient == nil || c == nil || user == nil {
 		return
@@ -78,7 +80,8 @@ func (h *AuthHandler) preflightLoginRisk(c *gin.Context, req LoginRequest) error
 	if requestID == "" {
 		requestID = randomRiskID()
 	}
-	input := service.RiskEventReport{EventKey: requestID + ":login_attempt", EventType: "login_attempt", RiskType: "login_attempt", SubjectID: service.HashRiskValue(req.Email), EmailHash: service.HashRiskValue(req.Email), IPHash: service.HashRiskValue(ip.GetTrustedClientIP(c)), Endpoint: "/api/v1/auth/login", HTTPStatus: http.StatusOK, OccurredAt: time.Now().UTC()}
+	ipHash, deviceHash := riskAssociationHashes(c, "")
+	input := service.RiskEventReport{EventKey: requestID + ":login_attempt", EventType: "login_attempt", RiskType: "login_attempt", SubjectID: service.HashRiskValue(req.Email), EmailHash: service.HashRiskValue(req.Email), IPHash: ipHash, DeviceHash: deviceHash, Endpoint: "/api/v1/auth/login", HTTPStatus: http.StatusOK, OccurredAt: time.Now().UTC()}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
 	defer cancel()
 	decision, err := h.riskControlClient.EvaluateEvent(ctx, input)
@@ -133,11 +136,12 @@ func (h *AuthHandler) reportLoginRisk(c *gin.Context, req LoginRequest, user *se
 	if user != nil {
 		userID, username, accountStatus = user.ID, user.Username, user.Status
 	}
+	ipHash, deviceHash := riskAssociationHashes(c, "")
 	input := service.RiskEventReport{
 		EventKey: requestID + ":" + eventType, EventType: eventType, RiskType: eventType, UserID: userID,
 		SubjectID:        service.HashRiskValue(req.Email),
 		UsernameSnapshot: username, AccountStatusSnapshot: accountStatus, EmailHash: service.HashRiskValue(req.Email),
-		ErrorCode: errorCode, Reason: reason, Endpoint: "/api/v1/auth/login", HTTPStatus: status, OccurredAt: time.Now().UTC(),
+		IPHash: ipHash, DeviceHash: deviceHash, ErrorCode: errorCode, Reason: reason, Endpoint: "/api/v1/auth/login", HTTPStatus: status, OccurredAt: time.Now().UTC(),
 	}
 	if err != nil && user != nil && user.ID > 0 && h.riskBanHandler != nil {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 700*time.Millisecond)
@@ -164,12 +168,51 @@ func (h *AuthHandler) reportLoginRisk(c *gin.Context, req LoginRequest, user *se
 }
 
 func ensureRiskDeviceCookie(c *gin.Context) string {
-	if cookie, err := c.Request.Cookie("risk_device"); err == nil && strings.TrimSpace(cookie.Value) != "" {
-		return cookie.Value
+	if deviceID := existingRiskDeviceID(c); deviceID != "" {
+		return deviceID
 	}
 	value := randomRiskID()
+	c.Set(riskDeviceContextKey, value)
 	http.SetCookie(c.Writer, &http.Cookie{Name: "risk_device", Value: value, Path: "/", HttpOnly: true, Secure: requestIsHTTPS(c), SameSite: http.SameSiteLaxMode, MaxAge: 180 * 24 * 60 * 60})
 	return value
+}
+
+func existingRiskDeviceID(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if value, ok := c.Get(riskDeviceContextKey); ok {
+		if rawDeviceID, isString := value.(string); isString {
+			if deviceID := strings.TrimSpace(rawDeviceID); deviceID != "" {
+				return deviceID
+			}
+		}
+	}
+	if cookie, err := c.Request.Cookie("risk_device"); err == nil {
+		if deviceID := strings.TrimSpace(cookie.Value); deviceID != "" {
+			c.Set(riskDeviceContextKey, deviceID)
+			return deviceID
+		}
+	}
+	return ""
+}
+
+func riskAssociationHashes(c *gin.Context, fallbackDevice string) (string, string) {
+	ipHash := ""
+	if clientIP := strings.TrimSpace(ip.GetTrustedClientIP(c)); clientIP != "" {
+		ipHash = service.HashRiskValue(clientIP)
+	}
+	deviceID := existingRiskDeviceID(c)
+	if deviceID == "" {
+		deviceID = strings.TrimSpace(fallbackDevice)
+	}
+	if deviceID == "" && c != nil && c.Request != nil {
+		deviceID = ensureRiskDeviceCookie(c)
+	}
+	if deviceID == "" {
+		return ipHash, ""
+	}
+	return ipHash, service.HashRiskValue(deviceID)
 }
 
 func requestIsHTTPS(c *gin.Context) bool {
