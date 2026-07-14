@@ -1,0 +1,155 @@
+package accountmonitor
+
+import (
+	"context"
+	"database/sql"
+	_ "embed"
+	"errors"
+	"time"
+)
+
+//go:embed schema.sql
+var schemaSQL string
+
+const insertAttemptSQL = `
+INSERT INTO account_monitor_attempt_facts (
+    event_key, request_key, attempted_at, account_id, parent_account_id,
+    platform, actual_model, model_attribution, user_id, api_key_id,
+    request_type, result, recovered, error_category, status_code,
+    upstream_status_code, provider_error_code, input_tokens, output_tokens,
+    cache_creation_tokens, cache_read_tokens, user_cost, account_cost,
+    duration_ms, image_count, image_size, video_count, video_resolution,
+    video_duration_seconds, identity_quality, source_kind, source_id, updated_at
+) VALUES (
+    $1,$2,$3,$4,NULLIF($5,0),$6,$7,$8,NULLIF($9,0),NULLIF($10,0),
+    $11,$12,$13,$14,NULLIF($15,0),NULLIF($16,0),$17,$18,$19,$20,$21,$22,$23,
+    NULLIF($24,0),$25,$26,$27,$28,$29,$30,$31,$32,NOW()
+)
+ON CONFLICT (event_key) DO UPDATE SET
+    request_key=EXCLUDED.request_key, attempted_at=EXCLUDED.attempted_at,
+    account_id=EXCLUDED.account_id, parent_account_id=EXCLUDED.parent_account_id,
+    platform=EXCLUDED.platform, actual_model=EXCLUDED.actual_model,
+    model_attribution=EXCLUDED.model_attribution, user_id=EXCLUDED.user_id,
+    api_key_id=EXCLUDED.api_key_id, request_type=EXCLUDED.request_type,
+    result=EXCLUDED.result, recovered=EXCLUDED.recovered,
+    error_category=EXCLUDED.error_category, status_code=EXCLUDED.status_code,
+    upstream_status_code=EXCLUDED.upstream_status_code,
+    provider_error_code=EXCLUDED.provider_error_code,
+    input_tokens=EXCLUDED.input_tokens, output_tokens=EXCLUDED.output_tokens,
+    cache_creation_tokens=EXCLUDED.cache_creation_tokens,
+    cache_read_tokens=EXCLUDED.cache_read_tokens, user_cost=EXCLUDED.user_cost,
+    account_cost=EXCLUDED.account_cost, duration_ms=EXCLUDED.duration_ms,
+    image_count=EXCLUDED.image_count, image_size=EXCLUDED.image_size,
+    video_count=EXCLUDED.video_count, video_resolution=EXCLUDED.video_resolution,
+    video_duration_seconds=EXCLUDED.video_duration_seconds,
+    identity_quality=EXCLUDED.identity_quality, source_kind=EXCLUDED.source_kind,
+    source_id=EXCLUDED.source_id, updated_at=NOW()`
+
+const insertRequestSQL = `
+INSERT INTO account_monitor_request_facts (
+    request_key, occurred_at, user_id, api_key_id, account_id, platform,
+    actual_model, model_attribution, request_type, result, error_category,
+    status_code, input_tokens, output_tokens, cache_creation_tokens,
+    cache_read_tokens, user_cost, account_cost, duration_ms, image_count,
+    video_count, video_resolution, video_duration_seconds, identity_quality,
+    source_kind, source_id, updated_at
+) VALUES (
+    $1,$2,NULLIF($3,0),NULLIF($4,0),NULLIF($5,0),$6,$7,$8,$9,$10,$11,
+    NULLIF($12,0),$13,$14,$15,$16,$17,$18,NULLIF($19,0),$20,$21,$22,$23,
+    $24,$25,$26,NOW()
+)
+ON CONFLICT (request_key) DO UPDATE SET
+    occurred_at=EXCLUDED.occurred_at, user_id=EXCLUDED.user_id,
+    api_key_id=EXCLUDED.api_key_id, account_id=EXCLUDED.account_id,
+    platform=EXCLUDED.platform, actual_model=EXCLUDED.actual_model,
+    model_attribution=EXCLUDED.model_attribution, request_type=EXCLUDED.request_type,
+    result=EXCLUDED.result, error_category=EXCLUDED.error_category,
+    status_code=EXCLUDED.status_code, input_tokens=EXCLUDED.input_tokens,
+    output_tokens=EXCLUDED.output_tokens,
+    cache_creation_tokens=EXCLUDED.cache_creation_tokens,
+    cache_read_tokens=EXCLUDED.cache_read_tokens, user_cost=EXCLUDED.user_cost,
+    account_cost=EXCLUDED.account_cost, duration_ms=EXCLUDED.duration_ms,
+    image_count=EXCLUDED.image_count, video_count=EXCLUDED.video_count,
+    video_resolution=EXCLUDED.video_resolution,
+    video_duration_seconds=EXCLUDED.video_duration_seconds,
+    identity_quality=EXCLUDED.identity_quality, source_kind=EXCLUDED.source_kind,
+    source_id=EXCLUDED.source_id, updated_at=NOW()`
+
+const upsertSyncStateSQL = `
+INSERT INTO account_monitor_sync_state(source, cursor_time, cursor_id, last_success_at, last_error, updated_at)
+VALUES ($1,$2,$3,$4,'',NOW())
+ON CONFLICT (source) DO UPDATE SET cursor_time=EXCLUDED.cursor_time,
+cursor_id=EXCLUDED.cursor_id,last_success_at=EXCLUDED.last_success_at,last_error='',updated_at=NOW()`
+
+type Repository struct {
+	db  *sql.DB
+	now func() time.Time
+}
+
+func NewRepository(db *sql.DB) *Repository {
+	return &Repository{db: db, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func ApplySchema(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return errors.New("account monitor database is nil")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) CommitBatch(ctx context.Context, batch Batch) error {
+	if r == nil || r.db == nil {
+		return errors.New("account monitor repository database is nil")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, fact := range batch.Attempts {
+		if _, err := tx.ExecContext(ctx, insertAttemptSQL,
+			fact.EventKey, fact.RequestKey, fact.AttemptedAt, fact.AccountID, fact.ParentAccountID,
+			fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.UserID, fact.APIKeyID,
+			fact.RequestType, fact.Result, fact.Recovered, fact.ErrorCategory, fact.StatusCode,
+			fact.UpstreamStatusCode, fact.ProviderErrorCode, fact.InputTokens, fact.OutputTokens,
+			fact.CacheCreationTokens, fact.CacheReadTokens, fact.UserCost, fact.AccountCost,
+			fact.DurationMS, fact.ImageCount, fact.ImageSize, fact.VideoCount, fact.VideoResolution,
+			fact.VideoDurationSeconds, fact.IdentityQuality, fact.SourceKind, fact.SourceID,
+		); err != nil {
+			return err
+		}
+	}
+	for _, fact := range batch.Requests {
+		if _, err := tx.ExecContext(ctx, insertRequestSQL,
+			fact.RequestKey, fact.OccurredAt, fact.UserID, fact.APIKeyID, fact.AccountID,
+			fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.RequestType,
+			fact.Result, fact.ErrorCategory, fact.StatusCode, fact.InputTokens,
+			fact.OutputTokens, fact.CacheCreationTokens, fact.CacheReadTokens,
+			fact.UserCost, fact.AccountCost, fact.DurationMS, fact.ImageCount,
+			fact.VideoCount, fact.VideoResolution, fact.VideoDurationSeconds,
+			fact.IdentityQuality, fact.SourceKind, fact.SourceID,
+		); err != nil {
+			return err
+		}
+	}
+	now := r.now()
+	if !batch.UsageCursor.Time.IsZero() || batch.UsageCursor.ID > 0 {
+		if _, err := tx.ExecContext(ctx, upsertSyncStateSQL, "usage", batch.UsageCursor.Time, batch.UsageCursor.ID, now); err != nil {
+			return err
+		}
+	}
+	if !batch.ErrorCursor.Time.IsZero() || batch.ErrorCursor.ID > 0 {
+		if _, err := tx.ExecContext(ctx, upsertSyncStateSQL, "errors", batch.ErrorCursor.Time, batch.ErrorCursor.ID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
