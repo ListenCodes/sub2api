@@ -58,6 +58,8 @@ export interface RiskEvent {
   error_code?: string
   endpoint?: string
   model?: string
+  ip?: string
+  device_id?: string
   decision?: string
   rule_codes?: string[]
   evidence?: Record<string, unknown>
@@ -213,7 +215,7 @@ async function getUserDetail(id: number): Promise<RiskUserDetail> {
   const data = risk
   const events: RiskEvent[] = data.timeline.map((event) => ({
     id: Number(event.id), type: String(event.event_type || ''), risk_type: event.risk_type as RiskEvent['risk_type'], risk_level: event.risk_level as RiskLevel | undefined,
-    score: Number(event.score || 0), reason: formatRiskReason(event.reason, { eventType: String(event.risk_type || event.event_type || ''), ruleCode: Array.isArray(event.rule_codes) ? String(event.rule_codes[0] || '') : '' }), error_code: String(event.error_code || ''), endpoint: String(event.endpoint || ''), model: String(event.model || ''), decision: String(event.decision || ''), rule_codes: Array.isArray(event.rule_codes) ? event.rule_codes.map(String) : [], evidence: (event.evidence || {}) as Record<string, unknown>, occurred_at: String(event.occurred_at || event.created_at || ''),
+    score: Number(event.score || 0), reason: formatRiskReason(event.reason, { eventType: String(event.risk_type || event.event_type || ''), ruleCode: Array.isArray(event.rule_codes) ? String(event.rule_codes[0] || '') : '' }), error_code: String(event.error_code || ''), endpoint: String(event.endpoint || ''), model: String(event.model || ''), ip: String(event.ip || ''), device_id: String(event.device_id || ''), decision: String(event.decision || ''), rule_codes: Array.isArray(event.rule_codes) ? event.rule_codes.map(String) : [], evidence: (event.evidence || {}) as Record<string, unknown>, occurred_at: String(event.occurred_at || event.created_at || ''),
   }))
   return {
     user: { id: data.id, username: main.data.username || data.username, email: main.data.email, status: main.data.status, risk_type: data.risk_type, risk_level: data.risk_level, risk_score: data.score, risk_reason: events[0]?.reason || null, event_count: data.event_count, ip_count: data.ip_count, device_count: data.device_count, last_event_at: data.last_event_at || null },
@@ -330,7 +332,7 @@ async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<R
   return { total: data.total, page: data.page || filters.page || 1, page_size: data.page_size || filters.pageSize || 20, items: data.items.map((record) => {
     const metadata = (record.metadata || {}) as Record<string, unknown>
     return {
-      id: Number(record.id), actor: record.actor_id ? String(record.actor_id) : undefined,
+      id: Number(record.id), actor: record.actor_name ? String(record.actor_name) : record.actor_id ? String(record.actor_id) : undefined,
       target_type: String(record.target_type || ''), target_id: String(record.target_id || ''),
       target_user_id: record.target_type === 'user' ? Number(record.target_id || 0) : 0,
       action: String(record.action), before_status: metadata.before_status as AccountStatus | null || null,

@@ -80,10 +80,10 @@ describe('userRiskControlV2API', () => {
   })
 
   it('passes audit filters to the audit endpoint', async () => {
-    const get = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
+    const get = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, actor_name: 'qa-admin', action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
 
     await expect(userRiskControlV2API.listAudit({ action: 'ban', targetUserId: 7, result: 'success', page: 2, pageSize: 20 })).resolves.toMatchObject({
-      items: [{ target_user_id: 7, before_status: 'active', after_status: 'disabled', reason: 'Repeated failures' }],
+      items: [{ actor: 'qa-admin', target_user_id: 7, before_status: 'active', after_status: 'disabled', reason: 'Repeated failures' }],
     })
 
     expect(get).toHaveBeenCalledWith('/admin/user-risk-control/audit', {
@@ -108,7 +108,7 @@ describe('userRiskControlV2API', () => {
 
   it('loads operation history for the account detail drawer', async () => {
     vi.spyOn(mainAdminClient, 'get')
-      .mockResolvedValueOnce({ data: { id: 7, username: 'Alice', account_status: 'active', risk_type: 'login_failure_burst', risk_level: 'high', score: 80, event_count: 1, ip_count: 2, device_count: 1, timeline: [] } } as never)
+      .mockResolvedValueOnce({ data: { id: 7, username: 'Alice', account_status: 'active', risk_type: 'login_failure_burst', risk_level: 'high', score: 80, event_count: 1, ip_count: 2, device_count: 1, timeline: [{ id: 31, event_type: 'login_failure', risk_type: 'login_failure', score: 80, reason: 'rule=login_failure_burst count=9 window=300', ip: '198.51.100.10', device_id: 'chrome-124', occurred_at: '2026-07-11T11:58:00Z' }] } } as never)
       .mockResolvedValueOnce({
       data: { id: 7, username: 'Alice', email: 'alice@example.com', status: 'disabled' },
     } as never)
@@ -117,6 +117,7 @@ describe('userRiskControlV2API', () => {
     await expect(userRiskControlV2API.getUserDetail(7)).resolves.toMatchObject({
       audit: [{ target_user_id: 7, action: 'ban', before_status: 'active', after_status: 'disabled' }],
       associations: { ip_count: 2, device_count: 1 },
+      events: [{ ip: '198.51.100.10', device_id: 'chrome-124' }],
     })
   })
 

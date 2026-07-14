@@ -64,6 +64,17 @@ const legacyRuleReasons: Record<string, string> = {
   api_request_observation: 'API 请求观察：请求达到观察记录条件，仅用于行为观察，不代表账号异常。',
 }
 
+const legacyRuleNames: Record<string, string> = {
+  registration_abuse: '注册滥用',
+  login_failure_burst: '登录失败爆发',
+  api_error_burst: 'API 错误爆发',
+  content_risk: '内容风险',
+  quota_abuse: '配额滥用',
+  upstream_error: '上游错误',
+  upstream_error_burst: '上游错误爆发',
+  api_request_observation: 'API 请求观察',
+}
+
 export const riskTypeOptions: RiskLabelOption[] = Object.entries(riskTypes).map(([value, label]) => ({ value, label }))
 export const riskLevelOptions: RiskLabelOption[] = Object.entries(riskLevels).filter(([value]) => value !== 'none').map(([value, label]) => ({ value, label }))
 export const riskActionOptions: RiskLabelOption[] = Object.entries(riskActions).map(([value, label]) => ({ value, label }))
@@ -128,6 +139,17 @@ export function formatRiskReason(rawReason: unknown, evidence: RiskReasonEvidenc
   if (reason) {
     const legacyRule = reason.match(/^规则\s+([a-z0-9_-]+)\s+命中$/i)
     if (legacyRule) return legacyRuleReasons[legacyRule[1]] || `命中规则：${legacyRule[1]}`
+    const structuredRule = reason.match(/^rule=([a-z0-9_-]+)\s+count=(\d+)\s+window=(\d+)$/i)
+    if (structuredRule) {
+      const [, ruleCode, count, windowSeconds] = structuredRule
+      const eventType = ruleCode === 'login_failure_burst' ? 'login_failure' : ruleCode === 'api_error_burst' ? 'api_error' : ''
+      return formatRiskReason('', {
+        eventType,
+        ruleName: legacyRuleNames[ruleCode] || ruleCode,
+        count: Number(count),
+        windowSeconds: Number(windowSeconds),
+      })
+    }
     return reason
   }
   const rule = String(evidence.ruleName || evidence.ruleCode || '').trim()
