@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlAuditView from '@/views/admin/UserRiskControlAuditView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import Pagination from '@/components/common/Pagination.vue'
+import DataTable from '@/components/common/DataTable.vue'
+import DateRangePicker from '@/components/common/DateRangePicker.vue'
+import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 
 vi.mock('@/api/admin/userRiskControlV2', () => ({ userRiskControlV2API: { listAudit: vi.fn() } }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
@@ -15,6 +18,16 @@ function emitFilter(wrapper: ReturnType<typeof mount>, testId: string, value: st
 }
 
 describe('UserRiskControlAuditView', () => {
+  it('uses the shared responsive workspace and date range picker', async () => {
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 0 })
+    const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.findComponent(TablePageLayout).exists()).toBe(true)
+    expect(wrapper.findComponent(DataTable).exists()).toBe(true)
+    expect(wrapper.findComponent(DateRangePicker).exists()).toBe(true)
+  })
+
   it('filters audit records automatically without an apply button', async () => {
     vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 0 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
@@ -79,6 +92,14 @@ describe('UserRiskControlAuditView', () => {
     expect(wrapper.text()).toContain('request-1')
   })
 
+  it('does not invent account status changes for rule operations', async () => {
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 4, actor: 'qa-admin', action: 'update_rule', target_type: 'rule', target_id: 'login_failure', target_user_id: 0, result: 'success', reason: '调整阈值', created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+    const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="audit-status-change-4"]').text()).toBe('-')
+  })
+
   it('passes audit sorting and extended filters to the API', async () => {
     vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 3, actor: '11', action: 'ban', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', created_at: '2026-07-11T12:00:00Z' }], total: 1 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
@@ -86,7 +107,7 @@ describe('UserRiskControlAuditView', () => {
     const actorSearch = wrapper.findComponent('[data-testid="audit-actor-filter"]')
     actorSearch.vm.$emit('update:modelValue', '11')
     actorSearch.vm.$emit('search', '11')
-    await wrapper.get('[data-testid="audit-from-filter"]').setValue('2026-07-01')
+    wrapper.findComponent(DateRangePicker).vm.$emit('change', { startDate: '2026-07-01', endDate: '2026-07-14', preset: null })
     await wrapper.get('[data-testid="audit-sort-time"]').trigger('click')
     await flushPromises()
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ actor: '11', from: '2026-07-01', sortBy: 'created_at', sortOrder: 'desc' }))

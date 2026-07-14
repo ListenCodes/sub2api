@@ -1,7 +1,11 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlRulesView from '@/views/admin/UserRiskControlRulesView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
+import BaseDialog from '@/components/common/BaseDialog.vue'
+import DataTable from '@/components/common/DataTable.vue'
+import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 
 vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
@@ -12,9 +16,51 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({
   },
 }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
+enableAutoUnmount(afterEach)
 afterEach(() => vi.clearAllMocks())
 
+function bodyElement<T extends HTMLElement = HTMLElement>(selector: string): T {
+  const matches = document.body.querySelectorAll<T>(selector)
+  const element = matches[matches.length - 1]
+  if (!element) throw new Error(`Missing ${selector} in document body`)
+  return element
+}
+
+async function setBodyValue(selector: string, value: string) {
+  const target = bodyElement(selector)
+  const input = target.matches('input, textarea')
+    ? target as HTMLInputElement | HTMLTextAreaElement
+    : target.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  if (!input) throw new Error(`Missing input control inside ${selector}`)
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+}
+
+async function clickBody(selector: string) {
+  bodyElement<HTMLButtonElement>(selector).click()
+  await flushPromises()
+}
+
 describe('UserRiskControlRulesView', () => {
+  it('uses shared responsive table and rule form controls', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
+
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.findComponent(DataTable).exists()).toBe(true)
+    await wrapper.get('[data-testid="new-rule"]').trigger('click')
+    expect(wrapper.findComponent(BaseDialog).props('show')).toBe(true)
+    expect(wrapper.findAllComponents(Select).length).toBeGreaterThanOrEqual(3)
+    await clickBody('[data-testid="template-login_failure_burst"]')
+    expect(bodyElement('[data-testid="template-login_failure_burst"]').getAttribute('aria-pressed')).toBe('true')
+
+    await wrapper.findComponent(BaseDialog).vm.$emit('close')
+    await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
+    expect(wrapper.findComponent(Toggle).exists()).toBe(true)
+  })
+
   it('renders rules in a compact table and expands editing on demand', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
 
@@ -24,7 +70,7 @@ describe('UserRiskControlRulesView', () => {
     expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('登录失败爆发')
     expect(wrapper.find('[data-testid="rule-editor-1"]').exists()).toBe(false)
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
-    expect(wrapper.get('[data-testid="rule-editor-1"]').isVisible()).toBe(true)
+    expect(bodyElement('[data-testid="rule-editor-1"]')).toBeTruthy()
   })
 
   it('loads a scenario rule, saves changes, and shows test output', async () => {
@@ -35,19 +81,17 @@ describe('UserRiskControlRulesView', () => {
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
-    await wrapper.get('[data-testid="rule-threshold"]').setValue('8')
-    await wrapper.get('[data-testid="save-rule"]').trigger('click')
-    await flushPromises()
+    await setBodyValue('[data-testid="rule-threshold"]', '8')
+    await clickBody('[data-testid="save-rule"]')
     expect(userRiskControlV2API.updateRule).toHaveBeenCalledWith(1, expect.objectContaining({ threshold: 8 }))
     expect(wrapper.text()).toContain('规则已保存')
 
-    await wrapper.get('[data-testid="test-rule"]').trigger('click')
-    await flushPromises()
+    await clickBody('[data-testid="test-rule"]')
     expect(userRiskControlV2API.testRule).toHaveBeenCalled()
-    expect(wrapper.text()).toContain('80')
-    expect(wrapper.text()).toContain('高风险')
-    expect(wrapper.text()).toContain('人工复核')
-    expect(wrapper.text()).toContain('登录失败次数达到 5 次')
+    expect(document.body.textContent).toContain('80')
+    expect(document.body.textContent).toContain('高风险')
+    expect(document.body.textContent).toContain('人工复核')
+    expect(document.body.textContent).toContain('登录失败次数达到 5 次')
   })
 
   it('offers candidate rejection as a configurable rule action', async () => {
@@ -57,7 +101,7 @@ describe('UserRiskControlRulesView', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
-    expect(wrapper.get('[data-testid="rule-action"]').text()).toContain('拒绝注册')
+    expect(bodyElement('[data-testid="rule-action"]').textContent).toContain('拒绝注册')
   })
 
   it('shows the upstream revision conflict instead of hiding it behind a generic fallback', async () => {
@@ -67,8 +111,7 @@ describe('UserRiskControlRulesView', () => {
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
-    await wrapper.get('[data-testid="save-rule"]').trigger('click')
-    await flushPromises()
+    await clickBody('[data-testid="save-rule"]')
 
     expect(wrapper.text()).toContain('rule revision conflict')
   })
@@ -80,14 +123,13 @@ describe('UserRiskControlRulesView', () => {
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
-    await wrapper.get('[data-testid="rule-code-input"]').setValue('custom_login')
-    await wrapper.get('[data-testid="rule-name-input"]').setValue('自定义登录')
-    await wrapper.get('[data-testid="rule-description-input"]').setValue('短时间内登录失败')
-    await wrapper.get('[data-testid="rule-event-type"]').setValue('login_failure')
-    await wrapper.get('[data-testid="rule-window"]').setValue('300')
-    await wrapper.get('[data-testid="rule-threshold-create"]').setValue('5')
-    await wrapper.get('[data-testid="create-rule"]').trigger('click')
-    await flushPromises()
+    await clickBody('[data-testid="template-login_failure_burst"]')
+    await setBodyValue('[data-testid="rule-code-input"]', 'custom_login')
+    await setBodyValue('[data-testid="rule-name-input"]', '自定义登录')
+    await setBodyValue('[data-testid="rule-description-input"]', '短时间内登录失败')
+    await setBodyValue('[data-testid="rule-window"]', '300')
+    await setBodyValue('[data-testid="rule-threshold-create"]', '5')
+    await clickBody('[data-testid="create-rule"]')
 
     expect(userRiskControlV2API.createRule).toHaveBeenCalledWith(expect.objectContaining({ code: 'custom_login', name: '自定义登录', eventTypes: ['login_failure'], windowSeconds: 300, threshold: 5 }))
     expect(wrapper.text()).toContain('规则已创建')
@@ -98,10 +140,10 @@ describe('UserRiskControlRulesView', () => {
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
-    await wrapper.get('[data-testid="rule-code-input"]').setValue('bad code')
-    await wrapper.get('[data-testid="rule-name-input"]').setValue('错误规则')
-    await wrapper.get('[data-testid="create-rule"]').trigger('click')
+    await setBodyValue('[data-testid="rule-code-input"]', 'bad code')
+    await setBodyValue('[data-testid="rule-name-input"]', '错误规则')
+    await clickBody('[data-testid="create-rule"]')
     expect(userRiskControlV2API.createRule).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('规则编码只能使用小写字母、数字、下划线和短横线')
+    expect(document.body.textContent).toContain('规则编码只能使用小写字母、数字、下划线和短横线')
   })
 })
