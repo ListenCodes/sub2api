@@ -25,6 +25,7 @@ func validateConfig(cfg Config) error {
 type Config struct {
 	DatabaseURL       string
 	InternalSecret    string
+	HomepageDir       string
 	Listen            string
 	Mode              string
 	DecisionFailMode  string
@@ -36,6 +37,7 @@ func loadConfig() Config {
 	return Config{
 		DatabaseURL:       strings.TrimSpace(os.Getenv("RISK_CONTROL_DATABASE_URL")),
 		InternalSecret:    strings.TrimSpace(os.Getenv("RISK_CONTROL_INTERNAL_SECRET")),
+		HomepageDir:       envOr("EXTENSIONS_SELF_HOMEPAGE_DIR", "/app/homepage"),
 		Listen:            envOr("RISK_CONTROL_LISTEN", ":8090"),
 		Mode:              normalizeMode(envOr("RISK_CONTROL_MODE", "shadow")),
 		DecisionFailMode:  normalizeFailMode(envOr("RISK_CONTROL_DECISION_FAIL_MODE", "open")),

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,8 @@ type HTTPServer struct {
 	repo    RiskRepository
 	cfg     Config
 	nonces  *nonceStore
+	homepage http.Handler
+	homeReady bool
 }
 
 func NewHTTPServer(cfg Config, repo RiskRepository) *HTTPServer {
@@ -22,18 +26,57 @@ func NewHTTPServer(cfg Config, repo RiskRepository) *HTTPServer {
 		cfg.MaxBodyBytes = 256 * 1024
 	}
 	cfg.Mode = normalizeMode(cfg.Mode)
-	return &HTTPServer{service: NewRiskService(cfg, repo), repo: repo, cfg: cfg, nonces: newNonceStore()}
+	if strings.TrimSpace(cfg.HomepageDir) == "" {
+		cfg.HomepageDir = "/app/homepage"
+	}
+	info, err := os.Stat(filepath.Join(cfg.HomepageDir, "index.html"))
+	homeReady := err == nil && !info.IsDir()
+	return &HTTPServer{
+		service:   NewRiskService(cfg, repo),
+		repo:      repo,
+		cfg:       cfg,
+		nonces:    newNonceStore(),
+		homepage:  http.StripPrefix("/homepage/", http.FileServer(http.Dir(cfg.HomepageDir))),
+		homeReady: homeReady,
+	}
 }
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Path == "/homepage" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		http.Redirect(w, r, "/homepage/", http.StatusPermanentRedirect)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/homepage/") {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		if !s.homeReady {
+			writeError(w, http.StatusServiceUnavailable, errors.New("homepage unavailable"))
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		s.homepage.ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if r.URL.Path == "/healthz" {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "risk-control"})
+		if !s.homeReady {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "service": "extensions-self"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "extensions-self"})
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/api/v1/") {

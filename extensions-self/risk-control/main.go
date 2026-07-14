@@ -32,7 +32,7 @@ func main() {
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: NewHTTPServer(cfg, NewSQLRepository(db)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
-		log.Printf("risk-control listening on %s mode=%s", cfg.Listen, cfg.Mode)
+		log.Printf("extensions-self listening on %s mode=%s", cfg.Listen, cfg.Mode)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
