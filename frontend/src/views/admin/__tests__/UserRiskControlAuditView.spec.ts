@@ -1,19 +1,28 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlAuditView from '@/views/admin/UserRiskControlAuditView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
+import Pagination from '@/components/common/Pagination.vue'
 
 vi.mock('@/api/admin/userRiskControlV2', () => ({ userRiskControlV2API: { listAudit: vi.fn() } }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
+enableAutoUnmount(afterEach)
+beforeEach(() => window.localStorage.clear())
+afterEach(() => vi.clearAllMocks())
+
+function emitFilter(wrapper: ReturnType<typeof mount>, testId: string, value: string) {
+  wrapper.findComponent(`[data-testid="${testId}"]`).vm.$emit('update:modelValue', value)
+}
 
 describe('UserRiskControlAuditView', () => {
-  it('filters audit records by action and result', async () => {
+  it('filters audit records automatically without an apply button', async () => {
     vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 0 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
-    await wrapper.get('[data-testid="audit-action-filter"]').setValue('ban')
-    await wrapper.get('[data-testid="audit-result-filter"]').setValue('failed')
-    await wrapper.get('[data-testid="apply-audit-filters"]').trigger('click')
+    expect(wrapper.find('[data-testid="apply-audit-filters"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('common.apply')
+    emitFilter(wrapper, 'audit-action-filter', 'ban')
+    emitFilter(wrapper, 'audit-result-filter', 'failed')
     await flushPromises()
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: 'ban', result: 'failed', page: 1, pageSize: 20 })
   })
@@ -25,12 +34,27 @@ describe('UserRiskControlAuditView', () => {
       .mockResolvedValueOnce({ items: [], total: 0, page: 1, page_size: 20 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
-    await wrapper.get('[data-testid="audit-next-page"]').trigger('click')
+    wrapper.findComponent(Pagination).vm.$emit('update:page', 2)
     await flushPromises()
-    await wrapper.get('[data-testid="audit-action-filter"]').setValue('ban')
-    await wrapper.get('[data-testid="apply-audit-filters"]').trigger('click')
+    emitFilter(wrapper, 'audit-action-filter', 'ban')
     await flushPromises()
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: 'ban', result: '', page: 1, pageSize: 20 })
+  })
+
+  it('resets active audit filters and supports changing the page size', async () => {
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 80, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    emitFilter(wrapper, 'audit-action-filter', 'ban')
+    await flushPromises()
+    await wrapper.get('[data-testid="reset-audit-filters"]').trigger('click')
+    await flushPromises()
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: '', result: '', page: 1, pageSize: 20 })
+
+    wrapper.findComponent(Pagination).vm.$emit('update:pageSize', 50)
+    await flushPromises()
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: '', result: '', page: 1, pageSize: 50 })
   })
 
   it('moves to the next audit page using the server total', async () => {
@@ -39,7 +63,7 @@ describe('UserRiskControlAuditView', () => {
       .mockResolvedValueOnce({ items: [], total: 21, page: 2, page_size: 20 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
-    await wrapper.get('[data-testid="audit-next-page"]').trigger('click')
+    wrapper.findComponent(Pagination).vm.$emit('update:page', 2)
     await flushPromises()
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: '', result: '', page: 2, pageSize: 20 })
   })
@@ -59,7 +83,9 @@ describe('UserRiskControlAuditView', () => {
     vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 3, actor: '11', action: 'ban', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', created_at: '2026-07-11T12:00:00Z' }], total: 1 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
-    await wrapper.get('[data-testid="audit-actor-filter"]').setValue('11')
+    const actorSearch = wrapper.findComponent('[data-testid="audit-actor-filter"]')
+    actorSearch.vm.$emit('update:modelValue', '11')
+    actorSearch.vm.$emit('search', '11')
     await wrapper.get('[data-testid="audit-from-filter"]').setValue('2026-07-01')
     await wrapper.get('[data-testid="audit-sort-time"]').trigger('click')
     await flushPromises()

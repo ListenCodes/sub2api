@@ -15,6 +15,18 @@ vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof
 afterEach(() => vi.clearAllMocks())
 
 describe('UserRiskControlRulesView', () => {
+  it('renders rules in a compact table and expands editing on demand', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
+
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('登录失败爆发')
+    expect(wrapper.find('[data-testid="rule-editor-1"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
+    expect(wrapper.get('[data-testid="rule-editor-1"]').isVisible()).toBe(true)
+  })
+
   it('loads a scenario rule, saves changes, and shows test output', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: 'Login failures', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
     vi.mocked(userRiskControlV2API.updateRule).mockResolvedValue({ id: 1, revision: 4 })
@@ -22,6 +34,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+    await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     await wrapper.get('[data-testid="rule-threshold"]').setValue('8')
     await wrapper.get('[data-testid="save-rule"]').trigger('click')
     await flushPromises()
@@ -43,6 +56,7 @@ describe('UserRiskControlRulesView', () => {
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
+    await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     expect(wrapper.get('[data-testid="rule-action"]').text()).toContain('拒绝注册')
   })
 
@@ -52,6 +66,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+    await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     await wrapper.get('[data-testid="save-rule"]').trigger('click')
     await flushPromises()
 

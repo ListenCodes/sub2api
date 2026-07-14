@@ -7,13 +7,13 @@
           <h1 class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{{ t('admin.userRiskControl.rulesTitle') }}</h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.rulesDescription') }}</p>
         </div>
-        <button type="button" class="btn btn-primary" data-testid="new-rule" @click="openCreateForm">新建规则</button>
+        <button type="button" class="btn btn-primary" data-testid="new-rule" @click="openCreateForm"><Icon name="plus" size="sm" />新建规则</button>
       </header>
 
       <div v-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>
       <div v-if="notice" class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700" data-testid="save-notice">{{ notice }}</div>
 
-      <section v-if="createOpen" class="card p-5" data-testid="create-rule-form">
+      <section v-if="createOpen" class="border-y border-gray-200 py-5 dark:border-dark-700" data-testid="create-rule-form">
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-4 dark:border-dark-700">
           <div><h2 class="font-semibold text-gray-900 dark:text-white">新建场景规则</h2><p class="mt-1 text-xs text-gray-500">编码用于 API 协议和历史审计，创建后不可修改。</p></div>
           <button type="button" class="btn btn-ghost btn-sm" @click="createOpen = false">{{ t('common.close') }}</button>
@@ -36,29 +36,56 @@
         <div class="mt-5 flex justify-end gap-3"><button type="button" class="btn btn-secondary" @click="createOpen = false">{{ t('common.cancel') }}</button><button type="button" class="btn btn-primary" data-testid="create-rule" :disabled="creating" @click="submitCreate">{{ creating ? t('common.saving') : '创建规则' }}</button></div>
       </section>
 
-      <div v-if="loading" class="card p-12 text-center text-sm text-gray-500">{{ t('common.loading') }}</div>
-      <div v-else-if="!rules.length" class="card p-12 text-center text-sm text-gray-500">{{ t('admin.userRiskControl.empty') }}<button type="button" class="btn btn-secondary mt-4" @click="openCreateForm">新建第一条规则</button></div>
-      <div v-else class="space-y-4">
-        <section v-for="rule in rules" :key="rule.id" class="card p-5">
-          <div class="flex flex-col gap-3 border-b border-gray-200 pb-4 md:flex-row md:items-center md:justify-between dark:border-dark-700">
-            <div><h2 class="font-semibold text-gray-900 dark:text-white">{{ rule.name || rule.code }}</h2><p class="mt-1 text-xs text-gray-500">{{ rule.code }} · 第 {{ rule.revision }} 版 · {{ rule.eventTypes?.map(formatRiskType).join('、') }}</p><p v-if="rule.description" class="mt-2 text-sm text-gray-600 dark:text-gray-300">{{ rule.description }}</p></div>
-            <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300"><input v-model="rule.enabled" type="checkbox" class="rounded border-gray-300 text-primary-600" />{{ rule.enabled ? '已启用' : '已停用' }}</label>
-          </div>
-          <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <label class="text-sm text-gray-600 dark:text-gray-300">窗口（秒）<input v-model.number="rule.windowSeconds" type="number" min="1" class="form-input mt-1 w-full" /></label>
-            <label class="text-sm text-gray-600 dark:text-gray-300">阈值<input v-model.number="rule.threshold" type="number" min="1" class="form-input mt-1 w-full" data-testid="rule-threshold" /></label>
-            <label class="text-sm text-gray-600 dark:text-gray-300">风险分<input v-model.number="rule.score" type="number" min="0" max="100" class="form-input mt-1 w-full" /></label>
-            <label class="text-sm text-gray-600 dark:text-gray-300">风险等级<select v-model="rule.riskLevel" class="form-input mt-1 w-full"><option v-for="option in riskLevelOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
-            <label class="text-sm text-gray-600 dark:text-gray-300">处置动作<select v-model="rule.action" class="form-input mt-1 w-full" data-testid="rule-action"><option v-for="option in ruleActionOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
-          </div>
-          <div class="mt-5 flex flex-wrap items-center gap-3">
-            <button type="button" class="btn btn-primary" data-testid="save-rule" :disabled="saving" @click="save(rule)">{{ saving ? t('common.saving') : t('common.save') }}</button>
-            <button type="button" class="btn btn-secondary" data-testid="test-rule" :disabled="testing" @click="test(rule)">{{ testing ? t('common.loading') : t('admin.userRiskControl.testRule') }}</button>
-            <button v-if="conflictRuleId === rule.id" type="button" class="btn btn-secondary" data-testid="reload-rule" @click="reloadRule(rule.id)">重新加载</button>
-            <span v-if="testResult && testedId === rule.id" class="text-sm text-gray-600 dark:text-gray-300" data-testid="rule-test-result">{{ testResult.matched ? '命中' : '未命中' }} · 风险分 {{ testResult.score }} · {{ formatRiskLevel(testResult.riskLevel) }} · {{ formatRiskAction(testResult.action) }}<span v-if="testResult.conditions.length" class="block text-xs">命中条件：{{ testResult.conditions.join('、') }}</span></span>
-          </div>
-        </section>
-      </div>
+      <div v-if="loading" class="card px-5 py-16 text-center text-sm text-gray-500">{{ t('common.loading') }}</div>
+      <div v-else-if="!rules.length" class="card px-5 py-16 text-center text-sm text-gray-500">{{ t('admin.userRiskControl.empty') }}<button type="button" class="btn btn-secondary mt-4" @click="openCreateForm">新建第一条规则</button></div>
+      <section v-else class="card overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[1120px] table-fixed divide-y divide-gray-200 dark:divide-dark-700" data-testid="risk-rules-table">
+            <thead class="bg-gray-50 dark:bg-dark-800">
+              <tr>
+                <th class="w-72 px-4 py-3 text-left text-xs font-medium text-gray-500">规则</th>
+                <th class="w-36 px-4 py-3 text-left text-xs font-medium text-gray-500">事件类型</th>
+                <th class="w-24 px-4 py-3 text-left text-xs font-medium text-gray-500">状态</th>
+                <th class="w-40 px-4 py-3 text-left text-xs font-medium text-gray-500">触发条件</th>
+                <th class="w-36 px-4 py-3 text-left text-xs font-medium text-gray-500">风险</th>
+                <th class="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500">处置动作</th>
+                <th class="w-auto px-4 py-3 text-right text-xs font-medium text-gray-500">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+              <template v-for="rule in rules" :key="rule.id">
+                <tr class="hover:bg-gray-50 dark:hover:bg-dark-800/60">
+                  <td class="px-4 py-4"><p class="truncate font-medium text-gray-900 dark:text-white" :title="rule.name || rule.code">{{ rule.name || rule.code }}</p><p class="mt-0.5 truncate text-xs text-gray-500" :title="rule.description || rule.code">{{ rule.code }} · 第 {{ rule.revision }} 版<span v-if="rule.description"> · {{ rule.description }}</span></p></td>
+                  <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ rule.eventTypes?.map(formatRiskType).join('、') || '-' }}</td>
+                  <td class="px-4 py-4"><span class="rounded-full px-2 py-1 text-xs font-medium" :class="rule.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'">{{ rule.enabled ? '已启用' : '已停用' }}</span></td>
+                  <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ rule.threshold }} 次 / {{ rule.windowSeconds }} 秒</td>
+                  <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300"><span class="font-semibold text-gray-900 dark:text-white">{{ rule.score }}</span><span class="ml-2">{{ formatRiskLevel(rule.riskLevel) }}</span></td>
+                  <td class="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{{ formatRiskAction(rule.action) }}</td>
+                  <td class="px-4 py-4 text-right"><button type="button" class="btn-ghost btn-icon" :data-testid="`edit-rule-${rule.id}`" :title="expandedRuleId === rule.id ? '收起规则编辑' : '编辑规则'" :aria-label="expandedRuleId === rule.id ? '收起规则编辑' : '编辑规则'" @click="toggleEditor(rule.id)"><Icon :name="expandedRuleId === rule.id ? 'chevronUp' : 'edit'" size="sm" /></button></td>
+                </tr>
+                <tr v-if="expandedRuleId === rule.id" :data-testid="`rule-editor-${rule.id}`" class="bg-gray-50/80 dark:bg-dark-800/60">
+                  <td colspan="7" class="px-4 py-4">
+                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+                      <label class="text-sm text-gray-600 dark:text-gray-300">启用状态<span class="mt-1 flex h-10 items-center gap-2"><input v-model="rule.enabled" type="checkbox" class="rounded border-gray-300 text-primary-600" />{{ rule.enabled ? '已启用' : '已停用' }}</span></label>
+                      <label class="text-sm text-gray-600 dark:text-gray-300">窗口（秒）<input v-model.number="rule.windowSeconds" type="number" min="1" class="form-input mt-1 w-full" /></label>
+                      <label class="text-sm text-gray-600 dark:text-gray-300">阈值<input v-model.number="rule.threshold" type="number" min="1" class="form-input mt-1 w-full" data-testid="rule-threshold" /></label>
+                      <label class="text-sm text-gray-600 dark:text-gray-300">风险分<input v-model.number="rule.score" type="number" min="0" max="100" class="form-input mt-1 w-full" /></label>
+                      <label class="text-sm text-gray-600 dark:text-gray-300">风险等级<select v-model="rule.riskLevel" class="form-input mt-1 w-full"><option v-for="option in riskLevelOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
+                      <label class="text-sm text-gray-600 dark:text-gray-300">处置动作<select v-model="rule.action" class="form-input mt-1 w-full" data-testid="rule-action"><option v-for="option in ruleActionOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
+                    </div>
+                    <div class="mt-4 flex flex-wrap items-center gap-3">
+                      <button type="button" class="btn btn-primary" data-testid="save-rule" :disabled="saving" @click="save(rule)">{{ saving ? t('common.saving') : t('common.save') }}</button>
+                      <button type="button" class="btn btn-secondary" data-testid="test-rule" :disabled="testing" @click="test(rule)">{{ testing ? t('common.loading') : t('admin.userRiskControl.testRule') }}</button>
+                      <button v-if="conflictRuleId === rule.id" type="button" class="btn btn-secondary" data-testid="reload-rule" @click="reloadRule(rule.id)">重新加载</button>
+                      <span v-if="testResult && testedId === rule.id" class="text-sm text-gray-600 dark:text-gray-300" data-testid="rule-test-result">{{ testResult.matched ? '命中' : '未命中' }} · 风险分 {{ testResult.score }} · {{ formatRiskLevel(testResult.riskLevel) }} · {{ formatRiskAction(testResult.action) }}<span v-if="testResult.conditions.length" class="block text-xs">命中条件：{{ testResult.conditions.join('、') }}</span></span>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   </AppLayout>
 </template>
@@ -67,6 +94,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import Icon from '@/components/icons/Icon.vue'
 import { userRiskControlV2API, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
 import { formatRiskAction, formatRiskLevel, formatRiskType, riskActionOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
@@ -79,6 +107,7 @@ const testing = ref(false)
 const error = ref('')
 const notice = ref('')
 const createOpen = ref(false)
+const expandedRuleId = ref<number | null>(null)
 const createValidationError = ref('')
 const conflictRuleId = ref<number | null>(null)
 const testResult = ref<{ matched: boolean; score: number; riskLevel: string; action: string; conditions: string[] } | null>(null)
@@ -98,6 +127,7 @@ const draft = reactive<RuleCreateInput>({ ...ruleTemplates[0], eventTypes: [...(
 function errorMessage(err: unknown, fallback = t('admin.userRiskControl.loadFailed')) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : fallback }
 async function load() { loading.value = true; try { rules.value = await userRiskControlV2API.listRules() } catch (err) { error.value = errorMessage(err) } finally { loading.value = false } }
 function openCreateForm() { createOpen.value = true; createValidationError.value = ''; notice.value = '' }
+function toggleEditor(id: number) { expandedRuleId.value = expandedRuleId.value === id ? null : id; notice.value = ''; testResult.value = null; testedId.value = null }
 function applyTemplate(template: RuleCreateInput) { Object.assign(draft, template, { eventTypes: [...(template.eventTypes || [])] }); createValidationError.value = '' }
 function validateDraft() {
   if (!/^[a-z0-9][a-z0-9_-]{1,79}$/.test(draft.code.trim())) return '规则编码只能使用小写字母、数字、下划线和短横线。'
