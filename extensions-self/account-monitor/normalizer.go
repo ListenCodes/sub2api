@@ -46,6 +46,12 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 				if platform == "" {
 					platform = strings.TrimSpace(row.Platform)
 				}
+				category := ClassifyFailure(FailureSignal{
+					ProviderCode: row.ProviderErrorCode, ProviderType: row.ProviderErrorType,
+					UpstreamStatus: event.UpstreamStatusCode, StatusCode: row.StatusCode,
+					ErrorType: row.ErrorType, ErrorPhase: row.ErrorPhase,
+					NetworkType: row.NetworkErrorType, Message: event.Message + " " + event.Detail,
+				})
 				batch.Attempts = append(batch.Attempts, AttemptFact{
 					EventKey:           fmt.Sprintf("ops:%d:event:%d", row.ID, index),
 					RequestKey:         requestKey,
@@ -59,6 +65,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 					RequestType:        row.RequestType,
 					Result:             ResultFailed,
 					Recovered:          row.StatusCode > 0 && row.StatusCode < 400,
+					ErrorCategory:      category,
 					StatusCode:         row.StatusCode,
 					UpstreamStatusCode: event.UpstreamStatusCode,
 					ProviderErrorCode:  row.ProviderErrorCode,
@@ -70,6 +77,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 			}
 		} else if row.AccountID > 0 && isUpstreamFailure(row) {
 			model, attribution := actualModel("", row.UpstreamModel, row.RequestedModel, row.Model)
+			category := classifyErrorRow(row)
 			batch.Attempts = append(batch.Attempts, AttemptFact{
 				EventKey:           fmt.Sprintf("ops:%d:synthetic", row.ID),
 				RequestKey:         requestKey,
@@ -83,6 +91,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 				RequestType:        row.RequestType,
 				Result:             ResultFailed,
 				Recovered:          row.StatusCode > 0 && row.StatusCode < 400,
+				ErrorCategory:      category,
 				StatusCode:         row.StatusCode,
 				UpstreamStatusCode: row.UpstreamStatusCode,
 				ProviderErrorCode:  row.ProviderErrorCode,
@@ -94,6 +103,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 		}
 		if row.StatusCode >= 400 {
 			model, attribution := actualModel("", row.UpstreamModel, row.RequestedModel, row.Model)
+			category := classifyErrorRow(row)
 			upsertRequest(&batch.Requests, requestIndexes, RequestFact{
 				RequestKey:       requestKey,
 				OccurredAt:       row.CreatedAt,
@@ -105,6 +115,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 				ModelAttribution: attribution,
 				RequestType:      row.RequestType,
 				Result:           ResultFailed,
+				ErrorCategory:    category,
 				StatusCode:       row.StatusCode,
 				DurationMS:       row.DurationMS,
 				IdentityQuality:  identity,
@@ -211,6 +222,16 @@ func actualModel(exact string, fallbacks ...string) (string, AttributionQuality)
 
 func isUpstreamFailure(row ErrorSourceRow) bool {
 	return row.UpstreamStatusCode > 0 || strings.EqualFold(row.ErrorPhase, "upstream") || strings.EqualFold(row.ErrorOwner, "upstream")
+}
+
+func classifyErrorRow(row ErrorSourceRow) ErrorCategory {
+	return ClassifyFailure(FailureSignal{
+		ProviderCode: row.ProviderErrorCode, ProviderType: row.ProviderErrorType,
+		UpstreamStatus: row.UpstreamStatusCode, StatusCode: row.StatusCode,
+		ErrorType: row.ErrorType, ErrorPhase: row.ErrorPhase,
+		NetworkType: row.NetworkErrorType,
+		Message:     row.ErrorMessage + " " + row.UpstreamErrorMessage,
+	})
 }
 
 func upsertRequest(items *[]RequestFact, indexes map[string]int, fact RequestFact) {
