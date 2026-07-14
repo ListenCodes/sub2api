@@ -34,6 +34,7 @@ type UsageSourceRow struct {
 	TotalCost             float64
 	ActualCost            float64
 	AccountRateMultiplier float64
+	AccountMultiplierSet  bool
 	DurationMS            int64
 	RequestType           int
 	Stream                bool
@@ -162,6 +163,7 @@ func (s *PostgresSource) ReadUsage(ctx context.Context, after Cursor, from time.
 		item.RequestedModel = requestedModel.String
 		item.UpstreamModel = upstreamModel.String
 		item.AccountRateMultiplier = accountMultiplier.Float64
+		item.AccountMultiplierSet = accountMultiplier.Valid
 		item.DurationMS = duration.Int64
 		item.ImageSize = imageSize.String
 		item.ImageInputSize = imageInputSize.String
