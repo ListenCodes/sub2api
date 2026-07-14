@@ -43,39 +43,43 @@ rendered_risk_url="$(
   docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" config --format json |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["sub2api"]["environment"].get("RISK_CONTROL_URL", ""))'
 )" || fail 'could not read rendered risk-control URL'
-[[ "$rendered_risk_url" == 'http://risk-control:8090' ]] || fail "rendered RISK_CONTROL_URL must be http://risk-control:8090, got $rendered_risk_url"
+[[ "$rendered_risk_url" == 'http://extensions-self:8090' ]] || fail "rendered RISK_CONTROL_URL must be http://extensions-self:8090, got $rendered_risk_url"
 
 log "Backing up approved release $APPROVED_COMMIT"
 docker exec sub2api-postgres pg_dump -U sub2api -d sub2api -Fc > "$BACKUP_DIR/sub2api_db.dump" || fail 'database backup failed'
 cp -p "$ENV_FILE" "$BACKUP_DIR/main.env"
 cp -p "$COMPOSE" "$BACKUP_DIR/main-docker-compose.yml"
 cp -p /etc/nginx/sites-available/sub.ailisten.top "$BACKUP_DIR/nginx-sub.ailisten.top.conf" 2>/dev/null || true
-docker inspect sub2api risk-control risk-control-postgres sub2api-postgres sub2api-redis > "$BACKUP_DIR/container-metadata.json" 2>/dev/null || true
-docker image inspect sub2api:custom deploy-risk-control > "$BACKUP_DIR/image-metadata.json" 2>/dev/null || true
+docker inspect sub2api extensions-self risk-control risk-control-postgres sub2api-postgres sub2api-redis > "$BACKUP_DIR/container-metadata.json" 2>/dev/null || true
+docker image inspect sub2api:custom deploy-extensions-self deploy-risk-control > "$BACKUP_DIR/image-metadata.json" 2>/dev/null || true
 
 old_main_image="$(docker inspect sub2api --format '{{.Image}}' 2>/dev/null || true)"
 if [[ -n "$old_main_image" ]]; then
   docker tag "$old_main_image" "sub2api:rollback-$STAMP"
 fi
-old_risk_image="$(docker inspect risk-control --format '{{.Image}}' 2>/dev/null || true)"
-if [[ -n "$old_risk_image" ]]; then
-  docker tag "$old_risk_image" "deploy-risk-control:rollback-$STAMP"
+old_extension_image="$(docker inspect extensions-self --format '{{.Image}}' 2>/dev/null || docker inspect risk-control --format '{{.Image}}' 2>/dev/null || true)"
+if [[ -n "$old_extension_image" ]]; then
+  docker tag "$old_extension_image" "deploy-extensions-self:rollback-$STAMP"
 fi
 sha256sum "$BACKUP_DIR/sub2api_db.dump" > "$BACKUP_DIR/SHA256SUMS"
 
 log 'Building main application image'
 docker build -t sub2api:custom "$REPO" >> "$LOG" 2>&1 || fail 'main image build failed'
-log 'Building risk-control image'
-docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" build risk-control >> "$LOG" 2>&1 || fail 'risk-control image build failed'
+log 'Building extensions-self image'
+docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" build extensions-self >> "$LOG" 2>&1 || fail 'extensions-self image build failed'
 
-log 'Recreating only main and risk-control services'
-docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" up -d --no-deps --force-recreate sub2api risk-control >> "$LOG" 2>&1 || fail 'service recreate failed'
+log 'Recreating only main and extensions-self services'
+docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" up -d --no-deps --force-recreate sub2api extensions-self >> "$LOG" 2>&1 || fail 'service recreate failed'
 
 for attempt in $(seq 1 60); do
   main_health="$(docker inspect sub2api --format '{{.State.Health.Status}}' 2>/dev/null || true)"
-  risk_health="$(docker inspect risk-control --format '{{.State.Health.Status}}' 2>/dev/null || true)"
-  if [[ "$main_health" == healthy && "$risk_health" == healthy ]] && curl -fsS http://127.0.0.1:8081/health >/dev/null; then
-    docker exec risk-control wget -qO- -T 5 http://risk-control:8090/healthz >/dev/null || fail 'risk-control health check failed'
+  extension_health="$(docker inspect extensions-self --format '{{.State.Health.Status}}' 2>/dev/null || true)"
+  if [[ "$main_health" == healthy && "$extension_health" == healthy ]] && curl -fsS http://127.0.0.1:8081/health >/dev/null; then
+    docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null || fail 'extensions-self health check failed'
+    curl -fsS http://127.0.0.1:8081/api/v1/extensions-self/homepage/ >/dev/null || fail 'public homepage proxy health check failed'
+    if docker container inspect risk-control >/dev/null 2>&1; then
+      docker rm -f risk-control >> "$LOG" 2>&1 || fail 'retired risk-control container removal failed'
+    fi
     docker run --rm --entrypoint /app/sub2api sub2api:custom --version 2>&1 | tee -a "$LOG"
     log "PUBLISH OK: commit=$APPROVED_COMMIT backup=$BACKUP_DIR"
     exit 0

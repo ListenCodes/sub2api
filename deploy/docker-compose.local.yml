@@ -54,8 +54,8 @@ services:
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
 
-      # Integrated risk-control service (shadow by default)
-      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://risk-control:8090}
+      # Unified custom extensions service (risk control stays shadow by default)
+      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://extensions-self:8090}
       - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
       - RISK_CONTROL_DECISION_FAIL_MODE=${RISK_CONTROL_DECISION_FAIL_MODE:-open}
 
@@ -276,11 +276,12 @@ services:
       retries: 5
       start_period: 10s
 
-  risk-control:
+  extensions-self:
+    image: deploy-extensions-self
     build:
-      context: ../risk-control
+      context: ../extensions-self
       dockerfile: Dockerfile
-    container_name: risk-control
+    container_name: extensions-self
     restart: unless-stopped
     init: true
     mem_limit: 256m
@@ -292,6 +293,7 @@ services:
       - RISK_CONTROL_MODE=${RISK_CONTROL_MODE:-shadow}
       - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
       - RISK_CONTROL_DATABASE_URL=postgres://${RISK_CONTROL_POSTGRES_USER:-risk_control_app}:${RISK_CONTROL_POSTGRES_PASSWORD:?RISK_CONTROL_POSTGRES_PASSWORD is required}@risk-control-postgres:5432/${RISK_CONTROL_POSTGRES_DB:-risk_control}?sslmode=disable
+      - EXTENSIONS_SELF_HOMEPAGE_DIR=/app/homepage
     depends_on:
       risk-control-postgres:
         condition: service_healthy

@@ -36,6 +36,6 @@ test('release documentation no longer treats the retired standalone service as a
   const runbook = read('RELEASE-RUNBOOK.md')
   assert.doesNotMatch(runbook, /\/root\/sub2api-risk-control\/deploy\/docker-compose\.prod\.yml/)
   assert.match(runbook, /\/root\/sub2api\/extensions-self\/risk-control/)
-  assert.match(runbook, /archive `\/root\/sub2api-risk-control`/)
-  assert.match(runbook, /stop its\s+`sub2api-risk-control` container without removing volumes/)
+  assert.match(runbook, /`risk-control-postgres` and `risk_control_postgres_data` remain independent/)
+  assert.match(runbook, /starts and verifies\s+`extensions-self` before removing the old application container/)
 })

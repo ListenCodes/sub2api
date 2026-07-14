@@ -12,13 +12,15 @@ development conversations working in this repository.
 - Production main source tree: `/root/sub2api`
 - Production main image: `sub2api:custom`
 - Versioned operations scripts: `deploy/ops/`
-- Risk-control service source: `/root/sub2api/risk-control`
-- Risk-control container and network hostname: `risk-control`
-- Risk-control image: `deploy-risk-control`
+- Custom extensions source: `/root/sub2api/extensions-self`
+- Extensions container and network hostname: `extensions-self`
+- Extensions image: `deploy-extensions-self`
 
-The risk-control service is versioned in this repository and released from the
-same approved `origin/custom` commit as the main application. Production
-secrets remain in `deploy/.env` and must never be committed.
+Risk control and the custom homepage are versioned under `extensions-self/` and
+released in one container from the same approved `origin/custom` commit as the
+main application. The dedicated `risk-control-postgres` service and volume stay
+independent. Production secrets remain in `deploy/.env` and must never be
+committed.
 
 ## Risk-Control Admin Product Contract
 
@@ -61,7 +63,7 @@ records have been verified.
 1. Inspect `git status`, branch, remotes, and the current production commit.
 2. Create or use an isolated feature branch/worktree.
 3. Implement the change and add focused tests.
-4. Run the required backend, frontend, risk-control, and deployment checks.
+4. Run the required backend, frontend, extensions-self, and deployment checks.
 5. Review the diff and `git diff --check`.
 6. Commit to the feature branch, merge into `custom`, and push `origin/custom`.
 7. Do not publish to production automatically after a code task. Production
@@ -90,7 +92,7 @@ Every production deployment must:
 - Record the source commit and image tags.
 - Back up the PostgreSQL database, Compose/configuration, and Nginx vhost.
 - Build and deploy the exact intended image tag.
-- Check application, risk-control, PostgreSQL, Redis, and public HTTP health.
+- Check application, extensions-self, PostgreSQL, Redis, and public HTTP health.
 - Keep a previous image and configuration available for rollback.
 - Avoid touching PostgreSQL and Redis unless the change explicitly requires it.
 

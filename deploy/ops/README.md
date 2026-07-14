@@ -13,7 +13,7 @@ leaves the integration branch for manual resolution.
 When the merge is clean and the base is unchanged, it fast-forwards `custom`,
 pushes `origin/custom` without force, and invokes `publish-custom.sh` with the
 exact new commit. The publish script backs up production, builds the main and
-risk-control images, recreates only the affected services, and verifies
+extensions-self images, recreates only the affected services, and verifies
 health. A publish failure is terminal for that run. The exact promoted commit
 is retained in `sync-pending-publish` so a later run can retry that same
 approved commit before attempting another upstream merge.
@@ -35,11 +35,15 @@ changed. The script never resolves conflicts with `ours` or `theirs` silently.
 `publish-custom.sh --commit <sha>` is the only normal VPS release entrypoint.
 The SHA must equal the current `origin/custom` head. The script backs up the
 database and production configuration, builds from `/root/sub2api`, recreates
-only `sub2api` and the integrated `risk-control` service, then verifies health and the
-running binary version.
+only `sub2api` and the unified `extensions-self` service, then verifies the
+main API, risk API, public homepage proxy, and running binary version.
 
 The retired standalone `/root/sub2api-risk-control` deployment must not be
-reintroduced. The canonical service source is `/root/sub2api/risk-control`.
+reintroduced. The canonical source is `/root/sub2api/extensions-self`; its
+single Go process serves both risk APIs and `/homepage/`. The publisher removes
+the previous `risk-control` application container only after `extensions-self`
+and the public homepage proxy are healthy. It never removes or recreates
+`risk-control-postgres`.
 
 ## Cron Installation
 

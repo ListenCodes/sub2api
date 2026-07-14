@@ -18,6 +18,14 @@ test('custom extensions live under the extensions-self namespace', () => {
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/Dockerfile')), true)
 })
 
+test('homepage navigation escapes the iframe without changing destinations', () => {
+  const homepage = read('extensions-self/homepage/index.html')
+  for (const href of ['/', '/admin/dashboard']) {
+    const escapedHref = href.replace('/', '\\/')
+    assert.match(homepage, new RegExp(`<a(?=[^>]*href="${escapedHref}")(?=[^>]*target="_top")[^>]*>`))
+  }
+})
+
 test('compose runs one extensions-self application container and preserves the risk database', () => {
   for (const composeFile of ['deploy/docker-compose.yml', 'deploy/docker-compose.local.yml']) {
     const compose = read(composeFile)
@@ -40,4 +48,3 @@ test('the publisher targets extensions-self without managing the risk database l
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
 })
-

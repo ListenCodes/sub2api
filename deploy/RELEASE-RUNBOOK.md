@@ -1,14 +1,14 @@
 # Sub2API Release Runbook
 
-This runbook defines how to change and publish Sub2API and its integrated
-risk-control service.
+This runbook defines how to change and publish Sub2API and its unified custom
+extensions service.
 
 ## Release Units
 
 | Unit | Source | Runtime image | Production path |
 |---|---|---|---|
 | Main application and risk hooks | `origin/custom` | `sub2api:custom` | `/root/sub2api` |
-| Risk-control service | `origin/custom:risk-control/` | `deploy-risk-control` | `/root/sub2api/risk-control` |
+| Risk control and homepage | `origin/custom:extensions-self/` | `deploy-extensions-self` | `/root/sub2api/extensions-self` |
 
 Publish the two units as a recorded pair when either one changes. The main
 application's `RISK_CONTROL_URL` must point to the running risk service.
@@ -54,7 +54,7 @@ The normal publish command is:
 ```
 
 It backs up production, builds the approved source, recreates only the main
-and risk-control services, and verifies health and the running version.
+and extensions-self services, and verifies health and the running version.
 
 The admin trigger and the daily scheduled job both call
 `sync-and-publish.sh`. A conflict or changed custom base stops before
@@ -95,32 +95,45 @@ After an emergency change:
    the emergency change and pushing the approved commit to `origin`.
 3. Do not run the upstream preparation script as a production release.
 4. Wait for the container health check and `http://127.0.0.1:8081/health`.
-5. Check the public HTTPS endpoint and the risk-control container.
+5. Check the public HTTPS endpoint and the extensions-self container.
 6. Commit the change and push it to `origin`.
 7. Record the commit, image ID, backup path, and validation result.
 
 Do not use a force reset to hide local changes. If the VPS worktree is dirty,
 stop and preserve the diff before proceeding.
 
-## Risk-Control Release
+## Extensions-Self Release
 
-The risk-control service is built from the approved main repository checkout:
+The unified extension service is built from the approved main repository checkout:
 
 ```text
-/root/sub2api/risk-control
+/root/sub2api/extensions-self/risk-control
+/root/sub2api/extensions-self/homepage
 /root/sub2api/deploy/docker-compose.yml
 /root/sub2api/deploy/.env
 ```
 
-The main application must use the canonical Compose service hostname
-`http://risk-control:8090`. Only one `risk-control` container may be attached
-to the production network; retired standalone deployments must stay removed.
+The main application must use `http://extensions-self:8090`. The extension Go
+process serves signed risk APIs and the public static `/homepage/` route. The
+browser reaches it only through the same-origin main application proxy:
 
-For the one-time migration, archive `/root/sub2api-risk-control`, stop its
-`sub2api-risk-control` container without removing volumes, and change
-`RISK_CONTROL_URL` in `/root/sub2api/deploy/.env` to the canonical URL before
-running `publish-custom.sh`. The publisher refuses to continue while the
-retired container exists or the rendered URL is not canonical.
+```text
+https://sub.ailisten.top/api/v1/extensions-self/homepage/
+```
+
+`risk-control-postgres` and `risk_control_postgres_data` remain independent and
+must not appear in application `up`, `rm`, or `down` commands.
+
+For the one-time migration, keep the current `risk-control` container running,
+change `RISK_CONTROL_URL` in `/root/sub2api/deploy/.env` to the extensions URL,
+and run `publish-custom.sh`. The publisher starts and verifies
+`extensions-self` before removing the old application container. It does not
+touch the risk database container or volume.
+
+After the public proxy returns 200, set the administration system's custom
+homepage content to the absolute iframe URL above. Back up the previous inline
+HTML first. Restart the main application only if the direct database update was
+used and the settings cache was not invalidated through the admin API.
 
 The admin product contract is defined in
 `docs/RISK-CONTROL-ADMIN-SPEC.md`. A risk-control release is not accepted when
@@ -151,7 +164,10 @@ been verified with real traffic.
 - [ ] Git worktree is clean after commit.
 - [ ] Intended main commit and risk image tag are recorded.
 - [ ] `sub2api` container is healthy.
-- [ ] `risk-control` container is healthy.
+- [ ] `extensions-self` container is healthy.
+- [ ] Public extensions homepage returns success and is the configured iframe.
+- [ ] The retired `risk-control` application container is absent.
+- [ ] `risk-control-postgres` kept the same container/volume identity.
 - [ ] PostgreSQL and Redis are healthy.
 - [ ] Main `/health` returns success.
 - [ ] Public HTTPS endpoint returns success.
@@ -172,9 +188,11 @@ the affected service. Do not roll back by deleting the Git repository or by
 resetting the production worktree without a backup.
 
 The publisher records the previous images as
-`sub2api:rollback-<timestamp>` and `deploy-risk-control:rollback-<timestamp>`.
+`sub2api:rollback-<timestamp>` and `deploy-extensions-self:rollback-<timestamp>`.
 Retag the selected rollback image to its active Compose image name, restore
-the matching configuration backup, and recreate only the affected service.
+the matching configuration and previous inline homepage setting, and recreate
+only the affected application service. Never delete the risk database during
+rollback.
 
 After rollback, verify the same health checklist and record the failed commit,
 the rollback target, and the reason.
