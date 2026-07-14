@@ -8,13 +8,29 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	pathpkg "path"
 	"strings"
 	"time"
 )
+
+const maxHomepageProxyBody = 1 << 20
+
+var (
+	ErrInvalidHomepageRequest   = errors.New("invalid homepage request")
+	ErrHomepageResponseTooLarge = errors.New("homepage response too large")
+)
+
+type HomepageAsset struct {
+	Body         []byte
+	Status       int
+	ContentType  string
+	CacheControl string
+}
 
 type RiskControlClient struct {
 	baseURL string
@@ -73,6 +89,50 @@ func NewRiskControlClientFromEnv() *RiskControlClient {
 		return nil
 	}
 	return &RiskControlClient{baseURL: baseURL, secret: []byte(secret), http: &http.Client{Timeout: 800 * time.Millisecond}}
+}
+
+func (c *RiskControlClient) ProxyHomepage(ctx context.Context, method, assetPath string) (*HomepageAsset, error) {
+	if c == nil || c.http == nil {
+		return nil, fmt.Errorf("risk control client is not configured")
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return nil, ErrInvalidHomepageRequest
+	}
+	rawPath := strings.TrimSpace(assetPath)
+	if strings.Contains(rawPath, `\`) {
+		return nil, ErrInvalidHomepageRequest
+	}
+	relativePath := strings.TrimPrefix(rawPath, "/")
+	upstreamPath := "/homepage/"
+	if relativePath != "" {
+		cleanPath := pathpkg.Clean("/" + relativePath)
+		if cleanPath != "/"+relativePath || strings.Contains(relativePath, "..") {
+			return nil, ErrInvalidHomepageRequest
+		}
+		upstreamPath = "/homepage" + cleanPath
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+upstreamPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHomepageProxyBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxHomepageProxyBody {
+		return nil, ErrHomepageResponseTooLarge
+	}
+	return &HomepageAsset{
+		Body:         body,
+		Status:       resp.StatusCode,
+		ContentType:  resp.Header.Get("Content-Type"),
+		CacheControl: resp.Header.Get("Cache-Control"),
+	}, nil
 }
 
 func HashRiskValue(value string) string {
