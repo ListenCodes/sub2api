@@ -1,6 +1,6 @@
 # Sub2API Release Runbook
 
-This runbook defines how to change and publish Sub2API and the independent
+This runbook defines how to change and publish Sub2API and its integrated
 risk-control service.
 
 ## Release Units
@@ -8,7 +8,7 @@ risk-control service.
 | Unit | Source | Runtime image | Production path |
 |---|---|---|---|
 | Main application and risk hooks | `origin/custom` | `sub2api:custom` | `/root/sub2api` |
-| Independent risk-control service | approved risk release | `sub2api-risk-control:<release>` | `/root/sub2api-risk-control` |
+| Risk-control service | `origin/custom:risk-control/` | `deploy-risk-control` | `/root/sub2api/risk-control` |
 
 Publish the two units as a recorded pair when either one changes. The main
 application's `RISK_CONTROL_URL` must point to the running risk service.
@@ -54,7 +54,7 @@ The normal publish command is:
 ```
 
 It backs up production, builds the approved source, recreates only the main
-and v2 risk-control services, and verifies health and the running version.
+and risk-control services, and verifies health and the running version.
 
 The admin trigger and the daily scheduled job both call
 `sync-and-publish.sh`. A conflict or changed custom base stops before
@@ -104,17 +104,23 @@ stop and preserve the diff before proceeding.
 
 ## Risk-Control Release
 
-The independent service is intentionally outside the main Git worktree:
+The risk-control service is built from the approved main repository checkout:
 
 ```text
-/root/sub2api-risk-control/deploy/docker-compose.prod.yml
-/root/sub2api-risk-control/.env
+/root/sub2api/risk-control
+/root/sub2api/deploy/docker-compose.yml
+/root/sub2api/deploy/.env
 ```
 
-The main application must use the dedicated network alias
-`http://risk-control-v2:8090`. The legacy risk service may still share the
-Docker network under the `risk-control` name during migration, so do not use
-the ambiguous legacy alias for the v2 integration.
+The main application must use the canonical Compose service hostname
+`http://risk-control:8090`. Only one `risk-control` container may be attached
+to the production network; retired standalone deployments must stay removed.
+
+For the one-time migration, archive `/root/sub2api-risk-control`, stop its
+`sub2api-risk-control` container without removing volumes, and change
+`RISK_CONTROL_URL` in `/root/sub2api/deploy/.env` to the canonical URL before
+running `publish-custom.sh`. The publisher refuses to continue while the
+retired container exists or the rendered URL is not canonical.
 
 The admin product contract is defined in
 `docs/RISK-CONTROL-ADMIN-SPEC.md`. A risk-control release is not accepted when
@@ -130,8 +136,9 @@ service image and Compose file together, then validate:
 
 ```bash
 docker compose \
-  -f /root/sub2api-risk-control/deploy/docker-compose.prod.yml \
-  --env-file /root/sub2api-risk-control/.env \
+  --project-name deploy \
+  -f /root/sub2api/deploy/docker-compose.yml \
+  --env-file /root/sub2api/deploy/.env \
   config --quiet
 ```
 
@@ -144,7 +151,7 @@ been verified with real traffic.
 - [ ] Git worktree is clean after commit.
 - [ ] Intended main commit and risk image tag are recorded.
 - [ ] `sub2api` container is healthy.
-- [ ] `sub2api-risk-control` container is healthy.
+- [ ] `risk-control` container is healthy.
 - [ ] PostgreSQL and Redis are healthy.
 - [ ] Main `/health` returns success.
 - [ ] Public HTTPS endpoint returns success.
@@ -163,6 +170,11 @@ been verified with real traffic.
 Rollback means restoring the previous Compose/image pair and restarting only
 the affected service. Do not roll back by deleting the Git repository or by
 resetting the production worktree without a backup.
+
+The publisher records the previous images as
+`sub2api:rollback-<timestamp>` and `deploy-risk-control:rollback-<timestamp>`.
+Retag the selected rollback image to its active Compose image name, restore
+the matching configuration backup, and recreate only the affected service.
 
 After rollback, verify the same health checklist and record the failed commit,
 the rollback target, and the reason.

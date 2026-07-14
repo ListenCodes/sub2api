@@ -12,11 +12,13 @@ development conversations working in this repository.
 - Production main source tree: `/root/sub2api`
 - Production main image: `sub2api:custom`
 - Versioned operations scripts: `deploy/ops/`
-- Independent risk-control service source: `/root/sub2api-risk-control`
-- Independent risk-control image: `sub2api-risk-control:<release>`
+- Risk-control service source: `/root/sub2api/risk-control`
+- Risk-control container and network hostname: `risk-control`
+- Risk-control image: `deploy-risk-control`
 
-The independent risk-control service is deployed separately from the main
-repository. Do not copy its `.env` into this repository or commit secrets.
+The risk-control service is versioned in this repository and released from the
+same approved `origin/custom` commit as the main application. Production
+secrets remain in `deploy/.env` and must never be committed.
 
 ## Risk-Control Admin Product Contract
 

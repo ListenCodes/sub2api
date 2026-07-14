@@ -34,6 +34,17 @@ ORIGIN_COMMIT="$(git rev-parse origin/custom)"
 git merge --ff-only origin/custom >> "$LOG" 2>&1 || fail 'fast-forward to origin/custom failed'
 [[ "$(git rev-parse HEAD)" == "$APPROVED_COMMIT" ]] || fail 'source HEAD is not the approved commit'
 
+if docker container inspect sub2api-risk-control >/dev/null 2>&1; then
+  fail 'retired legacy container sub2api-risk-control still exists'
+fi
+
+docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" config --quiet || fail 'compose configuration invalid'
+rendered_risk_url="$(
+  docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" config --format json |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["sub2api"]["environment"].get("RISK_CONTROL_URL", ""))'
+)" || fail 'could not read rendered risk-control URL'
+[[ "$rendered_risk_url" == 'http://risk-control:8090' ]] || fail "rendered RISK_CONTROL_URL must be http://risk-control:8090, got $rendered_risk_url"
+
 log "Backing up approved release $APPROVED_COMMIT"
 docker exec sub2api-postgres pg_dump -U sub2api -d sub2api -Fc > "$BACKUP_DIR/sub2api_db.dump" || fail 'database backup failed'
 cp -p "$ENV_FILE" "$BACKUP_DIR/main.env"
@@ -48,24 +59,23 @@ if [[ -n "$old_main_image" ]]; then
 fi
 old_risk_image="$(docker inspect risk-control --format '{{.Image}}' 2>/dev/null || true)"
 if [[ -n "$old_risk_image" ]]; then
-  docker tag "$old_risk_image" "sub2api-risk-control:rollback-$STAMP"
+  docker tag "$old_risk_image" "deploy-risk-control:rollback-$STAMP"
 fi
 sha256sum "$BACKUP_DIR/sub2api_db.dump" > "$BACKUP_DIR/SHA256SUMS"
 
-docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" config --quiet || fail 'compose configuration invalid'
 log 'Building main application image'
 docker build -t sub2api:custom "$REPO" >> "$LOG" 2>&1 || fail 'main image build failed'
-log 'Building v2 risk-control image'
+log 'Building risk-control image'
 docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" build risk-control >> "$LOG" 2>&1 || fail 'risk-control image build failed'
 
-log 'Recreating only main and v2 risk-control services'
+log 'Recreating only main and risk-control services'
 docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" up -d --no-deps --force-recreate sub2api risk-control >> "$LOG" 2>&1 || fail 'service recreate failed'
 
 for attempt in $(seq 1 60); do
   main_health="$(docker inspect sub2api --format '{{.State.Health.Status}}' 2>/dev/null || true)"
   risk_health="$(docker inspect risk-control --format '{{.State.Health.Status}}' 2>/dev/null || true)"
   if [[ "$main_health" == healthy && "$risk_health" == healthy ]] && curl -fsS http://127.0.0.1:8081/health >/dev/null; then
-    docker exec risk-control wget -qO- -T 5 http://risk-control-v2:8090/healthz >/dev/null || fail 'risk-control-v2 health check failed'
+    docker exec risk-control wget -qO- -T 5 http://risk-control:8090/healthz >/dev/null || fail 'risk-control health check failed'
     docker run --rm --entrypoint /app/sub2api sub2api:custom --version 2>&1 | tee -a "$LOG"
     log "PUBLISH OK: commit=$APPROVED_COMMIT backup=$BACKUP_DIR"
     exit 0

@@ -55,8 +55,8 @@ services:
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
 
-      # Independent registration risk service (shadow + baseline_allow by default)
-      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://risk-control-v2:8090}
+      # Integrated risk-control service (shadow + baseline_allow by default)
+      - RISK_CONTROL_URL=${RISK_CONTROL_URL:-http://risk-control:8090}
       - RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
       - RISK_CONTROL_DECISION_FAIL_MODE=${RISK_CONTROL_DECISION_FAIL_MODE:-open}
 
@@ -298,7 +298,7 @@ services:
       start_period: 10s
 
   # ===========================================================================
-  # Independent Risk Control Service
+  # Integrated Risk Control Service
   # ===========================================================================
   risk-control:
     build:
@@ -320,9 +320,7 @@ services:
       risk-control-postgres:
         condition: service_healthy
     networks:
-      sub2api-network:
-        aliases:
-          - risk-control-v2
+      - sub2api-network
     healthcheck:
       test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8090/healthz"]
       interval: 15s
