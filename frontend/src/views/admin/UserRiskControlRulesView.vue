@@ -133,6 +133,7 @@
           {{ testResult.matched ? '命中' : '未命中' }} · 风险分 {{ testResult.score }} · {{ formatRiskLevel(testResult.riskLevel) }} · {{ formatRiskAction(testResult.action) }}
           <span v-if="testResult.conditions.length" class="mt-1 block text-xs text-gray-500">命中条件：{{ testResult.conditions.join('、') }}</span>
         </div>
+        <p v-if="editValidationError" class="text-sm text-red-600 dark:text-red-300" data-testid="edit-rule-error">{{ editValidationError }}</p>
       </form>
       <template #footer>
         <button v-if="editDraft && conflictRuleId === editDraft.id" type="button" class="btn btn-secondary" data-testid="reload-rule" @click="reloadRule(editDraft.id)">重新加载</button>
@@ -173,6 +174,7 @@ const expandedRuleId = ref<number | null>(null)
 const editDraft = ref<Rule | null>(null)
 const selectedTemplateCode = ref('')
 const createValidationError = ref('')
+const editValidationError = ref('')
 const conflictRuleId = ref<number | null>(null)
 const testResult = ref<{ matched: boolean; score: number; riskLevel: string; action: string; conditions: string[] } | null>(null)
 const testedId = ref<number | null>(null)
@@ -199,7 +201,7 @@ const draft = reactive<RuleCreateInput>({ ...ruleTemplates[0], eventTypes: [...r
 
 function errorMessage(err: unknown, fallback = t('admin.userRiskControl.loadFailed')) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : fallback }
 async function load() { loading.value = true; try { rules.value = await userRiskControlV2API.listRules() } catch (err) { error.value = errorMessage(err) } finally { loading.value = false } }
-function openCreateForm() { createOpen.value = true; createValidationError.value = ''; notice.value = ''; if (!selectedTemplateCode.value) applyTemplate(ruleTemplates[0]) }
+function openCreateForm() { applyTemplate(ruleTemplates[0]); createOpen.value = true; notice.value = '' }
 function closeCreateForm() { if (!creating.value) createOpen.value = false }
 function closeEditor() { if (saving.value || testing.value) return; expandedRuleId.value = null; editDraft.value = null; testResult.value = null; testedId.value = null }
 function toggleEditor(id: number) {
@@ -207,20 +209,25 @@ function toggleEditor(id: number) {
   if (!rule) return
   expandedRuleId.value = id
   editDraft.value = { ...rule, eventTypes: [...(rule.eventTypes || [])] }
+  editValidationError.value = ''
+  conflictRuleId.value = null
   notice.value = ''
   testResult.value = null
   testedId.value = null
 }
 function applyTemplate(template: RuleCreateInput) { Object.assign(draft, template, { eventTypes: [...template.eventTypes] }); selectedTemplateCode.value = template.code; createValidationError.value = '' }
+function validateRuleFields(rule: Pick<RuleCreateInput, 'windowSeconds' | 'threshold' | 'score' | 'riskLevel' | 'action'>) {
+  if (!Number.isFinite(rule.windowSeconds) || rule.windowSeconds <= 0) return '时间窗口必须大于 0。'
+  if (!Number.isFinite(rule.threshold) || rule.threshold <= 0) return '阈值必须大于 0。'
+  if (!Number.isFinite(rule.score) || rule.score < 0 || rule.score > 100) return '风险分必须在 0 到 100 之间。'
+  if (!rule.riskLevel || !rule.action) return '风险等级和处置动作不能为空。'
+  return ''
+}
 function validateDraft() {
   if (!/^[a-z0-9][a-z0-9_-]{1,79}$/.test(draft.code.trim())) return '规则编码只能使用小写字母、数字、下划线和短横线。'
   if (!draft.name?.trim()) return '规则名称不能为空。'
   if (!draft.eventTypes?.[0]) return '请选择事件类型。'
-  if (!Number.isFinite(draft.windowSeconds) || draft.windowSeconds <= 0) return '时间窗口必须大于 0。'
-  if (!Number.isFinite(draft.threshold) || draft.threshold <= 0) return '阈值必须大于 0。'
-  if (!Number.isFinite(draft.score) || draft.score < 0 || draft.score > 100) return '风险分必须在 0 到 100 之间。'
-  if (!draft.riskLevel || !draft.action) return '风险等级和处置动作不能为空。'
-  return ''
+  return validateRuleFields(draft)
 }
 async function submitCreate() {
   const validation = validateDraft()
@@ -229,6 +236,8 @@ async function submitCreate() {
   try { const created = await userRiskControlV2API.createRule({ ...draft, code: draft.code.trim(), name: draft.name?.trim(), eventTypes: [draft.eventTypes[0]] }); rules.value = [created, ...rules.value]; createOpen.value = false; notice.value = '规则已创建' } catch (err) { createValidationError.value = errorMessage(err, '规则创建失败') } finally { creating.value = false }
 }
 async function save(rule: Rule) {
+  const validation = validateRuleFields(rule)
+  if (validation) { editValidationError.value = validation; return }
   saving.value = true; error.value = ''; notice.value = ''; conflictRuleId.value = null
   try {
     const result = await userRiskControlV2API.updateRule(rule.id, rule)
@@ -237,13 +246,17 @@ async function save(rule: Rule) {
     if (index >= 0) rules.value[index] = updated
     editDraft.value = updated
     notice.value = '规则已保存'
-  } catch (err) { conflictRuleId.value = rule.id; error.value = errorMessage(err, t('admin.userRiskControl.saveFailed')) } finally { saving.value = false }
+  } catch (err) {
+    if (typeof err === 'object' && err !== null && 'status' in err && err.status === 409) conflictRuleId.value = rule.id
+    error.value = errorMessage(err, t('admin.userRiskControl.saveFailed'))
+  } finally { saving.value = false }
 }
 async function reloadRule(id: number) {
   try {
     const latest = await userRiskControlV2API.listRules()
     rules.value = latest
     conflictRuleId.value = null
+    editValidationError.value = ''
     const rule = latest.find((item) => item.id === id)
     editDraft.value = rule ? { ...rule, eventTypes: [...(rule.eventTypes || [])] } : null
   } catch (err) { error.value = errorMessage(err) }

@@ -196,7 +196,7 @@ async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListRespons
 
 async function getUserDetail(id: number): Promise<RiskUserDetail> {
   const riskPromise = mainAdminClient
-    .get<{ id: number; username: string; account_status: AccountStatus; risk_type: string; risk_level: RiskLevel; score: number; event_count: number; ip_count?: number; device_count?: number; last_event_at?: string; timeline: Array<Record<string, unknown>> }>(`/admin/user-risk-control/users/${id}`)
+    .get<{ id: number; username: string; account_status: AccountStatus; risk_type: string; risk_level: RiskLevel; score: number; event_count: number; ip_count?: number; device_count?: number; last_event_at?: string; timeline?: Array<Record<string, unknown>> }>(`/admin/user-risk-control/users/${id}`)
     .then(({ data }) => data)
     .catch((error) => {
       if (error?.response?.status === 404 || error?.status === 404) return null
@@ -213,7 +213,8 @@ async function getUserDetail(id: number): Promise<RiskUserDetail> {
     }
   }
   const data = risk
-  const events: RiskEvent[] = data.timeline.map((event) => ({
+  const timeline = Array.isArray(data.timeline) ? data.timeline : []
+  const events: RiskEvent[] = timeline.map((event) => ({
     id: Number(event.id), type: String(event.event_type || ''), risk_type: event.risk_type as RiskEvent['risk_type'], risk_level: event.risk_level as RiskLevel | undefined,
     score: Number(event.score || 0), reason: formatRiskReason(event.reason, { eventType: String(event.risk_type || event.event_type || ''), ruleCode: Array.isArray(event.rule_codes) ? String(event.rule_codes[0] || '') : '' }), error_code: String(event.error_code || ''), endpoint: String(event.endpoint || ''), model: String(event.model || ''), ip: String(event.ip || ''), device_id: String(event.device_id || ''), decision: String(event.decision || ''), rule_codes: Array.isArray(event.rule_codes) ? event.rule_codes.map(String) : [], evidence: (event.evidence || {}) as Record<string, unknown>, occurred_at: String(event.occurred_at || event.created_at || ''),
   }))
@@ -326,18 +327,33 @@ async function testRule(rule: Rule, input: Record<string, unknown>) {
 
 async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<RiskAuditRecord>> {
   const action = filters.action === 'rule_update' ? 'update_rule' : filters.action
+  const admins = await fetchAllMainUsers({ role: 'admin' })
+  const adminByID = new Map(admins.items.map((admin) => [admin.id, admin]))
+  const actorQuery = filters.actor?.trim()
+  let actorID: number | undefined
+  if (actorQuery) {
+    if (/^\d+$/.test(actorQuery)) actorID = Number(actorQuery)
+    else {
+      const normalized = actorQuery.toLocaleLowerCase()
+      const matched = admins.items.find((admin) => admin.email.toLocaleLowerCase() === normalized || admin.username.toLocaleLowerCase() === normalized)
+      if (!matched) return { items: [], total: 0, page: filters.page || 1, page_size: filters.pageSize || 20 }
+      actorID = matched.id
+    }
+  }
   const { data } = await mainAdminClient.get<{ items: Array<Record<string, unknown>>; total: number; page?: number; page_size?: number }>('/admin/user-risk-control/audit', {
-    params: compactParams({ action, target_user_id: filters.targetUserId, target: filters.target, actor_id: filters.actor, result: filters.result, from: filters.from, to: filters.to, sort_by: filters.sortBy, sort_order: filters.sortOrder, page: filters.page || 1, limit: filters.pageSize || 20 }),
+    params: compactParams({ action, target_user_id: filters.targetUserId, target: filters.target, actor_id: actorID, result: filters.result, from: filters.from, to: filters.to, sort_by: filters.sortBy, sort_order: filters.sortOrder, page: filters.page || 1, limit: filters.pageSize || 20 }),
   })
   return { total: data.total, page: data.page || filters.page || 1, page_size: data.page_size || filters.pageSize || 20, items: data.items.map((record) => {
     const metadata = (record.metadata || {}) as Record<string, unknown>
+    const recordActorID = Number(record.actor_id || 0)
+    const actor = adminByID.get(recordActorID)
     return {
-      id: Number(record.id), actor: record.actor_name ? String(record.actor_name) : record.actor_id ? String(record.actor_id) : undefined,
+      id: Number(record.id), actor: actor?.email || actor?.username || (recordActorID ? String(recordActorID) : undefined),
       target_type: String(record.target_type || ''), target_id: String(record.target_id || ''),
       target_user_id: record.target_type === 'user' ? Number(record.target_id || 0) : 0,
       action: String(record.action), before_status: metadata.before_status as AccountStatus | null || null,
       after_status: metadata.after_status as AccountStatus | null || null, reason: String(record.reason || ''), failure_reason: String(record.failure_reason || metadata.failure_reason || ''), batch_id: String(record.batch_id || metadata.batch_id || ''), request_id: String(record.request_id || metadata.request_id || ''),
-      result: String(record.result || 'success') as 'success' | 'failed', created_at: String(record.created_at || ''),
+      result: String(record.result || 'success') as RiskAuditRecord['result'], created_at: String(record.created_at || ''),
     }
   }) }
 }

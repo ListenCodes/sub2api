@@ -106,7 +106,7 @@ describe('UserRiskControlRulesView', () => {
 
   it('shows the upstream revision conflict instead of hiding it behind a generic fallback', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: 'Login failures', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
-    vi.mocked(userRiskControlV2API.updateRule).mockRejectedValue({ message: 'rule revision conflict' })
+    vi.mocked(userRiskControlV2API.updateRule).mockRejectedValue({ status: 409, message: 'rule revision conflict' })
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
@@ -114,6 +114,20 @@ describe('UserRiskControlRulesView', () => {
     await clickBody('[data-testid="save-rule"]')
 
     expect(wrapper.text()).toContain('rule revision conflict')
+  })
+
+  it('rejects invalid edited rule values before sending the update request', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: 'Login failures', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
+
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
+    await setBodyValue('[data-testid="rule-threshold"]', '')
+    await clickBody('[data-testid="save-rule"]')
+
+    expect(userRiskControlV2API.updateRule).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('阈值必须大于 0')
+    expect(document.body.querySelector('[data-testid="reload-rule"]')).toBeNull()
   })
 
   it('validates and creates a scenario rule through the admin API', async () => {
@@ -145,5 +159,20 @@ describe('UserRiskControlRulesView', () => {
     await clickBody('[data-testid="create-rule"]')
     expect(userRiskControlV2API.createRule).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('规则编码只能使用小写字母、数字、下划线和短横线')
+  })
+
+  it('resets the new rule draft whenever the dialog is reopened', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="new-rule"]').trigger('click')
+    await setBodyValue('[data-testid="rule-code-input"]', 'unfinished_rule')
+    await wrapper.findComponent(BaseDialog).vm.$emit('close')
+    await wrapper.get('[data-testid="new-rule"]').trigger('click')
+
+    const codeInput = bodyElement('[data-testid="rule-code-input"]').querySelector<HTMLInputElement>('input')
+    expect(codeInput?.value).toBe('registration_abuse')
+    expect(bodyElement('[data-testid="template-registration_abuse"]').getAttribute('aria-pressed')).toBe('true')
   })
 })

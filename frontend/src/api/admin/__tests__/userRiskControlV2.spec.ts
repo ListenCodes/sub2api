@@ -79,15 +79,18 @@ describe('userRiskControlV2API', () => {
     expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules/test', expect.objectContaining({ rule: expect.objectContaining({ enabled: true }) }))
   })
 
-  it('passes audit filters to the audit endpoint', async () => {
-    const get = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, actor_name: 'qa-admin', action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
+  it('resolves an administrator account to the audit actor id and displays the account', async () => {
+    const get = vi.spyOn(mainAdminClient, 'get')
+      .mockResolvedValueOnce({ data: { items: [{ id: 11, username: 'qa-admin', email: 'qa@example.com', status: 'active', role: 'admin' }], total: 1 } } as never)
+      .mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
 
-    await expect(userRiskControlV2API.listAudit({ action: 'ban', targetUserId: 7, result: 'success', page: 2, pageSize: 20 })).resolves.toMatchObject({
-      items: [{ actor: 'qa-admin', target_user_id: 7, before_status: 'active', after_status: 'disabled', reason: 'Repeated failures' }],
+    await expect(userRiskControlV2API.listAudit({ actor: 'qa@example.com', action: 'ban', targetUserId: 7, result: 'success', page: 2, pageSize: 20 })).resolves.toMatchObject({
+      items: [{ actor: 'qa@example.com', target_user_id: 7, before_status: 'active', after_status: 'disabled', reason: 'Repeated failures' }],
     })
 
+    expect(get).toHaveBeenCalledWith('/admin/users', { params: expect.objectContaining({ role: 'admin', page: 1, page_size: 1000 }) })
     expect(get).toHaveBeenCalledWith('/admin/user-risk-control/audit', {
-      params: { action: 'ban', target_user_id: 7, result: 'success', page: 2, limit: 20 },
+      params: { action: 'ban', target_user_id: 7, actor_id: 11, result: 'success', page: 2, limit: 20 },
     })
   })
 
@@ -98,6 +101,7 @@ describe('userRiskControlV2API', () => {
       .mockResolvedValueOnce({
       data: { id: 9, username: 'NoRiskUser', email: 'no-risk@example.com', status: 'active' },
     } as never)
+      .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
       .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
 
     await expect(userRiskControlV2API.getUserDetail(9)).resolves.toMatchObject({
@@ -112,6 +116,7 @@ describe('userRiskControlV2API', () => {
       .mockResolvedValueOnce({
       data: { id: 7, username: 'Alice', email: 'alice@example.com', status: 'disabled' },
     } as never)
+      .mockResolvedValueOnce({ data: { items: [{ id: 11, username: 'qa-admin', email: 'qa@example.com', status: 'active', role: 'admin' }], total: 1 } } as never)
       .mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
 
     await expect(userRiskControlV2API.getUserDetail(7)).resolves.toMatchObject({
@@ -121,11 +126,22 @@ describe('userRiskControlV2API', () => {
     })
   })
 
+  it('treats a missing risk timeline as an empty event list', async () => {
+    vi.spyOn(mainAdminClient, 'get')
+      .mockResolvedValueOnce({ data: { id: 7, username: 'Alice', account_status: 'active', risk_type: 'login_failure', risk_level: 'high', score: 80, event_count: 0 } } as never)
+      .mockResolvedValueOnce({ data: { id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' } } as never)
+      .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
+      .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
+
+    await expect(userRiskControlV2API.getUserDetail(7)).resolves.toMatchObject({ events: [] })
+  })
+
   it('does not fabricate an active account when the main user API fails', async () => {
     const riskNotFound = Object.assign(new Error('not found'), { response: { status: 404 } })
     vi.spyOn(mainAdminClient, 'get')
       .mockRejectedValueOnce(riskNotFound)
       .mockRejectedValueOnce(new Error('main service unavailable'))
+      .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
       .mockResolvedValueOnce({ data: { items: [], total: 0 } } as never)
 
     await expect(userRiskControlV2API.getUserDetail(9)).rejects.toThrow('main service unavailable')
