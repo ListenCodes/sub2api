@@ -57,7 +57,12 @@ old_main_image="$(docker inspect sub2api --format '{{.Image}}' 2>/dev/null || tr
 if [[ -n "$old_main_image" ]]; then
   docker tag "$old_main_image" "sub2api:rollback-$STAMP"
 fi
-old_extension_image="$(docker inspect extensions-self --format '{{.Image}}' 2>/dev/null || docker inspect risk-control --format '{{.Image}}' 2>/dev/null || true)"
+old_extension_image=""
+if docker container inspect extensions-self >/dev/null 2>&1; then
+  old_extension_image="$(docker inspect extensions-self --format '{{.Image}}')"
+elif docker container inspect risk-control >/dev/null 2>&1; then
+  old_extension_image="$(docker inspect risk-control --format '{{.Image}}')"
+fi
 if [[ -n "$old_extension_image" ]]; then
   docker tag "$old_extension_image" "deploy-extensions-self:rollback-$STAMP"
 fi

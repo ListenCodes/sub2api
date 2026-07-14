@@ -47,4 +47,6 @@ test('the publisher targets extensions-self without managing the risk database l
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
+  assert.doesNotMatch(publisher, /docker inspect extensions-self[^\n]*\|\| docker inspect risk-control/)
+  assert.match(publisher, /elif docker container inspect risk-control/)
 })
