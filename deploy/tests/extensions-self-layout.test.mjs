@@ -26,6 +26,11 @@ test('homepage navigation escapes the iframe without changing destinations', () 
   }
 })
 
+test('homepage clips decorative overflow at the document boundary', () => {
+  const homepage = read('extensions-self/homepage/index.html')
+  assert.match(homepage, /html,body\{[^}]*overflow-x:hidden/)
+})
+
 test('compose runs one extensions-self application container and preserves the risk database', () => {
   for (const composeFile of ['deploy/docker-compose.yml', 'deploy/docker-compose.local.yml']) {
     const compose = read(composeFile)
