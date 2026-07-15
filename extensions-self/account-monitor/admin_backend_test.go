@@ -209,6 +209,135 @@ func TestRiskFilterAndSortKeepUnavailableAccountsLast(t *testing.T) {
 	}
 }
 
+func TestAdminServiceAccountsUsesFullInventory(t *testing.T) {
+	repoDB, repoMock := newSourceMock(t)
+	sourceDB, sourceMock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	expectAccountInventory(sourceMock)
+	repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(
+		sqlmock.NewRows(accountSummaryColumns()).AddRow(
+			int64(2), nil, "openai", int64(8), int64(7), int64(1), int64(120),
+			1.5, 0.8, 200.0, int64(350), to.Add(-time.Minute), to.Add(-2*time.Minute),
+			int64(1), int64(2), int64(0), int64(0), int64(0), int64(1), 0.875,
+		),
+	)
+	expectAccountHealth(repoMock, to, int64(2))
+
+	service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+	service.now = func() time.Time { return to }
+	result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := result.(PageResponse)
+	items := page.Items.([]AccountSummary)
+	if page.Total != 3 || len(items) != 3 {
+		t.Fatalf("full inventory page = %+v items=%+v", page, items)
+	}
+	idle := accountSummaryByID(t, items, 1)
+	if idle.Attempts != 0 || idle.Successes != 0 || idle.Failures != 0 || idle.Health.RiskScoreAvailable {
+		t.Fatalf("idle account = %+v, want zero metrics and unavailable risk", idle)
+	}
+	multi := accountSummaryByID(t, items, 3)
+	groups := accountSummaryGroups(t, multi)
+	if len(groups) != 2 || groups[0].GroupID != 11 || groups[1].GroupID != 12 {
+		t.Fatalf("multi-account groups = %+v", groups)
+	}
+	if err := repoMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceAccountsFiltersMultipleGroups(t *testing.T) {
+	tests := []struct {
+		name       string
+		query      map[string]string
+		factRows   *sqlmock.Rows
+		wantIDs    []int64
+		wantGroups []int64
+	}{
+		{
+			name:  "concrete group keeps every membership",
+			query: map[string]string{"group_id": "11"},
+			factRows: sqlmock.NewRows(accountSummaryColumns()).AddRow(
+				int64(3), nil, "anthropic", int64(4), int64(4), int64(0), int64(20),
+				0.4, 0.2, 150.0, int64(220), time.Date(2026, 7, 15, 0, 50, 0, 0, time.UTC), time.Time{},
+				int64(1), int64(1), int64(0), int64(0), int64(0), int64(1), 1.0,
+			),
+			wantIDs: []int64{3}, wantGroups: []int64{11, 12},
+		},
+		{
+			name:     "deleted membership counts as ungrouped",
+			query:    map[string]string{"group_id": "ungrouped"},
+			factRows: sqlmock.NewRows(accountSummaryColumns()),
+			wantIDs:  []int64{1},
+		},
+		{
+			name:  "fact filter excludes zero matches",
+			query: map[string]string{"model": "gpt"},
+			factRows: sqlmock.NewRows(accountSummaryColumns()).AddRow(
+				int64(2), nil, "openai", int64(2), int64(2), int64(0), int64(10),
+				0.2, 0.1, 100.0, int64(120), time.Date(2026, 7, 15, 0, 55, 0, 0, time.UTC), time.Time{},
+				int64(1), int64(1), int64(0), int64(0), int64(0), int64(1), 1.0,
+			),
+			wantIDs: []int64{2}, wantGroups: []int64{10},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoDB, repoMock := newSourceMock(t)
+			sourceDB, sourceMock := newSourceMock(t)
+			from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+			to := from.Add(time.Hour)
+			expectAccountInventory(sourceMock)
+			repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(test.factRows)
+			if test.name != "deleted membership counts as ungrouped" {
+				expectAccountHealth(repoMock, to, test.wantIDs...)
+			}
+
+			service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+			service.now = func() time.Time { return to }
+			result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+				Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20, Query: test.query,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			page := result.(PageResponse)
+			items := page.Items.([]AccountSummary)
+			if page.Total != int64(len(test.wantIDs)) || len(items) != len(test.wantIDs) {
+				t.Fatalf("page = %+v items=%+v", page, items)
+			}
+			for index, wantID := range test.wantIDs {
+				if items[index].AccountID != wantID {
+					t.Fatalf("account IDs = %+v, want %v", items, test.wantIDs)
+				}
+			}
+			if len(test.wantGroups) > 0 {
+				groups := accountSummaryGroups(t, items[0])
+				for index, wantID := range test.wantGroups {
+					if index >= len(groups) || groups[index].GroupID != wantID {
+						t.Fatalf("groups = %+v, want %v", groups, test.wantGroups)
+					}
+				}
+			}
+			if err := repoMock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+			if err := sourceMock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
@@ -405,21 +534,31 @@ func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
 	sourceDB, sourceMock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
-	sourceMock.ExpectQuery(regexp.QuoteMeta(accountIDsByStatusQuery)).WithArgs("active").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)).AddRow(int64(10)))
-	repoMock.ExpectQuery(`SELECT stats\.\*`).WithArgs(
-		from, to, "physical", 20, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "active", sqlmock.AnyArg(),
-	).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()))
+	sourceMock.ExpectQuery(regexp.QuoteMeta(allAccountDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}).
+			AddRow(int64(9), nil, "active account", "openai", "active", true, nil).
+			AddRow(int64(10), nil, "inactive account", "openai", "inactive", false, nil),
+	)
+	sourceMock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_deleted_at"}),
+	)
+	repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
+		AddRow(int64(9), nil, "openai", int64(2), int64(2), int64(0), int64(10), 0.2, 0.1, 100.0, int64(120), to, time.Time{}, int64(1), int64(1), int64(0), int64(0), int64(0), int64(2), 1.0).
+		AddRow(int64(10), nil, "openai", int64(3), int64(3), int64(0), int64(20), 0.3, 0.2, 110.0, int64(130), to, time.Time{}, int64(1), int64(1), int64(0), int64(0), int64(0), int64(2), 1.0))
+	expectAccountHealth(repoMock, to, int64(9))
 
-	result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
-		ExecuteAdmin(context.Background(), AdminRequest{
-			Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20,
-			Query: map[string]string{"account_status": "active"},
-		})
+	service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+	service.now = func() time.Time { return to }
+	result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20,
+		Query: map[string]string{"account_status": "active"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.(PageResponse).Total != 0 {
+	page := result.(PageResponse)
+	items := page.Items.([]AccountSummary)
+	if page.Total != 1 || len(items) != 1 || items[0].AccountID != 9 || items[0].Status != "active" {
 		t.Fatalf("result = %+v", result)
 	}
 	if err := repoMock.ExpectationsWereMet(); err != nil {
@@ -591,4 +730,68 @@ func accountSummaryColumns() []string {
 
 func healthMetricColumns() []string {
 	return []string{"account_id", "parent_account_id", "platform", "attempts", "successes", "failures", "last_success_at", "consecutive_model_failures", "auth_quota_failures_15m", "rate_overload_ratio_15m", "attempts_24h", "top_user_ratio_24h", "current_hour_volume", "baseline_hour_volume", "p95_duration_ms", "baseline_p95_duration_ms", "top_error_category", "top_error_count"}
+}
+
+func expectAccountInventory(mock sqlmock.Sqlmock) {
+	deletedAt := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(regexp.QuoteMeta(allAccountDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}).
+			AddRow(int64(1), nil, "idle", "grok", "active", true, nil).
+			AddRow(int64(2), nil, "busy", "openai", "active", true, nil).
+			AddRow(int64(3), nil, "multi", "anthropic", "active", true, nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_deleted_at"}).
+			AddRow(int64(1), int64(99), "Retired", "grok", "inactive", deletedAt).
+			AddRow(int64(2), int64(10), "GPT", "openai", "active", nil).
+			AddRow(int64(3), int64(11), "Claude", "anthropic", "active", nil).
+			AddRow(int64(3), int64(12), "Shared", "anthropic", "active", nil),
+	)
+}
+
+func expectAccountHealth(mock sqlmock.Sqlmock, now time.Time, accountIDs ...int64) {
+	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}),
+	)
+	rows := sqlmock.NewRows(healthMetricColumns())
+	for _, accountID := range accountIDs {
+		rows.AddRow(
+			accountID, int64(0), "openai", int64(1), int64(1), int64(0), now.Add(-time.Minute),
+			0, 0, 0.0, int64(1), 0.0, int64(1), 1.0, int64(100), 100.0, "", int64(0),
+		)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).WithArgs(now.Add(-time.Hour), now, "physical", sqlmock.AnyArg()).WillReturnRows(rows)
+}
+
+func accountSummaryByID(t *testing.T, items []AccountSummary, accountID int64) AccountSummary {
+	t.Helper()
+	for _, item := range items {
+		if item.AccountID == accountID {
+			return item
+		}
+	}
+	t.Fatalf("account %d not found in %+v", accountID, items)
+	return AccountSummary{}
+}
+
+type accountGroupContract struct {
+	GroupID  int64  `json:"group_id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+}
+
+func accountSummaryGroups(t *testing.T, item AccountSummary) []accountGroupContract {
+	t.Helper()
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Groups []accountGroupContract `json:"groups"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload.Groups
 }
