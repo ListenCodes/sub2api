@@ -1,7 +1,8 @@
-import { inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { inject, onBeforeUnmount, reactive, watch } from 'vue'
 import { routeLocationKey, routerKey, type LocationQuery, type LocationQueryRaw } from 'vue-router'
 
 import { accountMonitorAPI, type AccountFilters, type AccountPageSize } from '@/api/admin/accountMonitor'
+import { getConfiguredTablePageSizeOptions, normalizeTablePageSize } from '@/utils/tablePreferences'
 
 export type AccountRange = 'today' | '24h' | '7d' | '30d' | '90d' | 'custom'
 export type AccountDetailTab = 'models' | 'users' | 'errors' | 'trends' | 'attempts' | 'media'
@@ -19,7 +20,7 @@ export interface AccountMonitorFilterState extends AccountFilters {
 
 const RANGES: AccountRange[] = ['today', '24h', '7d', '30d', '90d', 'custom']
 const TABS: AccountDetailTab[] = ['models', 'users', 'errors', 'trends', 'attempts', 'media']
-const PAGE_SIZES: AccountPageSize[] = [20, 50, 100]
+const PAGE_SIZES = () => getConfiguredTablePageSizeOptions()
 
 function queryText(query: LocationQuery | Record<string, unknown>, key: string): string {
   const value = query[key]
@@ -44,12 +45,13 @@ export function parseAccountMonitorQuery(query: LocationQuery | Record<string, u
   const pageSizeValue = positiveInteger(queryText(query, 'page_size')) as AccountPageSize | undefined
   const detailTabValue = queryText(query, 'tab') as AccountDetailTab
   const rollupValue = queryText(query, 'rollup')
+	const groupValue = queryText(query, 'group_id')
   return {
     range,
     from: queryText(query, 'from') || undefined,
     to: queryText(query, 'to') || undefined,
     page: positiveInteger(queryText(query, 'page')) ?? 1,
-    pageSize: pageSizeValue && PAGE_SIZES.includes(pageSizeValue) ? pageSizeValue : 20,
+		pageSize: pageSizeValue && PAGE_SIZES().includes(pageSizeValue) ? pageSizeValue : normalizeTablePageSize(pageSizeValue),
     sortBy: queryText(query, 'sort_by') || 'attempts',
     sortOrder: queryText(query, 'sort_order') === 'asc' ? 'asc' : 'desc',
     platform: queryText(query, 'platform') || undefined,
@@ -66,6 +68,7 @@ export function parseAccountMonitorQuery(query: LocationQuery | Record<string, u
     rollup: rollupValue === 'parent' ? 'parent' : 'physical',
     minRiskScore: boundedRisk(queryText(query, 'min_risk_score')),
     maxRiskScore: boundedRisk(queryText(query, 'max_risk_score')),
+		groupID: groupValue === 'ungrouped' ? 'ungrouped' : positiveInteger(groupValue),
     selectedAccountID: positiveInteger(queryText(query, 'account')),
     detailTab: TABS.includes(detailTabValue) ? detailTabValue : 'models',
   }
@@ -90,6 +93,7 @@ export function serializeAccountMonitorQuery(state: AccountMonitorFilterState): 
     rollup: state.rollup,
     min_risk_score: state.minRiskScore === undefined ? undefined : String(state.minRiskScore),
     max_risk_score: state.maxRiskScore === undefined ? undefined : String(state.maxRiskScore),
+		group_id: state.groupID === undefined ? undefined : String(state.groupID),
     sort_by: state.sortBy,
     sort_order: state.sortOrder,
     page: String(state.page),
@@ -122,9 +126,7 @@ export function useAccountMonitorFilters(refreshHandler?: () => Promise<void> | 
   const route = inject(routeLocationKey, null)
   const router = inject(routerKey, null)
   const state = reactive(parseAccountMonitorQuery(route?.query || {}))
-  const autoRefresh = ref(true)
   let writingQuery = false
-  let refreshTimer: number | undefined
 
   async function syncQuery() {
     if (!route || !router) return
@@ -161,7 +163,7 @@ export function useAccountMonitorFilters(refreshHandler?: () => Promise<void> | 
   }
 
   async function setPageSize(pageSize: AccountPageSize) {
-    state.pageSize = PAGE_SIZES.includes(pageSize) ? pageSize : 20
+		state.pageSize = PAGE_SIZES().includes(pageSize) ? pageSize : normalizeTablePageSize(pageSize)
     state.page = 1
     await syncQuery()
     await refresh()
@@ -178,8 +180,6 @@ export function useAccountMonitorFilters(refreshHandler?: () => Promise<void> | 
   }
 
   function dispose() {
-    if (refreshTimer !== undefined) window.clearInterval(refreshTimer)
-    refreshTimer = undefined
     accountMonitorAPI.dispose()
   }
 
@@ -189,12 +189,7 @@ export function useAccountMonitorFilters(refreshHandler?: () => Promise<void> | 
     void refresh()
   })
 
-  onMounted(() => {
-    if (refreshHandler) refreshTimer = window.setInterval(() => {
-      if (autoRefresh.value) void refresh()
-    }, 60_000)
-  })
   onBeforeUnmount(dispose)
 
-  return { state, autoRefresh, refresh, setFilters, resetFilters, setPage, setPageSize, selectAccount, setDetailTab, dispose }
+  return { state, refresh, setFilters, resetFilters, setPage, setPageSize, selectAccount, setDetailTab, dispose }
 }

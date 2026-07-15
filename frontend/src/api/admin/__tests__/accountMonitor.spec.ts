@@ -52,6 +52,20 @@ describe('accountMonitorAPI', () => {
     })
   })
 
+  it('preserves page size 1000 and concrete or ungrouped account group filters', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { items: [], total: 895, page: 1, page_size: 1000 } })
+
+    await accountMonitorAPI.listAccounts({ page: 1, pageSize: 1000, groupID: 'ungrouped' })
+    expect(apiClient.get).toHaveBeenLastCalledWith('/admin/extensions-self/account-monitor/accounts', expect.objectContaining({
+      params: expect.objectContaining({ page_size: 1000, group_id: 'ungrouped' })
+    }))
+
+    await accountMonitorAPI.listAccounts({ page: 1, pageSize: 1000, groupID: 11 })
+    expect(apiClient.get).toHaveBeenLastCalledWith('/admin/extensions-self/account-monitor/accounts', expect.objectContaining({
+      params: expect.objectContaining({ page_size: 1000, group_id: 11 })
+    }))
+  })
+
   it.each([12, 24, 48])('accepts group page size %i', async (pageSize) => {
     vi.mocked(apiClient.get).mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: pageSize } })
     await accountMonitorAPI.listGroups({ page: 1, pageSize, range: '6h' })
@@ -59,7 +73,8 @@ describe('accountMonitorAPI', () => {
   })
 
   it('rejects invalid page sizes and ranges before issuing a request', async () => {
-    await expect(accountMonitorAPI.listAccounts({ page: 1, pageSize: 12 })).rejects.toThrow('page size')
+		await expect(accountMonitorAPI.listAccounts({ page: 1, pageSize: 4 })).rejects.toThrow('page size')
+		await expect(accountMonitorAPI.listAccounts({ page: 1, pageSize: 1001 })).rejects.toThrow('page size')
     await expect(accountMonitorAPI.listGroups({ page: 1, pageSize: 12, range: '2h' as '6h' })).rejects.toThrow('group range')
     expect(apiClient.get).not.toHaveBeenCalled()
   })

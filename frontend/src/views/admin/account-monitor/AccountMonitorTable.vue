@@ -2,7 +2,8 @@
   <DataTable :columns="columns" :data="accounts" :loading="loading" row-key="account_id" :clickable-rows="true" :sticky-first-column="false" :sticky-actions-column="false" @row-click="$emit('select', $event)">
     <template #header-risk><button type="button" data-testid="sort-risk-score" :aria-sort="sortBy === 'risk_score' ? sortOrder === 'desc' ? 'descending' : 'ascending' : 'none'" @click.stop="$emit('sort-risk')">风险分 {{ sortBy === 'risk_score' ? sortOrder === 'desc' ? '↓' : '↑' : '↕' }}</button></template>
     <template #cell-account="{ row }"><div :data-testid="`account-row-${row.account_id}`" class="min-w-0"><p class="truncate font-medium text-gray-950 dark:text-white">{{ row.account_name || `账号 ${row.account_id}` }}</p><p class="text-xs text-gray-500">ID {{ row.account_id }}<span v-if="row.parent_account_id"> · 母账号 {{ row.parent_account_id }}</span></p></div></template>
-    <template #cell-platform="{ row }"><p>{{ row.platform || '-' }}</p><p class="text-xs text-gray-500">{{ statusLabel(row.status) }}</p></template>
+		<template #cell-platform="{ row }"><PlatformBadge :platform="row.platform" /><p class="mt-1 text-xs text-gray-500">{{ statusLabel(row.status) }}</p></template>
+		<template #cell-groups="{ row }"><div v-if="row.groups?.length" class="flex max-w-72 flex-wrap gap-1.5"><span v-for="group in row.groups" :key="group.group_id" class="inline-flex items-center gap-1 text-xs text-gray-700 dark:text-gray-200"><PlatformBadge :platform="group.platform" />{{ group.name }}</span></div><span v-else class="text-xs text-gray-500">未分组</span></template>
     <template #cell-success="{ row }">{{ percent(row.successes, row.attempts) }}</template>
     <template #cell-cost="{ row }"><p>${{ number(row.user_cost) }}</p><p class="text-xs text-gray-500">账号 ${{ number(row.account_cost) }}</p></template>
     <template #cell-latency="{ row }"><p>{{ number(row.average_duration_ms) }} ms</p><p class="text-xs text-gray-500">P95 {{ number(row.p95_duration_ms) }} ms</p></template>
@@ -15,12 +16,13 @@
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import RiskScoreBadge from '@/components/admin/RiskScoreBadge.vue'
+import PlatformBadge from '@/components/common/PlatformBadge.vue'
 import type { Column } from '@/components/common/types'
 import type { AccountMonitorAccount } from '@/api/admin/accountMonitor'
 defineProps<{ accounts: AccountMonitorAccount[]; loading: boolean; sortBy: string; sortOrder: 'asc' | 'desc' }>()
 defineEmits<{ select: [account: AccountMonitorAccount]; 'sort-risk': [] }>()
 const columns: Column[] = [
-  { key: 'account', label: '账号', class: 'min-w-52' }, { key: 'platform', label: '平台 / 状态', class: 'min-w-32' },
+	{ key: 'account', label: '账号', class: 'min-w-52' }, { key: 'platform', label: '平台 / 状态', class: 'min-w-32' }, { key: 'groups', label: '分组', class: 'min-w-52' },
   { key: 'attempts', label: '尝试', class: 'min-w-24' }, { key: 'success', label: '成功率', class: 'min-w-24' },
   { key: 'failures', label: '失败', class: 'min-w-20' }, { key: 'model_count', label: '模型', class: 'min-w-20' },
   { key: 'user_count', label: '用户', class: 'min-w-20' }, { key: 'tokens', label: 'Token', class: 'min-w-28' },
