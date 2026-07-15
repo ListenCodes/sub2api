@@ -1,5 +1,5 @@
 <template>
-  <BaseDialog :show="show" :title="detail?.group.name || '分组详情'" width="full" :close-on-click-outside="false" :z-index="70" @close="$emit('close')">
+	<BaseDialog :show="show" :title="detail?.group.name || '分组详情'" width="full" :close-on-click-outside="true" :z-index="70" @close="$emit('close')">
     <div v-if="loading" class="flex min-h-64 items-center justify-center text-sm text-gray-500" role="status">正在加载分组详情</div>
     <div v-else-if="error" class="flex min-h-64 flex-col items-center justify-center gap-3 text-center" role="alert"><p class="text-sm text-red-600">{{ error }}</p><button type="button" class="btn btn-secondary" @click="load">重试</button></div>
     <div v-else-if="detail" class="min-w-0" data-testid="group-detail-dialog">

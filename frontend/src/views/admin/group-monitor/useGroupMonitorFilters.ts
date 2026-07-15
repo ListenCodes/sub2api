@@ -1,6 +1,7 @@
 import { inject, reactive, watch } from 'vue'
 import { routeLocationKey, routerKey, type LocationQuery, type LocationQueryRaw } from 'vue-router'
 import type { GroupCallStatus, GroupPageSize, GroupRange } from '@/api/admin/accountMonitor'
+import { getConfiguredTablePageSizeOptions, normalizeTablePageSize } from '@/utils/tablePreferences'
 
 export interface GroupMonitorFilterState {
   range: GroupRange
@@ -15,8 +16,8 @@ export interface GroupMonitorFilterState {
 
 function text(query: LocationQuery | Record<string, unknown>, key: string) { const value = query[key]; return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '') }
 function positive(raw: string) { const value = Number(raw); return Number.isInteger(value) && value > 0 ? value : undefined }
-const ranges: GroupRange[] = ['1h', '6h', '12h', '24h']
-const sizes: GroupPageSize[] = [12, 24, 48]
+const ranges: GroupRange[] = ['1h', '6h', '12h', '24h', '7d', '30d']
+const sizes = () => getConfiguredTablePageSizeOptions()
 const statuses: GroupCallStatus[] = ['normal', 'partial_failure', 'all_failed', 'recently_idle', 'no_data']
 
 export function parseGroupMonitorQuery(query: LocationQuery | Record<string, unknown>): GroupMonitorFilterState {
@@ -24,7 +25,7 @@ export function parseGroupMonitorQuery(query: LocationQuery | Record<string, unk
   const size = positive(text(query, 'page_size')) as GroupPageSize | undefined
   const groupStatus = text(query, 'group_status')
   const callStatus = text(query, 'call_status') as GroupCallStatus
-  return { range: ranges.includes(range) ? range : '6h', query: text(query, 'query'), platform: text(query, 'platform'), groupStatus: groupStatus === 'inactive' || groupStatus === 'all' ? groupStatus : 'active', callStatus: statuses.includes(callStatus) ? callStatus : undefined, page: positive(text(query, 'page')) || 1, pageSize: size && sizes.includes(size) ? size : 12, selectedGroupID: positive(text(query, 'group')) }
+	return { range: ranges.includes(range) ? range : '6h', query: text(query, 'query'), platform: text(query, 'platform'), groupStatus: groupStatus === 'inactive' || groupStatus === 'all' ? groupStatus : 'active', callStatus: statuses.includes(callStatus) ? callStatus : undefined, page: positive(text(query, 'page')) || 1, pageSize: size && sizes().includes(size) ? size : normalizeTablePageSize(size), selectedGroupID: positive(text(query, 'group')) }
 }
 
 export function serializeGroupMonitorQuery(state: GroupMonitorFilterState): LocationQueryRaw {
@@ -41,7 +42,7 @@ export function useGroupMonitorFilters(refresh: () => Promise<void> | void) {
   async function setFilters(next: Partial<GroupMonitorFilterState>) { Object.assign(state, next, { page: 1 }); await sync(); await refresh() }
   async function resetFilters() { const selectedGroupID = state.selectedGroupID; Object.assign(state, parseGroupMonitorQuery({}), { selectedGroupID }); await sync(); await refresh() }
   async function setPage(page: number) { state.page = Math.max(1, Math.floor(page)); await sync(); await refresh() }
-  async function setPageSize(pageSize: GroupPageSize) { state.pageSize = sizes.includes(pageSize) ? pageSize : 12; state.page = 1; await sync(); await refresh() }
+	async function setPageSize(pageSize: GroupPageSize) { state.pageSize = sizes().includes(pageSize) ? pageSize : normalizeTablePageSize(pageSize); state.page = 1; await sync(); await refresh() }
   async function selectGroup(selectedGroupID?: number) { state.selectedGroupID = selectedGroupID; await sync() }
   watch(() => route?.fullPath, () => { if (!route || writing) return; Object.assign(state, parseGroupMonitorQuery(route.query)); void refresh() })
   return { state, setFilters, resetFilters, setPage, setPageSize, selectGroup }

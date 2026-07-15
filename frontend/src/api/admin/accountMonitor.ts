@@ -255,6 +255,7 @@ export interface GroupMonitorCard {
 export type GroupMonitorQuality = DataQualitySnapshot
 
 export interface GroupMonitorGroupsResponse extends PageResponse<GroupMonitorCard> {
+	bucket_seconds?: number
   platforms: string[]
   data_as_of: string | null
   data_quality: GroupMonitorQuality
@@ -275,6 +276,7 @@ export interface GroupMonitorDetailResponse {
   group: GroupMonitorCard
   models: GroupMonitorModel[]
   data_as_of: string
+	bucket_seconds?: number
 }
 
 export interface GroupFilters {
