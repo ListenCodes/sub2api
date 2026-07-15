@@ -3,6 +3,8 @@ package accountmonitor
 import (
 	"fmt"
 	"hash/fnv"
+	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -105,8 +107,10 @@ const (
 )
 
 type Health struct {
-	Level   HealthLevel `json:"level"`
-	Reasons []string    `json:"reasons"`
+	RiskScore          int         `json:"risk_score"`
+	RiskScoreAvailable bool        `json:"risk_score_available"`
+	Level              HealthLevel `json:"level"`
+	Reasons            []string    `json:"reasons"`
 }
 
 type HealthMetrics struct {
@@ -128,15 +132,26 @@ type HealthMetrics struct {
 }
 
 func EvaluateHealth(metrics HealthMetrics, thresholds Thresholds, now time.Time) Health {
-	health := Health{Level: HealthNormal, Reasons: make([]string, 0)}
-	add := func(level HealthLevel, reason string) {
-		if healthRank(level) > healthRank(health.Level) {
-			health.Level = level
-		}
-		health.Reasons = append(health.Reasons, reason)
+	health := Health{
+		RiskScoreAvailable: healthMetricsAvailable(metrics),
+		Level:              HealthNormal,
+		Reasons:            make([]string, 0),
+	}
+	if !health.RiskScoreAvailable {
+		return health
+	}
+	type contribution struct {
+		score  int
+		order  int
+		reason string
+	}
+	contributions := make([]contribution, 0, 8)
+	add := func(score, order int, reason string) {
+		contributions = append(contributions, contribution{score: score, order: order, reason: reason})
 	}
 	if metrics.AuthOrQuotaFailures15M >= thresholds.AuthQuotaFailures15M {
-		add(HealthCritical, fmt.Sprintf("近 15 分钟认证失效或额度不足 %d 次，达到严重阈值 %d 次。", metrics.AuthOrQuotaFailures15M, thresholds.AuthQuotaFailures15M))
+		score := minInt(90, 70+5*(metrics.AuthOrQuotaFailures15M-thresholds.AuthQuotaFailures15M))
+		add(score, 0, fmt.Sprintf("近 15 分钟认证失效或额度不足 %d 次，达到严重阈值 %d 次。", metrics.AuthOrQuotaFailures15M, thresholds.AuthQuotaFailures15M))
 	}
 	if metrics.Attempts1H >= int64(thresholds.MinAttempts1H) {
 		rate := 0.0
@@ -144,35 +159,85 @@ func EvaluateHealth(metrics HealthMetrics, thresholds Thresholds, now time.Time)
 			rate = float64(metrics.Successes1H) / float64(metrics.Attempts1H)
 		}
 		if rate < thresholds.SuccessRate {
+			score := 40
+			if thresholds.SuccessRate > 0 {
+				score += int(math.Round(20 * (thresholds.SuccessRate - rate) / thresholds.SuccessRate))
+			}
+			score = minInt(60, score)
 			reason := fmt.Sprintf("近 1 小时调用 %d 次，失败 %d 次，成功率 %.1f%%，低于 %.1f%% 阈值", metrics.Attempts1H, metrics.Failures1H, rate*100, thresholds.SuccessRate*100)
 			if metrics.TopErrorCount > 0 {
 				reason += fmt.Sprintf("；主要原因：%s %d 次", metrics.TopErrorCategory, metrics.TopErrorCount)
 			}
-			add(HealthAbnormal, reason+"。")
+			add(score, 1, reason+"。")
 		}
 	}
 	if metrics.ConsecutiveModelFailures >= thresholds.ConsecutiveModelFailures {
-		add(HealthAbnormal, fmt.Sprintf("同一实际模型连续失败 %d 次。", metrics.ConsecutiveModelFailures))
+		score := minInt(60, 40+4*(metrics.ConsecutiveModelFailures-thresholds.ConsecutiveModelFailures))
+		add(score, 2, fmt.Sprintf("同一实际模型连续失败 %d 次。", metrics.ConsecutiveModelFailures))
 	}
 	if metrics.RateOrOverloadRatio15M > thresholds.RateErrorsRatio15M {
-		add(HealthAttention, fmt.Sprintf("近 15 分钟限流或过载占比 %.1f%%，高于 %.1f%% 阈值。", metrics.RateOrOverloadRatio15M*100, thresholds.RateErrorsRatio15M*100))
+		score := 20
+		if thresholds.RateErrorsRatio15M < 1 {
+			score += int(math.Round(15 * (metrics.RateOrOverloadRatio15M - thresholds.RateErrorsRatio15M) / (1 - thresholds.RateErrorsRatio15M)))
+		}
+		add(minInt(35, score), 3, fmt.Sprintf("近 15 分钟限流或过载占比 %.1f%%，高于 %.1f%% 阈值。", metrics.RateOrOverloadRatio15M*100, thresholds.RateErrorsRatio15M*100))
 	}
 	if metrics.Attempts1H > 0 && (metrics.LastSuccessAt.IsZero() || now.Sub(metrics.LastSuccessAt) >= thresholds.NoSuccessDuration) {
-		add(HealthAttention, fmt.Sprintf("活跃账号已连续 %s 没有成功调用。", thresholds.NoSuccessDuration))
+		add(25, 4, fmt.Sprintf("活跃账号已连续 %s 没有成功调用。", thresholds.NoSuccessDuration))
+	}
+	if metrics.BaselineP95DurationMS > 0 && float64(metrics.P95DurationMS) > metrics.BaselineP95DurationMS*thresholds.LatencyBaselineRatio {
+		add(20, 5, fmt.Sprintf("P95 延迟 %d ms，高于近 7 天基线 %.1f 倍。", metrics.P95DurationMS, thresholds.LatencyBaselineRatio))
 	}
 	if metrics.Attempts24H >= int64(thresholds.UserConcentrationMinimum) && metrics.TopUserRatio24H > thresholds.UserConcentration {
-		add(HealthAttention, fmt.Sprintf("单用户占近 24 小时调用量 %.1f%%。", metrics.TopUserRatio24H*100))
+		add(20, 6, fmt.Sprintf("单用户占近 24 小时调用量 %.1f%%。", metrics.TopUserRatio24H*100))
 	}
 	if metrics.BaselineHourVolume > 0 {
 		ratio := float64(metrics.CurrentHourVolume) / metrics.BaselineHourVolume
 		if ratio > thresholds.TrafficHighRatio || ratio < thresholds.TrafficLowRatio {
-			add(HealthAttention, fmt.Sprintf("当前小时调用量为近 7 天同时间基线的 %.1f 倍。", ratio))
+			add(15, 7, fmt.Sprintf("当前小时调用量为近 7 天同时间基线的 %.1f 倍。", ratio))
 		}
 	}
-	if metrics.BaselineP95DurationMS > 0 && float64(metrics.P95DurationMS) > metrics.BaselineP95DurationMS*thresholds.LatencyBaselineRatio {
-		add(HealthAttention, fmt.Sprintf("P95 延迟 %d ms，高于近 7 天基线 %.1f 倍。", metrics.P95DurationMS, thresholds.LatencyBaselineRatio))
+	sort.SliceStable(contributions, func(i, j int) bool {
+		if contributions[i].score == contributions[j].score {
+			return contributions[i].order < contributions[j].order
+		}
+		return contributions[i].score > contributions[j].score
+	})
+	for _, item := range contributions {
+		health.RiskScore += item.score
+		health.Reasons = append(health.Reasons, item.reason)
 	}
+	health.RiskScore = minInt(100, health.RiskScore)
+	health.Level = healthLevelForRiskScore(health.RiskScore)
 	return health
+}
+
+func healthMetricsAvailable(metrics HealthMetrics) bool {
+	return metrics.Attempts1H > 0 || metrics.Attempts24H > 0 ||
+		metrics.ConsecutiveModelFailures > 0 || metrics.AuthOrQuotaFailures15M > 0 ||
+		metrics.RateOrOverloadRatio15M > 0 || metrics.CurrentHourVolume > 0 ||
+		metrics.BaselineHourVolume > 0 || metrics.P95DurationMS > 0 ||
+		metrics.BaselineP95DurationMS > 0
+}
+
+func healthLevelForRiskScore(score int) HealthLevel {
+	switch {
+	case score >= 70:
+		return HealthCritical
+	case score >= 40:
+		return HealthAbnormal
+	case score >= 20:
+		return HealthAttention
+	default:
+		return HealthNormal
+	}
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func healthRank(level HealthLevel) int {

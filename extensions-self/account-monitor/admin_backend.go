@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -240,6 +241,8 @@ type OverviewResponse struct {
 	RequestSuccesses  int64     `json:"request_successes"`
 	ActiveAccounts    int64     `json:"active_accounts"`
 	AbnormalAccounts  int64     `json:"abnormal_accounts"`
+	AverageRiskScore  float64   `json:"average_risk_score"`
+	HighRiskAccounts  int64     `json:"high_risk_accounts"`
 	Users             int64     `json:"users"`
 	Tokens            int64     `json:"tokens"`
 	UserCost          float64   `json:"user_cost"`
@@ -357,10 +360,22 @@ func (s *AdminService) overview(ctx context.Context, request AdminRequest) (Over
 	if err != nil {
 		return result, err
 	}
+	var riskScoreSum int64
+	var scoredAccounts int64
 	for _, health := range healthByAccount {
 		if health.Level != HealthNormal {
 			result.AbnormalAccounts++
 		}
+		if health.RiskScoreAvailable {
+			riskScoreSum += int64(health.RiskScore)
+			scoredAccounts++
+			if health.RiskScore >= 70 {
+				result.HighRiskAccounts++
+			}
+		}
+	}
+	if scoredAccounts > 0 {
+		result.AverageRiskScore = float64(riskScoreSum) / float64(scoredAccounts)
 	}
 	return result, nil
 }
@@ -407,9 +422,14 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 			return PageResponse{}, err
 		}
 	}
-	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY ` + accountSortClause(request.SortBy, request.SortOrder) + ` LIMIT $4 OFFSET $5`
+	const candidateLimit = 2147483647
+	sqlSortBy := request.SortBy
+	if sqlSortBy == "risk_score" {
+		sqlSortBy = ""
+	}
+	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY ` + accountSortClause(sqlSortBy, request.SortOrder) + ` LIMIT $4 OFFSET $5`
 	rows, err := s.repo.db.QueryContext(ctx, query,
-		request.From, request.To, rollup, request.PageSize, (request.Page-1)*request.PageSize,
+		request.From, request.To, rollup, candidateLimit, 0,
 		request.Query["platform"], request.Query["model"], request.Query["result"], request.Query["error_category"],
 		accountID, parentAccountID, userID, apiKeyID, requestType, statusCode, accountStatus, pq.Array(statusAccountIDs),
 	)
@@ -437,7 +457,7 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 		return PageResponse{}, err
 	}
 	if len(items) == 0 {
-		return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+		return PageResponse{Items: items, Total: 0, Page: request.Page, PageSize: request.PageSize}, nil
 	}
 	healthByAccount, err := s.evaluateAccountHealth(ctx, rollup, items)
 	if err != nil {
@@ -463,7 +483,75 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 			}
 		}
 	}
+	items = filterAccountsByRisk(items, request.Query)
+	if request.SortBy == "risk_score" {
+		sortAccountsByRisk(items, request.SortOrder)
+	}
+	total = int64(len(items))
+	start := (request.Page - 1) * request.PageSize
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(items) {
+		items = []AccountSummary{}
+	} else {
+		end := start + request.PageSize
+		if end > len(items) {
+			end = len(items)
+		}
+		items = items[start:end]
+	}
 	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+}
+
+func filterAccountsByRisk(items []AccountSummary, query map[string]string) []AccountSummary {
+	minScore, hasMin := parseOptionalRiskScore(query["min_risk_score"])
+	maxScore, hasMax := parseOptionalRiskScore(query["max_risk_score"])
+	if !hasMin && !hasMax {
+		return items
+	}
+	filtered := make([]AccountSummary, 0, len(items))
+	for _, item := range items {
+		if !item.Health.RiskScoreAvailable {
+			continue
+		}
+		if hasMin && item.Health.RiskScore < minScore {
+			continue
+		}
+		if hasMax && item.Health.RiskScore > maxScore {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func parseOptionalRiskScore(raw string) (int, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func sortAccountsByRisk(items []AccountSummary, order string) {
+	descending := !strings.EqualFold(order, "asc")
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		if left.Health.RiskScoreAvailable != right.Health.RiskScoreAvailable {
+			return left.Health.RiskScoreAvailable
+		}
+		if left.Health.RiskScoreAvailable && left.Health.RiskScore != right.Health.RiskScore {
+			if descending {
+				return left.Health.RiskScore > right.Health.RiskScore
+			}
+			return left.Health.RiskScore < right.Health.RiskScore
+		}
+		return left.AccountID < right.AccountID
+	})
 }
 
 func (s *AdminService) evaluateAccountHealth(ctx context.Context, rollup string, accounts []AccountSummary) (map[int64]Health, error) {
