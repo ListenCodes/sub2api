@@ -15,7 +15,7 @@
 - `extensions-self/account-monitor/sql/main_source_views.sql`, `source.go`: safe account inventory and memberships.
 - `extensions-self/account-monitor/http.go`, `admin_backend.go`: page-size/range validation, full inventory merge, detail fields, adaptive buckets.
 - `extensions-self/account-monitor/*_test.go`: Go unit and PostgreSQL integration coverage.
-- `deploy/ops/publish-custom.sh`, `deploy/ops/test-deploy-contracts.ps1`: publish-time view verification.
+- `deploy/ops/publish-custom.sh`, `deploy/tests/account-monitor-contract.test.mjs`: publish-time view verification.
 - `frontend/src/utils/platformColors.ts`, `frontend/src/components/common/PlatformBadge.vue`: canonical platform options and badge.
 - `frontend/src/components/common/Pagination.vue`: exact configured page sizes.
 - `frontend/src/composables/useDebouncedAction.ts`: shared cancellable 300 ms debounce.
@@ -33,7 +33,7 @@
 - Modify: `extensions-self/account-monitor/source.go`
 - Test: `extensions-self/account-monitor/source_test.go`
 - Modify: `deploy/ops/publish-custom.sh`
-- Test: `deploy/ops/test-deploy-contracts.ps1`
+- Test: `deploy/tests/account-monitor-contract.test.mjs`
 
 - [ ] **Step 1: Write failing source-contract tests**
 
@@ -96,7 +96,7 @@ Add a publish transaction probe for
 Set-Location extensions-self/account-monitor
 & 'D:\Go\bin\go.exe' test ./... -run 'TestSourceContractsIncludeAccountInventoryGroups|TestSourceViewSQLDoesNotExposeSensitiveColumns' -count=1
 Set-Location ../..
-pwsh -File deploy/ops/test-deploy-contracts.ps1
+node --test deploy/tests/account-monitor-contract.test.mjs
 ```
 
 Expected: all pass.
@@ -104,7 +104,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add extensions-self/account-monitor/sql/main_source_views.sql extensions-self/account-monitor/source.go extensions-self/account-monitor/source_test.go deploy/ops/publish-custom.sh deploy/ops/test-deploy-contracts.ps1
+git add extensions-self/account-monitor/sql/main_source_views.sql extensions-self/account-monitor/source.go extensions-self/account-monitor/source_test.go deploy/ops/publish-custom.sh deploy/tests/account-monitor-contract.test.mjs
 git commit -m "feat(monitor): expose safe account group inventory"
 ```
 
@@ -613,7 +613,7 @@ git commit -m "fix(frontend): align extension filter interactions"
 **Files:**
 - Modify: `docs/ACCOUNT-MONITOR-CHECKLIST.md`
 - Modify: `deploy/RELEASE-RUNBOOK.md`
-- Modify: `deploy/ops/test-deploy-contracts.ps1`
+- Modify: `deploy/tests/account-monitor-contract.test.mjs`
 
 - [ ] **Step 1: Add documentation contract assertions first**
 
@@ -623,7 +623,7 @@ multi-group samples, page size 1000, 7d/30d reconciliation, and manual refresh.
 - [ ] **Step 2: Run contracts and verify RED**
 
 ```powershell
-pwsh -File deploy/ops/test-deploy-contracts.ps1
+node --test deploy/tests/account-monitor-contract.test.mjs
 ```
 
 Expected: FAIL on missing new runbook/checklist phrases.
@@ -637,8 +637,8 @@ requirements for periodic auto refresh and six account-detail tabs.
 - [ ] **Step 4: Verify and commit**
 
 ```powershell
-pwsh -File deploy/ops/test-deploy-contracts.ps1
-git add docs/ACCOUNT-MONITOR-CHECKLIST.md deploy/RELEASE-RUNBOOK.md deploy/ops/test-deploy-contracts.ps1
+node --test deploy/tests/account-monitor-contract.test.mjs
+git add docs/ACCOUNT-MONITOR-CHECKLIST.md deploy/RELEASE-RUNBOOK.md deploy/tests/account-monitor-contract.test.mjs
 git commit -m "docs: add monitor correction release checks"
 ```
 
@@ -689,7 +689,7 @@ Expected: all exit 0.
 - [ ] **Step 4: Run deployment and repository checks**
 
 ```powershell
-pwsh -File deploy/ops/test-deploy-contracts.ps1
+node --test deploy/tests/*.test.mjs
 git diff --check
 git status --short
 ```
