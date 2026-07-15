@@ -122,6 +122,11 @@ type GroupDimension struct {
 	SyncedAt  time.Time
 }
 
+type AccountGroupDimension struct {
+	AccountID int64
+	Group     GroupDimension
+}
+
 type Dimensions struct {
 	Accounts map[int64]AccountDimension
 	Users    map[int64]UserDimension
@@ -317,6 +322,67 @@ func (s *PostgresSource) AccountIDsByStatus(ctx context.Context, status string) 
 	return ids, rows.Err()
 }
 
+func (s *PostgresSource) ReadAccountDimensions(ctx context.Context) ([]AccountDimension, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("account monitor source database is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, allAccountDimensionsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AccountDimension, 0)
+	for rows.Next() {
+		var item AccountDimension
+		var parent sql.NullInt64
+		var deleted sql.NullTime
+		if err := rows.Scan(&item.ID, &parent, &item.Name, &item.Platform, &item.Status, &item.Schedulable, &deleted); err != nil {
+			return nil, err
+		}
+		item.ParentAccountID = parent.Int64
+		if deleted.Valid {
+			item.DeletedAt = &deleted.Time
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresSource) ReadAccountGroupDimensions(ctx context.Context) ([]AccountGroupDimension, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("account monitor source database is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, accountGroupDimensionsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AccountGroupDimension, 0)
+	for rows.Next() {
+		var item AccountGroupDimension
+		var deleted sql.NullTime
+		if err := rows.Scan(
+			&item.AccountID,
+			&item.Group.ID,
+			&item.Group.Name,
+			&item.Group.Platform,
+			&item.Group.Status,
+			&deleted,
+		); err != nil {
+			return nil, err
+		}
+		if deleted.Valid {
+			item.Group.DeletedAt = &deleted.Time
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresSource) ReadGroupDimensions(ctx context.Context) ([]GroupDimension, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("account monitor source database is nil")
@@ -510,6 +576,16 @@ const accountDimensionQuery = `
 SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
 FROM extensions_self_ro.account_dimension
 WHERE id = ANY($1)`
+
+const allAccountDimensionsQuery = `
+SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
+FROM extensions_self_ro.account_dimension
+ORDER BY id`
+
+const accountGroupDimensionsQuery = `
+SELECT account_id, group_id, group_name, group_platform, group_status, group_deleted_at
+FROM extensions_self_ro.account_group_dimension
+ORDER BY account_id, LOWER(group_platform), LOWER(group_name), group_id`
 
 const accountIDsByStatusQuery = `
 SELECT id FROM extensions_self_ro.account_dimension

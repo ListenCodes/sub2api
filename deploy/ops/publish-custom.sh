@@ -185,14 +185,14 @@ if [[ "$monitor_enabled" == true ]]; then
     -U "$postgres_owner" \
     -d "$postgres_database" \
     -v ON_ERROR_STOP=1 \
-    -c 'BEGIN; SET ROLE extensions_self_monitor_ro; SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1; ROLLBACK;' \
+    -c 'BEGIN; SET ROLE extensions_self_monitor_ro; SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1; SELECT 1 FROM extensions_self_ro.account_group_dimension LIMIT 1; ROLLBACK;' \
     >> "$LOG" 2>&1 || fail 'source privilege role probe failed'
   docker exec -e PGPASSWORD="$monitor_password" sub2api-postgres psql \
     -h 127.0.0.1 \
     -U extensions_self_monitor \
     -d "$postgres_database" \
     -v ON_ERROR_STOP=1 \
-    -c 'SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1;' \
+    -c 'SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1; SELECT 1 FROM extensions_self_ro.account_group_dimension LIMIT 1;' \
     >> "$LOG" 2>&1 || fail 'source login read probe failed'
   if docker exec -e PGPASSWORD="$monitor_password" sub2api-postgres psql \
     -h 127.0.0.1 \

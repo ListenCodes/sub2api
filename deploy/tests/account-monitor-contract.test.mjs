@@ -84,6 +84,7 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
 	assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
 	assert.match(publisher, /extensions_self_ro\.usage_source/)
 	assert.match(publisher, /extensions_self_ro\.group_dimension/)
+	assert.match(publisher, /extensions_self_ro\.account_group_dimension/)
   assert.match(publisher, /public\.api_keys/)
   assert.match(publisher, /public\.accounts/)
   assert.match(publisher, /SELECT credentials/)

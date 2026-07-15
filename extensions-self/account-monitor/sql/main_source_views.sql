@@ -96,6 +96,18 @@ WITH (security_barrier = true) AS
 SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
 FROM public.accounts;
 
+CREATE OR REPLACE VIEW extensions_self_ro.account_group_dimension
+WITH (security_barrier = true) AS
+SELECT
+    ag.account_id,
+    g.id AS group_id,
+    g.name AS group_name,
+    g.platform AS group_platform,
+    g.status AS group_status,
+    g.deleted_at AS group_deleted_at
+FROM public.account_groups AS ag
+JOIN public.groups AS g ON g.id = ag.group_id;
+
 CREATE OR REPLACE VIEW extensions_self_ro.user_dimension
 WITH (security_barrier = true) AS
 SELECT id, email, username, status, deleted_at
