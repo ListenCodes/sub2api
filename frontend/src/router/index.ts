@@ -468,6 +468,17 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/account-monitor',
+    name: 'AdminAccountMonitor',
+    component: () => import('@/views/admin/AccountMonitorView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Account Monitor',
+      titleKey: 'admin.accountMonitor.title'
+    }
+  },
+  {
     path: '/monitor',
     name: 'ChannelStatus',
     component: () => import('@/views/user/ChannelStatusView.vue'),
