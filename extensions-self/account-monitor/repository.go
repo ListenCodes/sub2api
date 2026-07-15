@@ -187,6 +187,9 @@ func (r *Repository) CommitBatch(ctx context.Context, batch Batch) error {
 			return err
 		}
 	}
+	if err := refreshAggregatesTx(ctx, tx, batch); err != nil {
+		return err
+	}
 	now := r.now()
 	if !batch.UsageCursor.Time.IsZero() || batch.UsageCursor.ID > 0 {
 		if _, err := tx.ExecContext(ctx, upsertSyncStateSQL, "usage", batch.UsageCursor.Time, batch.UsageCursor.ID, now); err != nil {
@@ -235,6 +238,9 @@ func (r *Repository) CommitRebuildBatch(ctx context.Context, batch Batch) error 
 		); err != nil {
 			return err
 		}
+	}
+	if err := refreshAggregatesTx(ctx, tx, batch); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
