@@ -23,7 +23,10 @@ vi.mock('vue-i18n', async (importOriginal) => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 enableAutoUnmount(afterEach)
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.clearAllMocks()
+})
 
 describe('UserRiskControlUsersView', () => {
   it('uses the shared responsive workspace and filter controls', async () => {
@@ -40,7 +43,33 @@ describe('UserRiskControlUsersView', () => {
     await wrapper.get('[data-testid="batch-mark-processed"]').trigger('click')
     const dialog = wrapper.findComponent(BaseDialog)
     expect(dialog.props('show')).toBe(true)
+    expect(dialog.props('closeOnClickOutside')).toBe(true)
     expect(document.querySelector('[data-testid="batch-confirm"]')?.classList.contains('btn-primary')).toBe(true)
+  })
+
+  it('debounces text and score filters for 300 ms', async () => {
+    vi.useFakeTimers()
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+    vi.mocked(userRiskControlV2API.listUsers).mockClear()
+
+    wrapper.findComponent('[data-testid="risk-user-search"]').vm.$emit('update:modelValue', 'alice')
+    await vi.advanceTimersByTimeAsync(299)
+    expect(userRiskControlV2API.listUsers).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'alice' }))
+
+    vi.mocked(userRiskControlV2API.listUsers).mockClear()
+    const minimum = wrapper.get('[data-testid="min-score-filter"]')
+    ;(minimum.element as HTMLInputElement).value = '60'
+    await minimum.trigger('input')
+    await vi.advanceTimersByTimeAsync(299)
+    expect(userRiskControlV2API.listUsers).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'alice', minScore: 60 }))
   })
 
   it('renders real account risk rows and updates results automatically after filtering', async () => {
@@ -126,6 +155,7 @@ describe('UserRiskControlUsersView', () => {
     expect(document.body.textContent).toContain('admin.userRiskControl.drawer.title')
     await (document.querySelector('[data-testid="ban-user"]') as HTMLElement).click()
     expect(document.body.textContent).toContain('admin.userRiskControl.confirmBan')
+    expect(wrapper.findAllComponents(BaseDialog).some((dialog) => dialog.props('show') && dialog.props('closeOnClickOutside'))).toBe(true)
     expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
 
     ;(document.querySelector('[data-testid="confirm-status-action"]') as HTMLElement).click()

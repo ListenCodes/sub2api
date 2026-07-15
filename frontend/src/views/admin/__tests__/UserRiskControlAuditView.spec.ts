@@ -12,7 +12,10 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({ userRiskControlV2API: { listAu
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key, locale: ref('zh') }) }))
 enableAutoUnmount(afterEach)
 beforeEach(() => window.localStorage.clear())
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.clearAllMocks()
+})
 
 function emitFilter(wrapper: ReturnType<typeof mount>, testId: string, value: string) {
   wrapper.findComponent(`[data-testid="${testId}"]`).vm.$emit('update:modelValue', value)
@@ -39,6 +42,29 @@ describe('UserRiskControlAuditView', () => {
     emitFilter(wrapper, 'audit-result-filter', 'failed')
     await flushPromises()
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: 'ban', result: 'failed', page: 1, pageSize: 20 })
+  })
+
+  it('debounces actor and target text filters for 300 ms', async () => {
+    vi.useFakeTimers()
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 0 })
+    const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+    vi.mocked(userRiskControlV2API.listAudit).mockClear()
+
+    emitFilter(wrapper, 'audit-actor-filter', 'admin-11')
+    await vi.advanceTimersByTimeAsync(299)
+    expect(userRiskControlV2API.listAudit).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ actor: 'admin-11' }))
+
+    vi.mocked(userRiskControlV2API.listAudit).mockClear()
+    emitFilter(wrapper, 'audit-target-filter', 'alice@example.com')
+    await vi.advanceTimersByTimeAsync(299)
+    expect(userRiskControlV2API.listAudit).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ actor: 'admin-11', target: 'alice@example.com' }))
   })
 
   it('resets to the first page when audit filters change', async () => {

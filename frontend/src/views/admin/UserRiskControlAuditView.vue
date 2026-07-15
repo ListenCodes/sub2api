@@ -9,16 +9,16 @@
             class="w-full sm:w-56"
             data-testid="audit-actor-filter"
             placeholder="管理员账号或 ID"
-            @update:model-value="draft.actor = $event"
-            @search="applyFilters"
+            @update:model-value="setTextFilter('actor', $event)"
+            @search="runFiltersNow"
           />
           <SearchInput
             :model-value="draft.target || ''"
             class="w-full sm:w-64"
             data-testid="audit-target-filter"
             :placeholder="t('admin.userRiskControl.targetUserPlaceholder')"
-            @update:model-value="draft.target = $event"
-            @search="applyFilters"
+            @update:model-value="setTextFilter('target', $event)"
+            @search="runFiltersNow"
           />
           <Select :model-value="draft.action || ''" class="w-full sm:w-40" data-testid="audit-action-filter" :options="auditActionFilterOptions" @update:model-value="setFilter('action', $event)" />
           <Select :model-value="draft.result || ''" class="w-full sm:w-36" data-testid="audit-result-filter" :options="auditResultFilterOptions" @update:model-value="setFilter('result', $event)" />
@@ -54,6 +54,7 @@ import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { routeLocationKey, routerKey, type LocationQueryRaw } from 'vue-router'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
+import { useDebouncedAction } from '@/composables/useDebouncedAction'
 import DataTable from '@/components/common/DataTable.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -185,8 +186,10 @@ async function loadAudit() {
   }
 }
 async function applyFilters() { Object.assign(activeFilters, draft); page.value = 1; await syncRouteState(); await loadAudit() }
-function setFilter(key: 'action' | 'result', value: string | number | boolean | null) { Object.assign(draft, { [key]: String(value ?? '') }); void applyFilters() }
-function setDateRange(range: { startDate: string; endDate: string }) { draft.from = range.startDate; draft.to = range.endDate; void applyFilters() }
+const { schedule: scheduleFilters, runNow: runFiltersNow } = useDebouncedAction(applyFilters, 300)
+function setTextFilter(key: 'actor' | 'target', value: string) { draft[key] = value; scheduleFilters() }
+function setFilter(key: 'action' | 'result', value: string | number | boolean | null) { Object.assign(draft, { [key]: String(value ?? '') }); void runFiltersNow() }
+function setDateRange(range: { startDate: string; endDate: string }) { draft.from = range.startDate; draft.to = range.endDate; void runFiltersNow() }
 async function setMobileSort(value: string | number | boolean | null) {
   if (!value || typeof value === 'boolean') sortBy.value = undefined
   else {
@@ -198,7 +201,7 @@ async function setMobileSort(value: string | number | boolean | null) {
   await syncRouteState()
   await loadAudit()
 }
-async function resetFilters() { Object.assign(draft, { action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' }); await applyFilters() }
+async function resetFilters() { Object.assign(draft, { action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' }); await runFiltersNow() }
 async function changePage(next: number) { page.value = next; await syncRouteState(); await loadAudit() }
 async function changePageSize(next: number) { pageSize.value = next; page.value = 1; await syncRouteState(); await loadAudit() }
 async function toggleSort(next: NonNullable<AuditFilters['sortBy']>) {

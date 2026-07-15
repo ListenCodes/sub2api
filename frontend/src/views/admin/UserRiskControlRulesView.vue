@@ -54,7 +54,7 @@
       </template>
     </TablePageLayout>
 
-    <BaseDialog :show="createOpen" title="新建场景规则" width="wide" :close-on-click-outside="false" @close="closeCreateForm">
+    <BaseDialog :show="createOpen" title="新建场景规则" width="wide" :close-on-click-outside="true" @close="closeCreateForm">
       <form id="create-risk-rule-form" data-testid="create-rule-form" class="space-y-5" @submit.prevent="submitCreate">
         <div>
           <p class="text-sm font-medium text-gray-900 dark:text-white">选择规则模板</p>
@@ -109,7 +109,7 @@
       </template>
     </BaseDialog>
 
-    <BaseDialog :show="Boolean(editDraft)" title="编辑场景规则" width="wide" :close-on-click-outside="false" @close="closeEditor">
+    <BaseDialog :show="Boolean(editDraft)" title="编辑场景规则" width="wide" :close-on-click-outside="true" @close="closeEditor">
       <form v-if="editDraft" :data-testid="`rule-editor-${editDraft.id}`" class="space-y-5" @submit.prevent="save(editDraft)">
         <div class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-700 dark:bg-dark-800">
           <p class="font-medium text-gray-900 dark:text-white">{{ editDraft.name || editDraft.code }}</p>
