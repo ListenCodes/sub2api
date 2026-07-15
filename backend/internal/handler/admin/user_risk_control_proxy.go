@@ -95,7 +95,7 @@ func isAccountMonitorAccountPath(path string) bool {
 	if err != nil || id <= 0 {
 		return false
 	}
-	return len(parts) == 2 || parts[2] == "models" || parts[2] == "users" || parts[2] == "errors"
+	return len(parts) == 2 || parts[2] == "models" || parts[2] == "users" || parts[2] == "errors" || parts[2] == "trends"
 }
 
 func isAccountMonitorRebuildPath(path string) bool {

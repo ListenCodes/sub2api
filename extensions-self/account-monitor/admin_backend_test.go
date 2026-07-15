@@ -17,7 +17,7 @@ func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta(overviewAttemptsSQL)).WithArgs(from, to).WillReturnRows(sqlmock.NewRows(overviewAttemptColumns()).AddRow(
-		int64(10), int64(8), int64(2), int64(3), int64(2), int64(100), 1.2, 0.8, 450.0,
+		int64(10), int64(8), int64(2), int64(3), int64(2), int64(100), 1.2, 0.8, 210.0, 450.0,
 	))
 	mock.ExpectQuery(regexp.QuoteMeta(overviewRequestsSQL)).WithArgs(from, to).WillReturnRows(sqlmock.NewRows([]string{"requests", "successes"}).AddRow(int64(9), int64(8)))
 	mock.ExpectQuery(regexp.QuoteMeta(syncOverviewSQL)).WillReturnRows(sqlmock.NewRows([]string{"last_sync_at", "lag"}).AddRow(to, 12.0))
@@ -34,7 +34,7 @@ func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	overview := result.(OverviewResponse)
-	if overview.Attempts != 10 || overview.Requests != 9 || overview.RequestSuccesses != 8 || overview.P95DurationMS != 450 || overview.AbnormalAccounts != 1 {
+	if overview.Attempts != 10 || overview.Requests != 9 || overview.RequestSuccesses != 8 || overview.AverageDurationMS != 210 || overview.P95DurationMS != 450 || overview.AbnormalAccounts != 1 {
 		t.Fatalf("overview = %+v", overview)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -47,7 +47,7 @@ func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	now := from.Add(12 * time.Hour)
 	mock.ExpectQuery(`SELECT stats\.\*`).
-		WithArgs(from, now, "physical", 20, 0, "", "", "", "", int64(0)).
+		WithArgs(from, now, "physical", 20, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
 			AddRow(
 				int64(9), int64(7), "anthropic", int64(1000), int64(950), int64(50), int64(4000),
@@ -98,8 +98,107 @@ func TestAccountSortClauseUsesWhitelist(t *testing.T) {
 	if got := accountSortClause("success_rate", "asc"); got != "success_rate ASC, rollup_account_id ASC" {
 		t.Fatalf("sort = %q", got)
 	}
+	if got := accountSortClause("account_cost", "desc"); got != "account_cost DESC, rollup_account_id ASC" {
+		t.Fatalf("account cost sort = %q", got)
+	}
 	if got := accountSortClause("attempts; DROP TABLE x", "asc"); got != "attempts DESC, rollup_account_id ASC" {
 		t.Fatalf("unsafe sort = %q", got)
+	}
+}
+
+func TestAdminServiceAccountsPassesFactFiltersToServerQuery(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	mock.ExpectQuery(`SELECT stats\.\*`).WithArgs(
+		from, to, "physical", 20, 0, "anthropic", "claude", "failed", "限流",
+		int64(9), int64(7), int64(11), int64(13), 2, 429, "", sqlmock.AnyArg(),
+	).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()))
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20,
+		Query: map[string]string{
+			"platform": "anthropic", "model": "claude", "result": "failed", "error_category": "限流",
+			"account_id": "9", "parent_account_id": "7", "user_id": "11", "api_key_id": "13",
+			"request_type": "2", "status_code": "429",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.(PageResponse).Total != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
+	repoDB, repoMock := newSourceMock(t)
+	sourceDB, sourceMock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	sourceMock.ExpectQuery(regexp.QuoteMeta(accountIDsByStatusQuery)).WithArgs("active").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)).AddRow(int64(10)))
+	repoMock.ExpectQuery(`SELECT stats\.\*`).WithArgs(
+		from, to, "physical", 20, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "active", sqlmock.AnyArg(),
+	).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()))
+
+	result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
+		ExecuteAdmin(context.Background(), AdminRequest{
+			Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20,
+			Query: map[string]string{"account_status": "active"},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.(PageResponse).Total != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if err := repoMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDetailQueriesApplyServerSideFilters(t *testing.T) {
+	for name, query := range map[string]string{
+		"models": modelsSQL, "users": usersSQL, "errors": errorsSQL, "attempts": attemptsSQL,
+	} {
+		for _, marker := range []string{"platform=", "actual_model", "result=", "error_category=", "user_id=", "api_key_id=", "request_type=", "status_code="} {
+			if !strings.Contains(query, marker) {
+				t.Fatalf("%s query missing server filter %q", name, marker)
+			}
+		}
+	}
+}
+
+func TestAdminServiceAttemptsPassesDetailFilters(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(attemptsSQL)).WithArgs(
+		from, to, int64(9), 20, 0, "anthropic", "claude", "failed", "限流", int64(11), int64(13), 2, 429,
+	).WillReturnRows(sqlmock.NewRows([]string{}))
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAttempts, From: from, To: to, Page: 1, PageSize: 20,
+		Query: map[string]string{
+			"account_id": "9", "platform": "anthropic", "model": "claude", "result": "failed",
+			"error_category": "限流", "user_id": "11", "api_key_id": "13", "request_type": "2", "status_code": "429",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.(PageResponse).Total != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -166,7 +265,7 @@ func TestAdminServiceDataQualityChecksSourceConnectivity(t *testing.T) {
 }
 
 func TestAdminQueriesDoNotReadMainTables(t *testing.T) {
-	joined := strings.ToLower(strings.Join([]string{overviewAttemptsSQL, overviewRequestsSQL, accountBaseSQL, modelsSQL, usersSQL, errorsSQL, attemptsSQL, dataQualitySQL}, "\n"))
+	joined := strings.ToLower(strings.Join([]string{overviewAttemptsSQL, overviewRequestsSQL, accountBaseSQL, modelsSQL, usersSQL, errorsSQL, trendsSQL, attemptsSQL, healthMetricsSQL, dataQualitySQL}, "\n"))
 	for _, forbidden := range []string{" usage_logs", " ops_error_logs", " accounts ", " api_keys ", " users "} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("admin query reads main table %q", forbidden)
@@ -175,7 +274,7 @@ func TestAdminQueriesDoNotReadMainTables(t *testing.T) {
 }
 
 func overviewAttemptColumns() []string {
-	return []string{"attempts", "successes", "failures", "active_accounts", "users", "tokens", "user_cost", "account_cost", "p95"}
+	return []string{"attempts", "successes", "failures", "active_accounts", "users", "tokens", "user_cost", "account_cost", "average", "p95"}
 }
 
 func accountSummaryColumns() []string {

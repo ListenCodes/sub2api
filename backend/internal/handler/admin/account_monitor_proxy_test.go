@@ -16,6 +16,7 @@ func TestAllowedAccountMonitorPathIsNarrow(t *testing.T) {
 		{http.MethodGet, "/overview"}, {http.MethodGet, "/accounts"},
 		{http.MethodGet, "/accounts/42"}, {http.MethodGet, "/accounts/42/models"},
 		{http.MethodGet, "/accounts/42/users"}, {http.MethodGet, "/accounts/42/errors"},
+		{http.MethodGet, "/accounts/42/trends"},
 		{http.MethodGet, "/attempts"}, {http.MethodGet, "/data-quality"},
 		{http.MethodGet, "/thresholds"}, {http.MethodPut, "/thresholds"},
 		{http.MethodPost, "/rebuild-jobs"}, {http.MethodGet, "/rebuild-jobs/7"},

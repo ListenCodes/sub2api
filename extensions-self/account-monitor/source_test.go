@@ -9,11 +9,12 @@ import (
 
 func TestSourceQueriesUseOnlySafeViews(t *testing.T) {
 	queries := map[string]string{
-		"usage":    usageSourceQuery,
-		"errors":   errorSourceQuery,
-		"accounts": accountDimensionQuery,
-		"users":    userDimensionQuery,
-		"api_keys": apiKeyDimensionQuery,
+		"usage":          usageSourceQuery,
+		"errors":         errorSourceQuery,
+		"accounts":       accountDimensionQuery,
+		"account_status": accountIDsByStatusQuery,
+		"users":          userDimensionQuery,
+		"api_keys":       apiKeyDimensionQuery,
 	}
 
 	for name, query := range queries {

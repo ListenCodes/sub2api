@@ -272,6 +272,28 @@ func (s *PostgresSource) ReadDimensions(ctx context.Context, ids DimensionIDs) (
 	return result, nil
 }
 
+func (s *PostgresSource) AccountIDsByStatus(ctx context.Context, status string) ([]int64, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("account monitor source database is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, accountIDsByStatusQuery, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *PostgresSource) pageSize(limit int) int {
 	if limit <= 0 || limit > s.batchSize {
 		return s.batchSize
@@ -408,6 +430,10 @@ const accountDimensionQuery = `
 SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
 FROM extensions_self_ro.account_dimension
 WHERE id = ANY($1)`
+
+const accountIDsByStatusQuery = `
+SELECT id FROM extensions_self_ro.account_dimension
+WHERE status=$1 ORDER BY id`
 
 const userDimensionQuery = `
 SELECT id, email, username, status, deleted_at

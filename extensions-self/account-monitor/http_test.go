@@ -36,6 +36,7 @@ func TestHandlerRoutesAdminEndpoints(t *testing.T) {
 		{http.MethodGet, "/accounts/42/models", ResourceModels},
 		{http.MethodGet, "/accounts/42/users", ResourceUsers},
 		{http.MethodGet, "/accounts/42/errors", ResourceErrors},
+		{http.MethodGet, "/accounts/42/trends", ResourceTrends},
 		{http.MethodGet, "/attempts", ResourceAttempts},
 		{http.MethodGet, "/data-quality", ResourceDataQuality},
 		{http.MethodGet, "/thresholds", ResourceThresholds},
@@ -75,6 +76,7 @@ func TestHandlerRejectsInvalidRangeAndPageSize(t *testing.T) {
 	tests := []string{
 		"/accounts?from=2026-07-02T00:00:00Z&to=2026-07-01T00:00:00Z",
 		"/accounts?from=2026-01-01T00:00:00Z&to=2026-07-01T00:00:00Z",
+		"/accounts?page_size=21",
 		"/accounts?page_size=101",
 	}
 	for _, path := range tests {

@@ -14,6 +14,7 @@
         <p id="sync-status">正在读取同步状态</p>
       </div>
       <div class="header-actions">
+        <label class="auto-refresh"><input id="auto-refresh" type="checkbox" checked>自动刷新</label>
         <button id="thresholds-button" class="button secondary" title="异常阈值">阈值</button>
         <button id="rebuild-button" class="button secondary" title="重建统计">重建</button>
         <button id="refresh-button" class="icon-button" title="刷新" aria-label="刷新">↻</button>
@@ -22,25 +23,79 @@
 
     <section id="account-overview" class="metric-strip" aria-label="账号监控总览"></section>
 
-    <section id="account-filters" class="filter-bar" aria-label="筛选条件">
-      <label>时间范围<select id="range"><option value="24h">24 小时</option><option value="7d" selected>7 天</option><option value="30d">30 天</option><option value="90d">90 天</option></select></label>
-      <label>平台<select id="platform"><option value="">全部平台</option></select></label>
-      <label>实际模型<input id="model" type="search" placeholder="模型名称"></label>
-      <label>结果<select id="result"><option value="">全部结果</option><option value="succeeded">成功</option><option value="failed">失败</option></select></label>
-      <label>失败原因<select id="error-category"><option value="">全部原因</option></select></label>
-      <label>汇总方式<select id="rollup"><option value="physical">物理账号</option><option value="parent">母账号汇总</option></select></label>
+    <section id="account-filters" class="filter-panel" aria-label="筛选条件">
+      <div class="filter-bar">
+        <label>时间范围
+          <select id="range">
+            <option value="today">今天</option><option value="24h">24 小时</option>
+            <option value="7d" selected>7 天</option><option value="30d">30 天</option>
+            <option value="90d">90 天</option><option value="custom">自定义</option>
+          </select>
+        </label>
+        <label>平台
+          <select id="platform">
+            <option value="">全部平台</option><option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option><option value="gemini">Gemini</option>
+            <option value="vertex">Vertex</option><option value="azure">Azure</option>
+            <option value="bedrock">Bedrock</option><option value="xai">xAI</option>
+          </select>
+        </label>
+        <label>账号 ID<input id="account-id" type="number" min="1" inputmode="numeric" placeholder="全部账号"></label>
+        <label>母账号 ID<input id="parent-account-id" type="number" min="1" inputmode="numeric" placeholder="全部母账号"></label>
+        <label>账号状态
+          <select id="account-status"><option value="">全部状态</option><option value="active">正常</option><option value="inactive">停用</option><option value="error">错误</option></select>
+        </label>
+        <label>实际上游模型<input id="model" type="search" placeholder="模型名称"></label>
+        <label>用户 ID<input id="user-id" type="number" min="1" inputmode="numeric" placeholder="全部用户"></label>
+        <label>API Key ID<input id="api-key-id" type="number" min="1" inputmode="numeric" placeholder="全部 Key"></label>
+        <label>请求类型
+          <select id="request-type"><option value="">全部类型</option><option value="1">同步</option><option value="2">流式</option><option value="3">WebSocket</option><option value="-1">图片生成</option><option value="-2">视频生成</option><option value="4">安全拦截</option></select>
+        </label>
+        <label>结果<select id="result"><option value="">全部结果</option><option value="succeeded">成功</option><option value="failed">失败</option></select></label>
+        <label>失败原因
+          <select id="error-category">
+            <option value="">全部原因</option><option value="限流">限流</option><option value="上游过载">上游过载</option>
+            <option value="账号认证失效">账号认证失效</option><option value="账号额度不足">账号额度不足</option>
+            <option value="模型不可用">模型不可用</option><option value="网络连接失败">网络连接失败</option>
+            <option value="请求超时">请求超时</option><option value="上游服务错误">上游服务错误</option>
+            <option value="请求参数错误">请求参数错误</option><option value="内容或安全拦截">内容或安全拦截</option>
+            <option value="无可用账号">无可用账号</option><option value="未知错误">未知错误</option>
+          </select>
+        </label>
+        <label>状态码<input id="status-code" type="number" min="100" max="599" inputmode="numeric" placeholder="HTTP / 上游"></label>
+        <label>汇总方式<select id="rollup"><option value="physical">物理账号</option><option value="parent">母账号汇总</option></select></label>
+      </div>
+      <div id="custom-range" class="custom-range" hidden>
+        <label>开始时间<input id="custom-from" type="datetime-local"></label>
+        <label>结束时间<input id="custom-to" type="datetime-local"></label>
+        <button id="apply-custom-range" class="button primary" type="button">应用</button>
+      </div>
     </section>
 
     <section class="content-grid">
       <div class="table-region">
-        <div class="section-heading"><h2>账号健康轨道</h2><span id="account-count">0 个账号</span></div>
-        <div class="table-scroll">
+        <div class="section-heading"><h2>账号列表</h2><span id="account-count">0 个账号</span></div>
+        <div class="table-scroll accounts-scroll">
           <table id="accounts-table">
-            <thead><tr><th>账号</th><th>平台</th><th>调用</th><th>成功率</th><th>失败</th><th>Token</th><th>用户计费</th><th>P95</th><th>健康</th></tr></thead>
-            <tbody id="accounts-body"><tr><td colspan="9" class="empty">正在加载</td></tr></tbody>
+            <thead><tr>
+              <th>账号</th><th>平台 / 状态</th>
+              <th><button data-sort="attempts">调用</button></th><th><button data-sort="success_rate">成功率</button></th>
+              <th><button data-sort="failures">失败</button></th><th><button data-sort="model_count">模型</button></th>
+              <th><button data-sort="user_count">用户</button></th><th><button data-sort="tokens">Token</button></th>
+              <th><button data-sort="user_cost">用户计费</button></th><th><button data-sort="account_cost">账号成本</button></th>
+              <th><button data-sort="average_duration_ms">平均延迟</button></th><th><button data-sort="p95_duration_ms">P95</button></th>
+              <th><button data-sort="last_success_at">最近成功</button></th><th><button data-sort="last_failure_at">最近失败</button></th>
+              <th>健康 / 原因</th>
+            </tr></thead>
+            <tbody id="accounts-body"><tr><td colspan="15" class="empty">正在加载</td></tr></tbody>
           </table>
         </div>
-        <footer class="pagination"><button id="prev-page" class="icon-button" title="上一页" aria-label="上一页">‹</button><span id="page-label">第 1 页</span><button id="next-page" class="icon-button" title="下一页" aria-label="下一页">›</button><select id="page-size" aria-label="每页数量"><option>20</option><option>50</option><option>100</option></select></footer>
+        <footer class="pagination">
+          <button id="prev-page" class="icon-button" title="上一页" aria-label="上一页">‹</button>
+          <span id="page-label">第 1 页</span>
+          <button id="next-page" class="icon-button" title="下一页" aria-label="下一页">›</button>
+          <select id="page-size" aria-label="每页数量"><option>20</option><option>50</option><option>100</option></select>
+        </footer>
       </div>
       <aside id="data-quality" class="quality-rail"><h2>数据质量</h2><div id="quality-content">正在加载</div></aside>
     </section>
@@ -50,10 +105,11 @@
     <header><div><h2 id="drawer-title">账号详情</h2><p id="drawer-subtitle"></p></div><button id="drawer-close" class="icon-button" title="关闭" aria-label="关闭">×</button></header>
     <nav class="tabs" aria-label="账号详情">
       <button id="models-tab" data-tab="models" class="active">模型</button>
-      <button id="users-tab" data-tab="users">用户/API Key</button>
+      <button id="users-tab" data-tab="users">用户 / API Key</button>
       <button id="errors-tab" data-tab="errors">失败原因</button>
+      <button id="trends-tab" data-tab="trends">趋势</button>
       <button id="attempts-tab" data-tab="attempts">最近调用</button>
-      <button id="media-tab" data-tab="media">图片/视频</button>
+      <button id="media-tab" data-tab="media">图片 / 视频</button>
     </nav>
     <div id="drawer-content" class="drawer-content"></div>
   </aside>

@@ -20,6 +20,7 @@ const (
 	ResourceModels      = "models"
 	ResourceUsers       = "users"
 	ResourceErrors      = "errors"
+	ResourceTrends      = "trends"
 	ResourceAttempts    = "attempts"
 	ResourceDataQuality = "data-quality"
 	ResourceThresholds  = "thresholds"
@@ -139,6 +140,9 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "accounts" && parts[2] == "errors":
 		request.Resource, ok = ResourceErrors, true
 		request.AccountID, _ = strconv.ParseInt(parts[1], 10, 64)
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "accounts" && parts[2] == "trends":
+		request.Resource, ok = ResourceTrends, true
+		request.AccountID, _ = strconv.ParseInt(parts[1], 10, 64)
 	case r.Method == http.MethodGet && path == "attempts":
 		request.Resource, ok = ResourceAttempts, true
 	case r.Method == http.MethodGet && path == "data-quality":
@@ -159,8 +163,8 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	} else {
 		request.Page = page
 	}
-	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), 20); err != nil || pageSize > 100 {
-		return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be between 1 and 100")
+	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), 20); err != nil || (pageSize != 20 && pageSize != 50 && pageSize != 100) {
+		return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 20, 50, or 100")
 	} else {
 		request.PageSize = pageSize
 	}

@@ -17,9 +17,10 @@ import (
 const overviewAttemptsSQL = `
 SELECT COUNT(*),COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
        COUNT(DISTINCT account_id),COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL),
-       COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
-       COALESCE(SUM(user_cost),0),COALESCE(SUM(account_cost),0),
-       COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0)
+	       COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
+	       COALESCE(SUM(user_cost),0),COALESCE(SUM(account_cost),0),
+	       COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0),
+	       COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0)
 FROM account_monitor_attempt_facts WHERE attempted_at >= $1 AND attempted_at < $2`
 
 const overviewRequestsSQL = `
@@ -48,9 +49,28 @@ SELECT CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE ac
 FROM account_monitor_attempt_facts
 WHERE attempted_at >= $1 AND attempted_at < $2
   AND ($6='' OR platform=$6) AND ($7='' OR actual_model ILIKE '%'||$7||'%')
+	  AND ($8='' OR result=$8) AND ($9='' OR error_category=$9)
+	  AND ($10=0 OR account_id=$10 OR parent_account_id=$10)
+	  AND ($11=0 OR parent_account_id=$11)
+	  AND ($12=0 OR user_id=$12) AND ($13=0 OR api_key_id=$13)
+	  AND ($14=0 OR ($14=-1 AND image_count>0) OR ($14=-2 AND video_count>0) OR request_type=$14)
+	  AND ($15=0 OR status_code=$15 OR upstream_status_code=$15)
+	  AND ($16='' OR account_id=ANY($17))
+	GROUP BY 1`
+
+const pagedDetailFiltersSQL = `
+  AND ($6='' OR platform=$6) AND ($7='' OR actual_model ILIKE '%'||$7||'%')
   AND ($8='' OR result=$8) AND ($9='' OR error_category=$9)
-  AND ($10=0 OR account_id=$10 OR parent_account_id=$10)
-GROUP BY 1`
+  AND ($10=0 OR user_id=$10) AND ($11=0 OR api_key_id=$11)
+  AND ($12=0 OR ($12=-1 AND image_count>0) OR ($12=-2 AND video_count>0) OR request_type=$12)
+  AND ($13=0 OR status_code=$13 OR upstream_status_code=$13)`
+
+const trendDetailFiltersSQL = `
+  AND ($5='' OR platform=$5) AND ($6='' OR actual_model ILIKE '%'||$6||'%')
+  AND ($7='' OR result=$7) AND ($8='' OR error_category=$8)
+  AND ($9=0 OR user_id=$9) AND ($10=0 OR api_key_id=$10)
+  AND ($11=0 OR ($11=-1 AND image_count>0) OR ($11=-2 AND video_count>0) OR request_type=$11)
+  AND ($12=0 OR status_code=$12 OR upstream_status_code=$12)`
 
 const modelsSQL = `
 SELECT actual_model,model_attribution,COUNT(*),COUNT(*) FILTER (WHERE result='succeeded'),
@@ -61,7 +81,7 @@ SELECT actual_model,model_attribution,COUNT(*),COUNT(*) FILTER (WHERE result='su
        COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0),
        COUNT(*) OVER()
 FROM account_monitor_attempt_facts
-WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)
+WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + pagedDetailFiltersSQL + `
 GROUP BY actual_model,model_attribution ORDER BY COUNT(*) DESC,actual_model LIMIT $4 OFFSET $5`
 
 const usersSQL = `
@@ -70,16 +90,27 @@ SELECT COALESCE(user_id,0),COALESCE(api_key_id,0),COUNT(*),
        COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
        COALESCE(SUM(user_cost),0),COUNT(*) OVER()
 FROM account_monitor_attempt_facts
-WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)
+WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + pagedDetailFiltersSQL + `
 GROUP BY user_id,api_key_id ORDER BY COUNT(*) DESC,user_id,api_key_id LIMIT $4 OFFSET $5`
 
 const errorsSQL = `
 SELECT error_category,COALESCE(upstream_status_code,0),provider_error_code,COUNT(*),
        COUNT(*) FILTER (WHERE recovered),MAX(attempted_at),COUNT(*) OVER()
 FROM account_monitor_attempt_facts
-WHERE result='failed' AND attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)
+WHERE result='failed' AND attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + pagedDetailFiltersSQL + `
 GROUP BY error_category,upstream_status_code,provider_error_code
 ORDER BY COUNT(*) DESC,error_category LIMIT $4 OFFSET $5`
+
+const trendsSQL = `
+SELECT date_trunc($4,attempted_at) AS bucket,COUNT(*),
+       COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
+       COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
+       COALESCE(SUM(user_cost),0),COALESCE(SUM(account_cost),0),
+       COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0),
+       COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0)
+FROM account_monitor_attempt_facts
+WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + trendDetailFiltersSQL + `
+GROUP BY 1 ORDER BY 1`
 
 const attemptsSQL = `
 SELECT event_key,request_key,attempted_at,account_id,platform,actual_model,model_attribution,
@@ -89,7 +120,7 @@ SELECT event_key,request_key,attempted_at,account_id,platform,actual_model,model
        COALESCE(duration_ms,0),image_count,image_size,video_count,video_resolution,video_duration_seconds,
        identity_quality,COUNT(*) OVER()
 FROM account_monitor_attempt_facts
-WHERE attempted_at >= $1 AND attempted_at < $2 AND ($3=0 OR account_id=$3 OR parent_account_id=$3)
+WHERE attempted_at >= $1 AND attempted_at < $2 AND ($3=0 OR account_id=$3 OR parent_account_id=$3)` + pagedDetailFiltersSQL + `
 ORDER BY attempted_at DESC,id DESC LIMIT $4 OFFSET $5`
 
 const dataQualitySQL = `
@@ -135,20 +166,21 @@ func NewAdminService(repo *Repository, source *PostgresSource, queryTimeout time
 }
 
 type OverviewResponse struct {
-	Attempts         int64     `json:"attempts"`
-	Successes        int64     `json:"successes"`
-	Failures         int64     `json:"failures"`
-	Requests         int64     `json:"requests"`
-	RequestSuccesses int64     `json:"request_successes"`
-	ActiveAccounts   int64     `json:"active_accounts"`
-	AbnormalAccounts int64     `json:"abnormal_accounts"`
-	Users            int64     `json:"users"`
-	Tokens           int64     `json:"tokens"`
-	UserCost         float64   `json:"user_cost"`
-	AccountCost      float64   `json:"account_cost"`
-	P95DurationMS    int64     `json:"p95_duration_ms"`
-	LastSyncAt       time.Time `json:"last_sync_at"`
-	SyncLagSeconds   float64   `json:"sync_lag_seconds"`
+	Attempts          int64     `json:"attempts"`
+	Successes         int64     `json:"successes"`
+	Failures          int64     `json:"failures"`
+	Requests          int64     `json:"requests"`
+	RequestSuccesses  int64     `json:"request_successes"`
+	ActiveAccounts    int64     `json:"active_accounts"`
+	AbnormalAccounts  int64     `json:"abnormal_accounts"`
+	Users             int64     `json:"users"`
+	Tokens            int64     `json:"tokens"`
+	UserCost          float64   `json:"user_cost"`
+	AccountCost       float64   `json:"account_cost"`
+	AverageDurationMS float64   `json:"average_duration_ms"`
+	P95DurationMS     int64     `json:"p95_duration_ms"`
+	LastSyncAt        time.Time `json:"last_sync_at"`
+	SyncLagSeconds    float64   `json:"sync_lag_seconds"`
 }
 
 type AccountSummary struct {
@@ -218,6 +250,8 @@ func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (
 		return s.users(ctx, request)
 	case ResourceErrors:
 		return s.errors(ctx, request)
+	case ResourceTrends:
+		return s.trends(ctx, request)
 	case ResourceAttempts:
 		return s.attempts(ctx, request)
 	case ResourceDataQuality:
@@ -241,7 +275,7 @@ func (s *AdminService) overview(ctx context.Context, request AdminRequest) (Over
 	var p95 float64
 	if err := s.repo.db.QueryRowContext(ctx, overviewAttemptsSQL, request.From, request.To).Scan(
 		&result.Attempts, &result.Successes, &result.Failures, &result.ActiveAccounts,
-		&result.Users, &result.Tokens, &result.UserCost, &result.AccountCost, &p95,
+		&result.Users, &result.Tokens, &result.UserCost, &result.AccountCost, &result.AverageDurationMS, &p95,
 	); err != nil {
 		return result, err
 	}
@@ -265,7 +299,13 @@ func (s *AdminService) overview(ctx context.Context, request AdminRequest) (Over
 }
 
 func accountSortClause(sortBy, order string) string {
-	columns := map[string]string{"attempts": "attempts", "success_rate": "success_rate", "failures": "failures", "tokens": "tokens", "user_cost": "user_cost", "p95_duration_ms": "p95_duration_ms"}
+	columns := map[string]string{
+		"attempts": "attempts", "successes": "successes", "success_rate": "success_rate", "failures": "failures",
+		"tokens": "tokens", "user_cost": "user_cost", "account_cost": "account_cost",
+		"average_duration_ms": "avg_duration_ms", "p95_duration_ms": "p95_duration_ms",
+		"model_count": "model_count", "user_count": "user_count",
+		"last_success_at": "last_success_at", "last_failure_at": "last_failure_at",
+	}
 	column, ok := columns[sortBy]
 	if !ok {
 		return "attempts DESC, rollup_account_id ASC"
@@ -283,8 +323,29 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 		rollup = "physical"
 	}
 	accountID, _ := strconv.ParseInt(request.Query["account_id"], 10, 64)
+	parentAccountID, _ := strconv.ParseInt(request.Query["parent_account_id"], 10, 64)
+	userID, _ := strconv.ParseInt(request.Query["user_id"], 10, 64)
+	apiKeyID, _ := strconv.ParseInt(request.Query["api_key_id"], 10, 64)
+	requestType, _ := strconv.Atoi(request.Query["request_type"])
+	statusCode, _ := strconv.Atoi(request.Query["status_code"])
+	accountStatus := strings.TrimSpace(request.Query["account_status"])
+	statusAccountIDs := []int64{}
+	if accountStatus != "" {
+		if s.source == nil {
+			return PageResponse{}, errors.New("account status filter requires the source database")
+		}
+		var err error
+		statusAccountIDs, err = s.source.AccountIDsByStatus(ctx, accountStatus)
+		if err != nil {
+			return PageResponse{}, err
+		}
+	}
 	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY ` + accountSortClause(request.SortBy, request.SortOrder) + ` LIMIT $4 OFFSET $5`
-	rows, err := s.repo.db.QueryContext(ctx, query, request.From, request.To, rollup, request.PageSize, (request.Page-1)*request.PageSize, request.Query["platform"], request.Query["model"], request.Query["result"], request.Query["error_category"], accountID)
+	rows, err := s.repo.db.QueryContext(ctx, query,
+		request.From, request.To, rollup, request.PageSize, (request.Page-1)*request.PageSize,
+		request.Query["platform"], request.Query["model"], request.Query["result"], request.Query["error_category"],
+		accountID, parentAccountID, userID, apiKeyID, requestType, statusCode, accountStatus, pq.Array(statusAccountIDs),
+	)
 	if err != nil {
 		return PageResponse{}, err
 	}
@@ -305,6 +366,9 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 	}
 	if err := rows.Err(); err != nil {
 		return PageResponse{}, err
+	}
+	if len(items) == 0 {
+		return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
 	}
 	healthByAccount, err := s.evaluateAccountHealth(ctx, rollup, items)
 	if err != nil {
@@ -406,8 +470,21 @@ func (s *AdminService) account(ctx context.Context, request AdminRequest) (Accou
 	return items[0], nil
 }
 
+func detailFilterArgs(request AdminRequest) []any {
+	userID, _ := strconv.ParseInt(request.Query["user_id"], 10, 64)
+	apiKeyID, _ := strconv.ParseInt(request.Query["api_key_id"], 10, 64)
+	requestType, _ := strconv.Atoi(request.Query["request_type"])
+	statusCode, _ := strconv.Atoi(request.Query["status_code"])
+	return []any{
+		request.Query["platform"], request.Query["model"], request.Query["result"], request.Query["error_category"],
+		userID, apiKeyID, requestType, statusCode,
+	}
+}
+
 func (s *AdminService) models(ctx context.Context, request AdminRequest) (PageResponse, error) {
-	rows, err := s.repo.db.QueryContext(ctx, modelsSQL, request.From, request.To, request.AccountID, request.PageSize, (request.Page-1)*request.PageSize)
+	args := []any{request.From, request.To, request.AccountID, request.PageSize, (request.Page - 1) * request.PageSize}
+	args = append(args, detailFilterArgs(request)...)
+	rows, err := s.repo.db.QueryContext(ctx, modelsSQL, args...)
 	if err != nil {
 		return PageResponse{}, err
 	}
@@ -427,7 +504,9 @@ func (s *AdminService) models(ctx context.Context, request AdminRequest) (PageRe
 }
 
 func (s *AdminService) users(ctx context.Context, request AdminRequest) (PageResponse, error) {
-	rows, err := s.repo.db.QueryContext(ctx, usersSQL, request.From, request.To, request.AccountID, request.PageSize, (request.Page-1)*request.PageSize)
+	args := []any{request.From, request.To, request.AccountID, request.PageSize, (request.Page - 1) * request.PageSize}
+	args = append(args, detailFilterArgs(request)...)
+	rows, err := s.repo.db.QueryContext(ctx, usersSQL, args...)
 	if err != nil {
 		return PageResponse{}, err
 	}
@@ -464,7 +543,9 @@ func (s *AdminService) users(ctx context.Context, request AdminRequest) (PageRes
 }
 
 func (s *AdminService) errors(ctx context.Context, request AdminRequest) (PageResponse, error) {
-	rows, err := s.repo.db.QueryContext(ctx, errorsSQL, request.From, request.To, request.AccountID, request.PageSize, (request.Page-1)*request.PageSize)
+	args := []any{request.From, request.To, request.AccountID, request.PageSize, (request.Page - 1) * request.PageSize}
+	args = append(args, detailFilterArgs(request)...)
+	rows, err := s.repo.db.QueryContext(ctx, errorsSQL, args...)
 	if err != nil {
 		return PageResponse{}, err
 	}
@@ -484,12 +565,43 @@ func (s *AdminService) errors(ctx context.Context, request AdminRequest) (PageRe
 	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, rows.Err()
 }
 
+func (s *AdminService) trends(ctx context.Context, request AdminRequest) ([]map[string]any, error) {
+	bucket := "hour"
+	if request.To.Sub(request.From) > 7*24*time.Hour {
+		bucket = "day"
+	}
+	args := []any{request.From, request.To, request.AccountID, bucket}
+	args = append(args, detailFilterArgs(request)...)
+	rows, err := s.repo.db.QueryContext(ctx, trendsSQL, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var at time.Time
+		var attempts, successes, failures, tokens, p95 int64
+		var userCost, accountCost, average float64
+		if err := rows.Scan(&at, &attempts, &successes, &failures, &tokens, &userCost, &accountCost, &average, &p95); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{
+			"bucket": at, "attempts": attempts, "successes": successes, "failures": failures,
+			"tokens": tokens, "user_cost": userCost, "account_cost": accountCost,
+			"average_duration_ms": average, "p95_duration_ms": p95,
+		})
+	}
+	return items, rows.Err()
+}
+
 func (s *AdminService) attempts(ctx context.Context, request AdminRequest) (PageResponse, error) {
 	accountID := request.AccountID
 	if accountID == 0 {
 		accountID, _ = strconv.ParseInt(request.Query["account_id"], 10, 64)
 	}
-	rows, err := s.repo.db.QueryContext(ctx, attemptsSQL, request.From, request.To, accountID, request.PageSize, (request.Page-1)*request.PageSize)
+	args := []any{request.From, request.To, accountID, request.PageSize, (request.Page - 1) * request.PageSize}
+	args = append(args, detailFilterArgs(request)...)
+	rows, err := s.repo.db.QueryContext(ctx, attemptsSQL, args...)
 	if err != nil {
 		return PageResponse{}, err
 	}
