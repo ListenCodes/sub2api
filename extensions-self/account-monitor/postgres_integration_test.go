@@ -93,6 +93,19 @@ func TestPostgresMigrationAggregationRebuildAndRetention(t *testing.T) {
 	assertDatabaseCount(t, db, "SELECT COUNT(*) FROM account_monitor_request_facts", 4)
 	assertGroupAggregate(t, db, completedBucket, groupID, "gpt-5", 2, 1, 1, 1, 1)
 	assertDatabaseCount(t, db, "SELECT COUNT(*) FROM account_monitor_group_model_10m WHERE bucket_at=$1", 0, currentBucket)
+	groupBuckets, err := NewAdminService(repository, nil, time.Second).loadGroupBuckets(
+		ctx,
+		completedBucket,
+		currentBucket,
+		[]int64{groupID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupCard := buildGroupCard(batch.GroupDimensions[0], completedBucket, currentBucket, groupBuckets[groupID])
+	if groupCard.TotalRequests != 2 || groupCard.Successes != 1 || groupCard.Failures != 1 {
+		t.Fatalf("cross-zone group card = %+v, want 2 requests split 1/1", groupCard)
+	}
 
 	var bucketDate string
 	if err := db.QueryRowContext(ctx, "SELECT bucket_date::text FROM account_monitor_account_daily WHERE account_id=202").Scan(&bucketDate); err != nil {

@@ -12,6 +12,6 @@ describe('account monitor route contract', () => {
     expect(router).toContain("path: '/admin/extensions/account-monitor'")
     expect(router).toContain("query: to.query")
     expect(sidebar).not.toContain("path: '/admin/account-monitor'")
-    expect(sidebar).toContain("path: '/admin/extensions'")
+    expect(sidebar).toContain("path: '/admin/extensions/account-monitor'")
   })
 })

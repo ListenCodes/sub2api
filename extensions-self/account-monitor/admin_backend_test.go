@@ -56,6 +56,29 @@ func TestGroupMonitorCardDistinguishesBucketAndIdleStates(t *testing.T) {
 	}
 }
 
+func TestBuildGroupCardMatchesBucketInstantsAcrossTimeZones(t *testing.T) {
+	from := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	to := from.Add(20 * time.Minute)
+	shanghai := time.FixedZone("Asia/Shanghai", 8*60*60)
+	bucketAt := from.In(shanghai)
+
+	card := buildGroupCard(
+		GroupDimension{ID: 7, Name: "Primary", Platform: "openai", Status: "active"},
+		from,
+		to,
+		map[time.Time]GroupMonitorBucket{
+			bucketAt: {BucketAt: bucketAt, Total: 3, Successes: 2, Failures: 1},
+		},
+	)
+
+	if card.TotalRequests != 3 || card.Successes != 2 || card.Failures != 1 {
+		t.Fatalf("card totals = %d/%d/%d, want 3/2/1", card.TotalRequests, card.Successes, card.Failures)
+	}
+	if len(card.Timeline) != 2 || card.Timeline[0].Total != 3 {
+		t.Fatalf("timeline = %+v, want first cross-zone bucket populated", card.Timeline)
+	}
+}
+
 func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)

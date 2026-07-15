@@ -10,6 +10,7 @@
 - [ ] `git diff --check` 通过，官方代码改动只包含模型归因、代理、路由、菜单和 i18n。
 - [ ] 单个重建任务最大 31 天；重叠任务返回冲突。
 - [ ] 90 天事实/分钟和 365 天日聚合保留策略有测试。
+- [ ] 分组时间线测试覆盖应用使用 UTC、PostgreSQL 会话使用非 UTC 时区，等价瞬时桶不得被回填为零。
 
 ## Production Preparation
 
@@ -47,6 +48,7 @@ ROLLBACK;
 - [ ] 未认证访问 `/api/v1/admin/extensions-self/account-monitor/data-quality` 被管理员鉴权拒绝。
 - [ ] 管理员 `/admin/extensions/account-monitor` 在桌面和移动视口可加载、筛选、翻页、展开账号。
 - [ ] 管理员 `/admin/extensions/group-monitor` 可筛选、分页并打开实际模型详情。
+- [ ] 侧边栏“扩展中心”可展开用户风控、账号监控、分组监控三个子菜单，父页面不重复一级页签。
 - [ ] 风控三页和自定义首页无回归。
 - [ ] 抽样对账成功、失败、重试后成功、模型、Token、成本、图片和视频。
 - [ ] `data-quality` 显示最近同步、延迟、未归属错误和 exact/estimated 比例。

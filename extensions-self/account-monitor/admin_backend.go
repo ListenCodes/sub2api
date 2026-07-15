@@ -629,9 +629,13 @@ func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[ti
 }
 
 func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket) []GroupMonitorBucket {
+	normalizedBuckets := make(map[time.Time]GroupMonitorBucket, len(buckets))
+	for bucketAt, bucket := range buckets {
+		normalizedBuckets[bucketAt.UTC()] = bucket
+	}
 	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/(10*time.Minute)))
 	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(10 * time.Minute) {
-		bucket := buckets[bucketAt]
+		bucket := normalizedBuckets[bucketAt]
 		bucket.BucketAt = bucketAt
 		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
 		result = append(result, bucket)

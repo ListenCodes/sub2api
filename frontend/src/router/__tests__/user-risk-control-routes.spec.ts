@@ -32,13 +32,23 @@ describe('user risk control routes', () => {
     expect(router.resolve(path).matched.at(-1)?.path).toBe(path)
   })
 
-  it('keeps one extensions-center sidebar item and removes the legacy custom entries', () => {
+  it('renders extensions center as an expandable sidebar group with three native entries', () => {
     const source = readFileSync(resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf8')
+    const center = readFileSync(resolve(__dirname, '../../views/admin/ExtensionsCenterView.vue'), 'utf8')
 
     expect(source.match(/path:\s*'\/admin\/extensions'/g)).toHaveLength(1)
     expect(source).toContain("label: '扩展中心'")
+    expect(source).toContain("path: '/admin/extensions/user-risk/users'")
+    expect(source).toContain("label: '用户风控'")
+    expect(source).toContain("path: '/admin/extensions/account-monitor'")
+    expect(source).toContain("label: '账号监控'")
+    expect(source).toContain("path: '/admin/extensions/group-monitor'")
+    expect(source).toContain("label: '分组监控'")
+    expect(source).toMatch(/path:\s*'\/admin\/extensions',[\s\S]*?expandOnly:\s*true,[\s\S]*?children:\s*\[/)
     expect(source).not.toContain("path: '/admin/account-monitor'")
     expect(source).not.toContain("path: '/admin/user-risk-control'")
+    expect(center).not.toContain('aria-label="扩展中心"')
+    expect(center).not.toContain('const tabs =')
   })
 
   it('keeps content moderation at the legacy risk-control route', () => {
