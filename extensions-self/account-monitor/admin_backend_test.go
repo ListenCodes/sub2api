@@ -95,6 +95,35 @@ func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 	}
 }
 
+func TestAdminServiceAccountsAcceptsNullParentAccount(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	now := from.Add(time.Hour)
+	mock.ExpectQuery(`SELECT stats\.\*`).
+		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).AddRow(
+			int64(10), nil, "openai", int64(4), int64(4), int64(0), int64(100),
+			1.0, 0.5, 200.0, int64(300), now, time.Time{},
+			int64(1), int64(1), int64(0), int64(0), int64(0), int64(1), 1.0,
+		))
+	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).
+		WillReturnRows(sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}))
+	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).
+		WillReturnRows(sqlmock.NewRows(healthMetricColumns()))
+
+	service := NewAdminService(NewRepository(db), nil, time.Second)
+	service.now = func() time.Time { return now }
+	result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: now, Page: 1, PageSize: 20, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("accounts error = %v", err)
+	}
+	items := result.(PageResponse).Items.([]AccountSummary)
+	if len(items) != 1 || items[0].ParentAccountID != 0 {
+		t.Fatalf("accounts = %+v", items)
+	}
+}
+
 func TestAccountSortClauseUsesWhitelist(t *testing.T) {
 	if got := accountSortClause("success_rate", "asc"); got != "success_rate ASC, rollup_account_id ASC" {
 		t.Fatalf("sort = %q", got)

@@ -421,13 +421,15 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 	var total int64
 	for rows.Next() {
 		var item AccountSummary
+		var parentAccountID sql.NullInt64
 		var successRate float64
-		if err := rows.Scan(&item.AccountID, &item.ParentAccountID, &item.Platform, &item.Attempts, &item.Successes, &item.Failures,
+		if err := rows.Scan(&item.AccountID, &parentAccountID, &item.Platform, &item.Attempts, &item.Successes, &item.Failures,
 			&item.Tokens, &item.UserCost, &item.AccountCost, &item.AverageDurationMS, &item.P95DurationMS,
 			&item.LastSuccessAt, &item.LastFailureAt, &item.ModelCount, &item.UserCount, &item.ImageCount,
 			&item.VideoCount, &item.VideoDurationSeconds, &total, &successRate); err != nil {
 			return PageResponse{}, err
 		}
+		item.ParentAccountID = parentAccountID.Int64
 		item.AccountName = fmt.Sprintf("账号 %d", item.AccountID)
 		items = append(items, item)
 	}
