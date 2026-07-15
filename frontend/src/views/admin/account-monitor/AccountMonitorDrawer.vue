@@ -19,7 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import RiskScoreBadge from '@/components/admin/RiskScoreBadge.vue'
@@ -58,5 +58,10 @@ function openTab(tab: AccountDetailTab) { emit('update:tab', tab); if (tab === p
 const date = (value: unknown) => value ? new Date(String(value)).toLocaleString() : '-'
 function cell(row: Record<string, any>, key: string) { const value = row[key]; if (key.endsWith('_at')) return date(value); if (key.endsWith('_ms')) return `${value || 0} ms`; return value ?? '-' }
 function trendWidth(row: Record<string, any>) { const max = Math.max(...rows.value.map((item) => Number(item.attempts || 0)), 1); return `${Number(row.attempts || 0) * 100 / max}%` }
-watch(() => [props.show, props.account?.account_id, props.tab, props.filters.from, props.filters.to], load, { immediate: true })
+watch(() => [props.show, props.account?.account_id, props.tab, props.filters.from, props.filters.to], ([show], previous) => {
+  const previousID = previous?.[1]
+  if (!show && typeof previousID === 'number') accountMonitorAPI.cancelAccountDetails(previousID)
+  void load()
+}, { immediate: true })
+onBeforeUnmount(() => { if (props.account?.account_id) accountMonitorAPI.cancelAccountDetails(props.account.account_id) })
 </script>

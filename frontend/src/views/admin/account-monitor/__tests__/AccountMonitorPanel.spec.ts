@@ -23,6 +23,7 @@ vi.mock('@/api/admin/accountMonitor', async (importOriginal) => {
       updateThreshold: vi.fn(),
       startRebuild: vi.fn(),
       getRebuildJob: vi.fn(),
+      cancelAccountDetails: vi.fn(),
       dispose: vi.fn(),
     },
   }

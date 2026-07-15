@@ -325,6 +325,24 @@ class AccountMonitorAPI {
     this.controllers.clear()
   }
 
+  private cancelMatching(prefix: string) {
+    for (const [family, controller] of this.controllers) {
+      if (family === prefix || family.startsWith(`${prefix}-`)) {
+        controller.abort()
+        this.controllers.delete(family)
+      }
+    }
+  }
+
+  cancelAccountDetails(accountID: number) {
+    this.cancelMatching(`detail-${accountID}`)
+    this.cancelMatching(`account-${accountID}`)
+  }
+
+  cancelGroupDetail(groupID: number) {
+    this.cancelMatching(`group-${groupID}`)
+  }
+
   async getOverview(range: TimeRange = {}) {
     const { data } = await apiClient.get<AccountMonitorOverview>(`${BASE_PATH}/overview`, { params: rangeParams(range), signal: this.nextSignal('overview') })
     return data
