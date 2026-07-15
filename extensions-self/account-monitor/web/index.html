@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>账号监控</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="monitor-shell">
+    <header class="page-header">
+      <div>
+        <h1>账号监控</h1>
+        <p id="sync-status">正在读取同步状态</p>
+      </div>
+      <div class="header-actions">
+        <button id="thresholds-button" class="button secondary" title="异常阈值">阈值</button>
+        <button id="rebuild-button" class="button secondary" title="重建统计">重建</button>
+        <button id="refresh-button" class="icon-button" title="刷新" aria-label="刷新">↻</button>
+      </div>
+    </header>
+
+    <section id="account-overview" class="metric-strip" aria-label="账号监控总览"></section>
+
+    <section id="account-filters" class="filter-bar" aria-label="筛选条件">
+      <label>时间范围<select id="range"><option value="24h">24 小时</option><option value="7d" selected>7 天</option><option value="30d">30 天</option><option value="90d">90 天</option></select></label>
+      <label>平台<select id="platform"><option value="">全部平台</option></select></label>
+      <label>实际模型<input id="model" type="search" placeholder="模型名称"></label>
+      <label>结果<select id="result"><option value="">全部结果</option><option value="succeeded">成功</option><option value="failed">失败</option></select></label>
+      <label>失败原因<select id="error-category"><option value="">全部原因</option></select></label>
+      <label>汇总方式<select id="rollup"><option value="physical">物理账号</option><option value="parent">母账号汇总</option></select></label>
+    </section>
+
+    <section class="content-grid">
+      <div class="table-region">
+        <div class="section-heading"><h2>账号健康轨道</h2><span id="account-count">0 个账号</span></div>
+        <div class="table-scroll">
+          <table id="accounts-table">
+            <thead><tr><th>账号</th><th>平台</th><th>调用</th><th>成功率</th><th>失败</th><th>Token</th><th>用户计费</th><th>P95</th><th>健康</th></tr></thead>
+            <tbody id="accounts-body"><tr><td colspan="9" class="empty">正在加载</td></tr></tbody>
+          </table>
+        </div>
+        <footer class="pagination"><button id="prev-page" class="icon-button" title="上一页" aria-label="上一页">‹</button><span id="page-label">第 1 页</span><button id="next-page" class="icon-button" title="下一页" aria-label="下一页">›</button><select id="page-size" aria-label="每页数量"><option>20</option><option>50</option><option>100</option></select></footer>
+      </div>
+      <aside id="data-quality" class="quality-rail"><h2>数据质量</h2><div id="quality-content">正在加载</div></aside>
+    </section>
+  </main>
+
+  <aside id="account-drawer" class="drawer" aria-hidden="true">
+    <header><div><h2 id="drawer-title">账号详情</h2><p id="drawer-subtitle"></p></div><button id="drawer-close" class="icon-button" title="关闭" aria-label="关闭">×</button></header>
+    <nav class="tabs" aria-label="账号详情">
+      <button id="models-tab" data-tab="models" class="active">模型</button>
+      <button id="users-tab" data-tab="users">用户/API Key</button>
+      <button id="errors-tab" data-tab="errors">失败原因</button>
+      <button id="attempts-tab" data-tab="attempts">最近调用</button>
+      <button id="media-tab" data-tab="media">图片/视频</button>
+    </nav>
+    <div id="drawer-content" class="drawer-content"></div>
+  </aside>
+  <div id="drawer-backdrop" class="backdrop" hidden></div>
+
+  <dialog id="thresholds-dialog"><form method="dialog"><header><h2>异常阈值</h2><button value="cancel" class="icon-button" aria-label="关闭">×</button></header><label>成功率阈值<input id="threshold-success-rate" type="number" min="0" max="100" step="0.1" value="90"></label><menu><button value="cancel" class="button secondary">取消</button><button id="save-thresholds" value="default" class="button primary">保存更改</button></menu></form></dialog>
+  <dialog id="rebuild-dialog"><form method="dialog"><header><h2>重建统计</h2><button value="cancel" class="icon-button" aria-label="关闭">×</button></header><label>开始时间<input id="rebuild-from" type="datetime-local" required></label><label>结束时间<input id="rebuild-to" type="datetime-local" required></label><p id="rebuild-status"></p><menu><button value="cancel" class="button secondary">取消</button><button id="start-rebuild" value="default" class="button primary">开始重建</button></menu></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>
