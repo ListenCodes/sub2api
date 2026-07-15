@@ -93,7 +93,7 @@ const usersSQL = `
 SELECT COALESCE(user_id,0),COALESCE(api_key_id,0),COUNT(*),
        COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
        COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
-       COALESCE(SUM(user_cost),0),COUNT(*) OVER()
+       COALESCE(SUM(user_cost),0),MAX(attempted_at),COUNT(*) OVER()
 FROM account_monitor_attempt_facts
 WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + pagedDetailFiltersSQL + `
 GROUP BY user_id,api_key_id ORDER BY COUNT(*) DESC,user_id,api_key_id LIMIT $4 OFFSET $5`
@@ -250,18 +250,23 @@ FROM account_monitor_group_dimensions
 WHERE group_id=$1 AND deleted_at IS NULL`
 
 const groupTimelineSQL = `
-SELECT group_id,bucket_at,SUM(total_requests),SUM(successes),SUM(failures)
+SELECT group_id,
+       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+       SUM(total_requests),SUM(successes),SUM(failures)
 FROM account_monitor_group_model_10m
 WHERE bucket_at >= $1 AND bucket_at < $2 AND group_id=ANY($3)
-GROUP BY group_id,bucket_at
-ORDER BY group_id,bucket_at`
+GROUP BY group_id,display_bucket
+ORDER BY group_id,display_bucket`
 
 const groupModelTimelineSQL = `
-SELECT actual_model,bucket_at,total_requests,successes,failures,
-       exact_model_requests,estimated_model_requests
+SELECT actual_model,
+       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+       SUM(total_requests),SUM(successes),SUM(failures),
+       SUM(exact_model_requests),SUM(estimated_model_requests)
 FROM account_monitor_group_model_10m
 WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
-ORDER BY LOWER(actual_model),actual_model,bucket_at`
+GROUP BY actual_model,display_bucket
+ORDER BY LOWER(actual_model),actual_model,display_bucket`
 
 type AdminService struct {
 	repo         *Repository
@@ -303,34 +308,49 @@ type OverviewResponse struct {
 }
 
 type AccountSummary struct {
-	AccountID            int64     `json:"account_id"`
-	ParentAccountID      int64     `json:"parent_account_id,omitempty"`
-	AccountName          string    `json:"account_name"`
-	Platform             string    `json:"platform"`
-	Status               string    `json:"status"`
-	Attempts             int64     `json:"attempts"`
-	Successes            int64     `json:"successes"`
-	Failures             int64     `json:"failures"`
-	Tokens               int64     `json:"tokens"`
-	UserCost             float64   `json:"user_cost"`
-	AccountCost          float64   `json:"account_cost"`
-	AverageDurationMS    float64   `json:"average_duration_ms"`
-	P95DurationMS        int64     `json:"p95_duration_ms"`
-	LastSuccessAt        time.Time `json:"last_success_at"`
-	LastFailureAt        time.Time `json:"last_failure_at"`
-	ModelCount           int64     `json:"model_count"`
-	UserCount            int64     `json:"user_count"`
-	ImageCount           int64     `json:"image_count"`
-	VideoCount           int64     `json:"video_count"`
-	VideoDurationSeconds int64     `json:"video_duration_seconds"`
-	Health               Health    `json:"health"`
+	AccountID            int64                 `json:"account_id"`
+	ParentAccountID      int64                 `json:"parent_account_id,omitempty"`
+	AccountName          string                `json:"account_name"`
+	Platform             string                `json:"platform"`
+	Status               string                `json:"status"`
+	Attempts             int64                 `json:"attempts"`
+	Successes            int64                 `json:"successes"`
+	Failures             int64                 `json:"failures"`
+	Tokens               int64                 `json:"tokens"`
+	UserCost             float64               `json:"user_cost"`
+	AccountCost          float64               `json:"account_cost"`
+	AverageDurationMS    float64               `json:"average_duration_ms"`
+	P95DurationMS        int64                 `json:"p95_duration_ms"`
+	LastSuccessAt        time.Time             `json:"last_success_at"`
+	LastFailureAt        time.Time             `json:"last_failure_at"`
+	ModelCount           int64                 `json:"model_count"`
+	UserCount            int64                 `json:"user_count"`
+	ImageCount           int64                 `json:"image_count"`
+	VideoCount           int64                 `json:"video_count"`
+	VideoDurationSeconds int64                 `json:"video_duration_seconds"`
+	Groups               []AccountGroupSummary `json:"groups"`
+	Health               Health                `json:"health"`
+}
+
+type AccountGroupSummary struct {
+	GroupID  int64  `json:"group_id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+}
+
+type accountInventory struct {
+	Accounts map[int64]AccountDimension
+	Groups   map[int64][]AccountGroupSummary
+	Members  map[int64][]AccountDimension
 }
 
 type PageResponse struct {
-	Items    any   `json:"items"`
-	Total    int64 `json:"total"`
-	Page     int   `json:"page"`
-	PageSize int   `json:"page_size"`
+	Items    any                   `json:"items"`
+	Total    int64                 `json:"total"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
+	Groups   []AccountGroupSummary `json:"groups,omitempty"`
 }
 
 type ThresholdResponse struct {
@@ -375,13 +395,14 @@ type GroupMonitorCard struct {
 }
 
 type GroupMonitorGroupsResponse struct {
-	Items     []GroupMonitorCard  `json:"items"`
-	Total     int64               `json:"total"`
-	Page      int                 `json:"page"`
-	PageSize  int                 `json:"page_size"`
-	Platforms []string            `json:"platforms"`
-	DataAsOf  *time.Time          `json:"data_as_of"`
-	Quality   GroupMonitorQuality `json:"data_quality"`
+	Items         []GroupMonitorCard  `json:"items"`
+	Total         int64               `json:"total"`
+	Page          int                 `json:"page"`
+	PageSize      int                 `json:"page_size"`
+	BucketSeconds int                 `json:"bucket_seconds"`
+	Platforms     []string            `json:"platforms"`
+	DataAsOf      *time.Time          `json:"data_as_of"`
+	Quality       GroupMonitorQuality `json:"data_quality"`
 }
 
 type GroupMonitorModel struct {
@@ -396,9 +417,10 @@ type GroupMonitorModel struct {
 }
 
 type GroupMonitorDetailResponse struct {
-	Group    GroupMonitorCard    `json:"group"`
-	Models   []GroupMonitorModel `json:"models"`
-	DataAsOf time.Time           `json:"data_as_of"`
+	Group         GroupMonitorCard    `json:"group"`
+	Models        []GroupMonitorModel `json:"models"`
+	DataAsOf      time.Time           `json:"data_as_of"`
+	BucketSeconds int                 `json:"bucket_seconds"`
 }
 
 func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (any, error) {
@@ -445,9 +467,10 @@ func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (
 }
 
 func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequest) (GroupMonitorGroupsResponse, error) {
+	bucketSeconds := normalizedGroupBucketSeconds(request.BucketSeconds)
 	result := GroupMonitorGroupsResponse{
 		Items: make([]GroupMonitorCard, 0), Page: request.Page, PageSize: request.PageSize,
-		Platforms: make([]string, 0),
+		Platforms: make([]string, 0), BucketSeconds: bucketSeconds,
 	}
 	dimensions, err := s.loadVisibleGroupDimensions(ctx)
 	if err != nil {
@@ -481,13 +504,13 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 	for _, dimension := range filteredDimensions {
 		groupIDs = append(groupIDs, dimension.ID)
 	}
-	buckets, err := s.loadGroupBuckets(ctx, request.From, request.To, groupIDs)
+	buckets, err := s.loadGroupBuckets(ctx, request.From, request.To, groupIDs, bucketSeconds)
 	if err != nil {
 		return result, err
 	}
 	callStatus := strings.TrimSpace(request.Query["call_status"])
 	for _, dimension := range filteredDimensions {
-		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID])
+		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID], bucketSeconds)
 		if callStatus != "" && card.CallStatus != callStatus {
 			continue
 		}
@@ -505,7 +528,8 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 }
 
 func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminRequest) (GroupMonitorDetailResponse, error) {
-	var result GroupMonitorDetailResponse
+	bucketSeconds := normalizedGroupBucketSeconds(request.BucketSeconds)
+	result := GroupMonitorDetailResponse{BucketSeconds: bucketSeconds}
 	result.DataAsOf = request.To
 	var dimension GroupDimension
 	var deleted sql.NullTime
@@ -514,7 +538,7 @@ func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminReque
 	); err != nil {
 		return result, err
 	}
-	rows, err := s.repo.db.QueryContext(ctx, groupModelTimelineSQL, request.GroupID, request.From, request.To)
+	rows, err := s.repo.db.QueryContext(ctx, groupModelTimelineSQL, request.GroupID, request.From, request.To, bucketSeconds)
 	if err != nil {
 		return result, err
 	}
@@ -555,10 +579,10 @@ func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminReque
 		return result, err
 	}
 	for index := range models {
-		models[index].Timeline = completeGroupTimeline(request.From, request.To, modelBuckets[models[index].ActualModel])
+		models[index].Timeline = completeGroupTimeline(request.From, request.To, modelBuckets[models[index].ActualModel], bucketSeconds)
 		models[index].SuccessRate = successRatePtr(models[index].Successes, models[index].TotalRequests)
 	}
-	result.Group = buildGroupCard(dimension, request.From, request.To, groupBuckets)
+	result.Group = buildGroupCard(dimension, request.From, request.To, groupBuckets, bucketSeconds)
 	result.Models = models
 	return result, nil
 }
@@ -581,12 +605,16 @@ func (s *AdminService) loadVisibleGroupDimensions(ctx context.Context) ([]GroupD
 	return result, rows.Err()
 }
 
-func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time, groupIDs []int64) (map[int64]map[time.Time]GroupMonitorBucket, error) {
+func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time, groupIDs []int64, requestedBucketSeconds ...int) (map[int64]map[time.Time]GroupMonitorBucket, error) {
 	result := make(map[int64]map[time.Time]GroupMonitorBucket)
 	if len(groupIDs) == 0 {
 		return result, nil
 	}
-	rows, err := s.repo.db.QueryContext(ctx, groupTimelineSQL, from, to, pq.Array(groupIDs))
+	bucketSeconds := 600
+	if len(requestedBucketSeconds) > 0 {
+		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
+	}
+	rows, err := s.repo.db.QueryContext(ctx, groupTimelineSQL, from, to, pq.Array(groupIDs), bucketSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -597,6 +625,7 @@ func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time,
 		if err := rows.Scan(&groupID, &bucket.BucketAt, &bucket.Total, &bucket.Successes, &bucket.Failures); err != nil {
 			return nil, err
 		}
+		bucket.BucketAt = bucket.BucketAt.UTC()
 		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
 		if result[groupID] == nil {
 			result[groupID] = make(map[time.Time]GroupMonitorBucket)
@@ -606,9 +635,9 @@ func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time,
 	return result, rows.Err()
 }
 
-func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[time.Time]GroupMonitorBucket) GroupMonitorCard {
+func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[time.Time]GroupMonitorBucket, requestedBucketSeconds ...int) GroupMonitorCard {
 	card := GroupMonitorCard{GroupID: dimension.ID, Name: dimension.Name, Platform: dimension.Platform, GroupStatus: dimension.Status}
-	card.Timeline = completeGroupTimeline(from, to, buckets)
+	card.Timeline = completeGroupTimeline(from, to, buckets, requestedBucketSeconds...)
 	for _, bucket := range card.Timeline {
 		card.TotalRequests += bucket.Total
 		card.Successes += bucket.Successes
@@ -628,19 +657,33 @@ func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[ti
 	return card
 }
 
-func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket) []GroupMonitorBucket {
+func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket, requestedBucketSeconds ...int) []GroupMonitorBucket {
+	bucketSeconds := 600
+	if len(requestedBucketSeconds) > 0 {
+		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
+	}
+	bucketDuration := time.Duration(bucketSeconds) * time.Second
 	normalizedBuckets := make(map[time.Time]GroupMonitorBucket, len(buckets))
 	for bucketAt, bucket := range buckets {
 		normalizedBuckets[bucketAt.UTC()] = bucket
 	}
-	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/(10*time.Minute)))
-	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(10 * time.Minute) {
+	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/bucketDuration))
+	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(bucketDuration) {
 		bucket := normalizedBuckets[bucketAt]
 		bucket.BucketAt = bucketAt
 		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
 		result = append(result, bucket)
 	}
 	return result
+}
+
+func normalizedGroupBucketSeconds(value int) int {
+	switch value {
+	case 600, 3600, 21600:
+		return value
+	default:
+		return 600
+	}
 }
 
 func groupBucketStatus(total, successes int64) string {
@@ -735,7 +778,376 @@ func accountSortClause(sortBy, order string) string {
 	return column + " " + direction + ", rollup_account_id ASC"
 }
 
+func (s *AdminService) loadAccountInventory(ctx context.Context, rollup string) (accountInventory, error) {
+	accounts, err := s.source.ReadAccountDimensions(ctx)
+	if err != nil {
+		return accountInventory{}, fmt.Errorf("read account inventory: %w", err)
+	}
+	memberships, err := s.source.ReadAccountGroupDimensions(ctx)
+	if err != nil {
+		return accountInventory{}, fmt.Errorf("read account group inventory: %w", err)
+	}
+
+	accountByID := make(map[int64]AccountDimension, len(accounts))
+	groupsByAccount := make(map[int64][]AccountGroupSummary)
+	for _, account := range accounts {
+		if account.DeletedAt == nil {
+			accountByID[account.ID] = account
+		}
+	}
+	for _, membership := range memberships {
+		if membership.Group.DeletedAt != nil {
+			continue
+		}
+		if _, ok := accountByID[membership.AccountID]; !ok {
+			continue
+		}
+		groupsByAccount[membership.AccountID] = append(groupsByAccount[membership.AccountID], AccountGroupSummary{
+			GroupID: membership.Group.ID, Name: membership.Group.Name,
+			Platform: membership.Group.Platform, Status: membership.Group.Status,
+		})
+	}
+
+	result := accountInventory{
+		Accounts: make(map[int64]AccountDimension),
+		Groups:   make(map[int64][]AccountGroupSummary),
+		Members:  make(map[int64][]AccountDimension),
+	}
+	groupIDs := make(map[int64]map[int64]struct{})
+	for _, account := range accountByID {
+		rollupID := account.ID
+		if rollup == "parent" && account.ParentAccountID > 0 {
+			rollupID = account.ParentAccountID
+		}
+		representative := account
+		if parent, ok := accountByID[rollupID]; ok {
+			representative = parent
+		} else {
+			representative.ID = rollupID
+		}
+		if current, ok := result.Accounts[rollupID]; !ok || account.ID == rollupID || current.ID != rollupID {
+			result.Accounts[rollupID] = representative
+		}
+		result.Members[rollupID] = append(result.Members[rollupID], account)
+		if groupIDs[rollupID] == nil {
+			groupIDs[rollupID] = make(map[int64]struct{})
+		}
+		for _, group := range groupsByAccount[account.ID] {
+			if _, exists := groupIDs[rollupID][group.GroupID]; exists {
+				continue
+			}
+			groupIDs[rollupID][group.GroupID] = struct{}{}
+			result.Groups[rollupID] = append(result.Groups[rollupID], group)
+		}
+	}
+	for accountID := range result.Accounts {
+		if result.Groups[accountID] == nil {
+			result.Groups[accountID] = make([]AccountGroupSummary, 0)
+		}
+		sort.SliceStable(result.Groups[accountID], func(i, j int) bool {
+			left, right := result.Groups[accountID][i], result.Groups[accountID][j]
+			if platformCompare := strings.Compare(strings.ToLower(left.Platform), strings.ToLower(right.Platform)); platformCompare != 0 {
+				return platformCompare < 0
+			}
+			if nameCompare := strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)); nameCompare != 0 {
+				return nameCompare < 0
+			}
+			return left.GroupID < right.GroupID
+		})
+	}
+	return result, nil
+}
+
+func filterAccountInventory(in accountInventory, query map[string]string) accountInventory {
+	result := accountInventory{
+		Accounts: make(map[int64]AccountDimension),
+		Groups:   make(map[int64][]AccountGroupSummary),
+		Members:  make(map[int64][]AccountDimension),
+	}
+	accountID, _ := strconv.ParseInt(strings.TrimSpace(query["account_id"]), 10, 64)
+	parentAccountID, _ := strconv.ParseInt(strings.TrimSpace(query["parent_account_id"]), 10, 64)
+	platform := strings.TrimSpace(query["platform"])
+	status := strings.TrimSpace(query["account_status"])
+	groupFilter := strings.TrimSpace(query["group_id"])
+	groupID, _ := strconv.ParseInt(groupFilter, 10, 64)
+
+	for rollupID, account := range in.Accounts {
+		members := in.Members[rollupID]
+		memberMatches := func(match func(AccountDimension) bool) bool {
+			for _, member := range members {
+				if match(member) {
+					return true
+				}
+			}
+			return false
+		}
+		if accountID > 0 && !memberMatches(func(member AccountDimension) bool {
+			return member.ID == accountID || member.ParentAccountID == accountID
+		}) {
+			continue
+		}
+		if parentAccountID > 0 && !memberMatches(func(member AccountDimension) bool {
+			return member.ParentAccountID == parentAccountID
+		}) {
+			continue
+		}
+		if platform != "" && !memberMatches(func(member AccountDimension) bool {
+			return strings.EqualFold(member.Platform, platform)
+		}) {
+			continue
+		}
+		if status != "" && !memberMatches(func(member AccountDimension) bool {
+			return strings.EqualFold(member.Status, status)
+		}) {
+			continue
+		}
+		groups := in.Groups[rollupID]
+		if groupFilter != "" {
+			if strings.EqualFold(groupFilter, "ungrouped") {
+				if len(groups) != 0 {
+					continue
+				}
+			} else {
+				matched := false
+				for _, group := range groups {
+					if group.GroupID == groupID && groupID > 0 {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+		}
+		result.Accounts[rollupID] = account
+		result.Members[rollupID] = append([]AccountDimension(nil), members...)
+		result.Groups[rollupID] = append([]AccountGroupSummary(nil), groups...)
+	}
+	return result
+}
+
+func mergeAccountStats(in accountInventory, stats []AccountSummary, requireFacts bool) []AccountSummary {
+	statsByAccount := make(map[int64]AccountSummary, len(stats))
+	for _, item := range stats {
+		if _, ok := in.Accounts[item.AccountID]; ok {
+			statsByAccount[item.AccountID] = item
+		}
+	}
+	result := make([]AccountSummary, 0, len(in.Accounts))
+	for accountID, dimension := range in.Accounts {
+		item, hasFacts := statsByAccount[accountID]
+		if requireFacts && !hasFacts {
+			continue
+		}
+		if !hasFacts {
+			item = AccountSummary{AccountID: accountID}
+		}
+		item.AccountID = accountID
+		item.AccountName = dimension.Name
+		item.Platform = dimension.Platform
+		item.Status = dimension.Status
+		if item.ParentAccountID == 0 {
+			item.ParentAccountID = dimension.ParentAccountID
+		}
+		item.Groups = append([]AccountGroupSummary(nil), in.Groups[accountID]...)
+		item.Health = Health{Level: HealthNormal, Reasons: []string{}}
+		result = append(result, item)
+	}
+	return result
+}
+
+func accountQueryHasFactFilters(query map[string]string) bool {
+	for _, key := range []string{"model", "result", "error_category", "user_id", "api_key_id", "request_type", "status_code"} {
+		if strings.TrimSpace(query[key]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func sortAccountSummaries(items []AccountSummary, sortBy, order string) {
+	if sortBy == "risk_score" {
+		sortAccountsByRisk(items, order)
+		return
+	}
+	descending := !strings.EqualFold(order, "asc")
+	compare := func(left, right AccountSummary) int {
+		var leftValue, rightValue float64
+		switch sortBy {
+		case "successes":
+			leftValue, rightValue = float64(left.Successes), float64(right.Successes)
+		case "success_rate":
+			if left.Attempts > 0 {
+				leftValue = float64(left.Successes) / float64(left.Attempts)
+			}
+			if right.Attempts > 0 {
+				rightValue = float64(right.Successes) / float64(right.Attempts)
+			}
+		case "failures":
+			leftValue, rightValue = float64(left.Failures), float64(right.Failures)
+		case "tokens":
+			leftValue, rightValue = float64(left.Tokens), float64(right.Tokens)
+		case "user_cost":
+			leftValue, rightValue = left.UserCost, right.UserCost
+		case "account_cost":
+			leftValue, rightValue = left.AccountCost, right.AccountCost
+		case "average_duration_ms":
+			leftValue, rightValue = left.AverageDurationMS, right.AverageDurationMS
+		case "p95_duration_ms":
+			leftValue, rightValue = float64(left.P95DurationMS), float64(right.P95DurationMS)
+		case "model_count":
+			leftValue, rightValue = float64(left.ModelCount), float64(right.ModelCount)
+		case "user_count":
+			leftValue, rightValue = float64(left.UserCount), float64(right.UserCount)
+		case "last_success_at":
+			leftValue, rightValue = float64(left.LastSuccessAt.Unix()), float64(right.LastSuccessAt.Unix())
+		case "last_failure_at":
+			leftValue, rightValue = float64(left.LastFailureAt.Unix()), float64(right.LastFailureAt.Unix())
+		default:
+			leftValue, rightValue = float64(left.Attempts), float64(right.Attempts)
+		}
+		if leftValue < rightValue {
+			return -1
+		}
+		if leftValue > rightValue {
+			return 1
+		}
+		return 0
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		comparison := compare(items[i], items[j])
+		if comparison == 0 {
+			return items[i].AccountID < items[j].AccountID
+		}
+		if descending {
+			return comparison > 0
+		}
+		return comparison < 0
+	})
+}
+
+func paginateAccountSummaries(items []AccountSummary, page, pageSize int) []AccountSummary {
+	start := (page - 1) * pageSize
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(items) {
+		return []AccountSummary{}
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
+}
+
+func accountInventoryGroups(in accountInventory) []AccountGroupSummary {
+	byID := make(map[int64]AccountGroupSummary)
+	for _, groups := range in.Groups {
+		for _, group := range groups {
+			byID[group.GroupID] = group
+		}
+	}
+	groups := make([]AccountGroupSummary, 0, len(byID))
+	for _, group := range byID {
+		groups = append(groups, group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		left, right := groups[i], groups[j]
+		if platformCompare := strings.Compare(strings.ToLower(left.Platform), strings.ToLower(right.Platform)); platformCompare != 0 {
+			return platformCompare < 0
+		}
+		if nameCompare := strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)); nameCompare != 0 {
+			return nameCompare < 0
+		}
+		return left.GroupID < right.GroupID
+	})
+	return groups
+}
+
+func (s *AdminService) accountsFromInventory(ctx context.Context, request AdminRequest) (PageResponse, error) {
+	rollup := request.Query["rollup"]
+	if rollup != "parent" {
+		rollup = "physical"
+	}
+	allInventory, err := s.loadAccountInventory(ctx, rollup)
+	if err != nil {
+		return PageResponse{}, err
+	}
+	groupOptions := accountInventoryGroups(allInventory)
+	inventory := filterAccountInventory(allInventory, request.Query)
+	if len(inventory.Accounts) == 0 {
+		return PageResponse{Items: []AccountSummary{}, Total: 0, Page: request.Page, PageSize: request.PageSize, Groups: groupOptions}, nil
+	}
+
+	userID, _ := strconv.ParseInt(request.Query["user_id"], 10, 64)
+	apiKeyID, _ := strconv.ParseInt(request.Query["api_key_id"], 10, 64)
+	requestType, _ := strconv.Atoi(request.Query["request_type"])
+	statusCode, _ := strconv.Atoi(request.Query["status_code"])
+	candidateLimit := len(allInventory.Accounts) + 1
+	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY rollup_account_id ASC LIMIT $4 OFFSET $5`
+	rows, err := s.repo.db.QueryContext(ctx, query,
+		request.From, request.To, rollup, candidateLimit, 0,
+		"", request.Query["model"], request.Query["result"], request.Query["error_category"],
+		int64(0), int64(0), userID, apiKeyID, requestType, statusCode, "", pq.Array([]int64{}),
+	)
+	if err != nil {
+		return PageResponse{}, err
+	}
+	defer rows.Close()
+	stats := make([]AccountSummary, 0)
+	for rows.Next() {
+		var item AccountSummary
+		var parentAccountID sql.NullInt64
+		var total int64
+		var successRate float64
+		if err := rows.Scan(&item.AccountID, &parentAccountID, &item.Platform, &item.Attempts, &item.Successes, &item.Failures,
+			&item.Tokens, &item.UserCost, &item.AccountCost, &item.AverageDurationMS, &item.P95DurationMS,
+			&item.LastSuccessAt, &item.LastFailureAt, &item.ModelCount, &item.UserCount, &item.ImageCount,
+			&item.VideoCount, &item.VideoDurationSeconds, &total, &successRate); err != nil {
+			return PageResponse{}, err
+		}
+		item.ParentAccountID = parentAccountID.Int64
+		stats = append(stats, item)
+	}
+	if err := rows.Err(); err != nil {
+		return PageResponse{}, err
+	}
+
+	items := mergeAccountStats(inventory, stats, accountQueryHasFactFilters(request.Query))
+	needsRiskCandidates := request.SortBy == "risk_score" || strings.TrimSpace(request.Query["min_risk_score"]) != "" || strings.TrimSpace(request.Query["max_risk_score"]) != ""
+	if needsRiskCandidates && len(items) > maxRiskCandidateAccounts {
+		return PageResponse{}, ErrAccountCandidateLimit
+	}
+	itemsWithFacts := make([]AccountSummary, 0, len(items))
+	for _, item := range items {
+		if item.Attempts > 0 {
+			itemsWithFacts = append(itemsWithFacts, item)
+		}
+	}
+	if len(itemsWithFacts) > 0 {
+		healthByAccount, err := s.evaluateAccountHealth(ctx, rollup, itemsWithFacts)
+		if err != nil {
+			return PageResponse{}, err
+		}
+		for index := range items {
+			if health, ok := healthByAccount[items[index].AccountID]; ok {
+				items[index].Health = health
+			}
+		}
+	}
+	items = filterAccountsByRisk(items, request.Query)
+	sortAccountSummaries(items, request.SortBy, request.SortOrder)
+	total := int64(len(items))
+	items = paginateAccountSummaries(items, request.Page, request.PageSize)
+	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize, Groups: groupOptions}, nil
+}
+
 func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (PageResponse, error) {
+	if s.source != nil {
+		return s.accountsFromInventory(ctx, request)
+	}
 	rollup := request.Query["rollup"]
 	if rollup != "parent" {
 		rollup = "physical"
@@ -1035,10 +1447,19 @@ func (s *AdminService) users(ctx context.Context, request AdminRequest) (PageRes
 	for rows.Next() {
 		var userID, keyID, attempts, successes, failures, tokens int64
 		var cost float64
-		if err := rows.Scan(&userID, &keyID, &attempts, &successes, &failures, &tokens, &cost, &total); err != nil {
+		var lastAttemptedAt time.Time
+		if err := rows.Scan(&userID, &keyID, &attempts, &successes, &failures, &tokens, &cost, &lastAttemptedAt, &total); err != nil {
 			return PageResponse{}, err
 		}
-		items = append(items, map[string]any{"user_id": userID, "api_key_id": keyID, "attempts": attempts, "successes": successes, "failures": failures, "tokens": tokens, "user_cost": cost})
+		successRate := 0.0
+		if attempts > 0 {
+			successRate = float64(successes) / float64(attempts)
+		}
+		items = append(items, map[string]any{
+			"user_id": userID, "api_key_id": keyID, "attempts": attempts,
+			"successes": successes, "failures": failures, "success_rate": successRate,
+			"tokens": tokens, "user_cost": cost, "last_attempted_at": lastAttemptedAt,
+		})
 		userIDs = append(userIDs, userID)
 		keyIDs = append(keyIDs, keyID)
 	}
@@ -1048,10 +1469,10 @@ func (s *AdminService) users(ctx context.Context, request AdminRequest) (PageRes
 				uid := item["user_id"].(int64)
 				kid := item["api_key_id"].(int64)
 				if d, ok := dims.Users[uid]; ok {
-					item["email"], item["username"] = d.Email, d.Username
+					item["email"] = d.Email
 				}
 				if d, ok := dims.APIKeys[kid]; ok {
-					item["api_key_name"], item["masked_prefix"] = d.Name, d.MaskedPrefix
+					item["api_key_name"] = d.Name
 				}
 			}
 		}

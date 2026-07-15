@@ -176,7 +176,8 @@ For the first enabled release, use this order:
    `.env`, Nginx vhost, origin certificate/key, container/image metadata and rollback tags.
 3. Run `deploy/ops/install-account-monitor-source.sql` as the main DB owner.
 4. Verify the NOLOGIN role and TCP login can read `extensions_self_ro.usage_source`
-   and `extensions_self_ro.group_dimension`, while full keys and credentials are denied.
+   `extensions_self_ro.group_dimension`, and `extensions_self_ro.account_group_dimension`,
+   while full keys and credentials are denied.
 5. Build both images and recreate only `sub2api` and `extensions-self`.
 6. Verify `/admin/extensions/account-monitor`, `/admin/extensions/group-monitor`,
    signed `data-quality`, risk pages, and custom homepage.
@@ -199,6 +200,67 @@ range may not exceed 31 days. Facts/minute aggregates are retained for 90 days;
 daily aggregates for 365 days. Existing main error history may be shorter, so
 historical gaps must be reported rather than backfilled with zeros.
 
+### Inventory And Group Reconciliation
+
+Run the allow probes with the dedicated source login. All three must succeed:
+
+```sql
+SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1;
+SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1;
+SELECT 1 FROM extensions_self_ro.account_group_dimension LIMIT 1;
+```
+
+Run the following deny probes with the same login. Both must fail with
+`permission denied`; a returned row is a release blocker:
+
+```sql
+SELECT key FROM public.api_keys LIMIT 1;
+SELECT credentials FROM public.accounts LIMIT 1;
+```
+
+Record the main-source “全量非删除账号数” separately from the extension
+database's 30-day “事实活跃账号数”. With `rollup=physical`, the account-monitor
+API total must equal the first count, including zero-call accounts; the second
+count is diagnostic only and must not drive inventory paging.
+
+```sql
+-- Main database, through the restricted source login.
+SELECT count(*) AS full_non_deleted_accounts
+FROM extensions_self_ro.account_dimension
+WHERE deleted_at IS NULL;
+
+-- Extension database.
+SELECT count(DISTINCT account_id) AS fact_active_accounts
+FROM account_monitor_attempt_facts
+WHERE attempted_at >= now() - interval '30 days';
+```
+
+Select and record a “多分组账号样本” before browser acceptance. Each sampled
+account must appear once in the account list, display every active membership,
+and match a filter for any of its groups:
+
+```sql
+SELECT ag.account_id, array_agg(ag.group_id ORDER BY ag.group_id) AS group_ids
+FROM extensions_self_ro.account_group_dimension AS ag
+JOIN extensions_self_ro.account_dimension AS a ON a.id = ag.account_id
+WHERE a.deleted_at IS NULL AND ag.group_deleted_at IS NULL
+GROUP BY ag.account_id
+HAVING count(DISTINCT ag.group_id) > 1
+LIMIT 10;
+```
+
+For group monitoring, reconcile both `7d/30d` API ranges against the same
+`[from,to)` complete-bucket interval in `account_monitor_group_model_10m`.
+Verify `total_requests=successes+failures` for each group and that card/detail
+totals agree. Keep the exact UTC boundaries with the release evidence.
+
+Browser acceptance must select `page_size=1000`, exercise platform/group/text
+filters, and use the “手动刷新” button on account and group monitor. Exercise
+input/select filtering on user risk pages. When the page is idle, the network
+log must show no monitor polling request. Account detail uses five tabs, a
+fixed-height scrolling body, sticky table headers, stays open across queries,
+and closes when its backdrop is clicked.
+
 ## Verification Checklist
 
 - [ ] Git worktree is clean after commit.
@@ -207,6 +269,10 @@ historical gaps must be reported rather than backfilled with zeros.
 - [ ] `extensions-self` container is healthy.
 - [ ] Public extensions homepage returns success and is the configured iframe.
 - [ ] Native `/admin/extensions/account-monitor` and `/admin/extensions/group-monitor` load.
+- [ ] `extensions_self_ro.account_group_dimension` allow probe and raw key/credential deny probes passed.
+- [ ] “全量非删除账号数” equals account-monitor total; “事实活跃账号数” is recorded separately.
+- [ ] A “多分组账号样本” displays all memberships and matches every applicable group filter.
+- [ ] `page_size=1000`, `7d/30d`, and “手动刷新” browser checks passed without background polling.
 - [ ] Signed account-monitor `data-quality` reports a recent sync or an explicit source error.
 - [ ] `data_as_of`, both cursors, available history, missing-group and exact/estimated counts are recorded.
 - [ ] Segmented backfill covers only the available interval and every recorded job completed.

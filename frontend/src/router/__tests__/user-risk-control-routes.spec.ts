@@ -49,6 +49,8 @@ describe('user risk control routes', () => {
     expect(source).not.toContain("path: '/admin/user-risk-control'")
     expect(center).not.toContain('aria-label="扩展中心"')
     expect(center).not.toContain('const tabs =')
+    expect(center).not.toContain('>扩展中心</h1>')
+    expect(center).not.toContain('用户安全与运行质量')
   })
 
   it('keeps content moderation at the legacy risk-control route', () => {

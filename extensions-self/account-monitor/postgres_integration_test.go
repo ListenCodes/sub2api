@@ -107,6 +107,51 @@ func TestPostgresMigrationAggregationRebuildAndRetention(t *testing.T) {
 		t.Fatalf("cross-zone group card = %+v, want 2 requests split 1/1", groupCard)
 	}
 
+	hourlyFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	sixHourFrom := hourlyFrom.Add(24 * time.Hour)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO account_monitor_group_dimensions(group_id,name,platform,status,synced_at)
+		VALUES (70,'Hourly','openai','active',$1),(80,'Six Hour','openai','active',$1)
+		ON CONFLICT (group_id) DO NOTHING`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO account_monitor_group_model_10m
+		(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
+		SELECT $1::timestamptz + step * interval '10 minutes',70,'hourly-model',1,1,0,1,0
+		FROM generate_series(0,5) AS step`, hourlyFrom); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO account_monitor_group_model_10m
+		(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
+		SELECT $1::timestamptz + step * interval '10 minutes',80,'six-hour-model',1,
+		       CASE WHEN step < 30 THEN 1 ELSE 0 END,CASE WHEN step < 30 THEN 0 ELSE 1 END,
+		       CASE WHEN step < 30 THEN 1 ELSE 0 END,CASE WHEN step < 30 THEN 0 ELSE 1 END
+		FROM generate_series(0,35) AS step`, sixHourFrom); err != nil {
+		t.Fatal(err)
+	}
+	adaptiveService := NewAdminService(repository, nil, time.Second)
+	hourlyBuckets, err := adaptiveService.loadGroupBuckets(ctx, hourlyFrom, hourlyFrom.Add(time.Hour), []int64{70}, 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hourlyCard := buildGroupCard(GroupDimension{ID: 70}, hourlyFrom, hourlyFrom.Add(time.Hour), hourlyBuckets[70], 3600)
+	if len(hourlyCard.Timeline) != 1 || hourlyCard.TotalRequests != 6 || !hourlyCard.Timeline[0].BucketAt.Equal(hourlyFrom) {
+		t.Fatalf("hourly adaptive card = %+v", hourlyCard)
+	}
+	sixHourResult, err := adaptiveService.groupMonitorGroup(ctx, AdminRequest{
+		GroupID: 80, From: sixHourFrom, To: sixHourFrom.Add(6 * time.Hour), BucketSeconds: 21600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sixHourResult.Models) != 1 || len(sixHourResult.Models[0].Timeline) != 1 ||
+		sixHourResult.Group.TotalRequests != 36 || sixHourResult.Models[0].Successes != 30 ||
+		!sixHourResult.Models[0].Timeline[0].BucketAt.Equal(sixHourFrom) {
+		t.Fatalf("six-hour adaptive detail = %+v", sixHourResult)
+	}
+
 	var bucketDate string
 	if err := db.QueryRowContext(ctx, "SELECT bucket_date::text FROM account_monitor_account_daily WHERE account_id=202").Scan(&bucketDate); err != nil {
 		t.Fatal(err)
@@ -241,6 +286,7 @@ func TestPostgresSourceViewsAndRestrictedRole(t *testing.T) {
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.usage_source WHERE group_id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.error_source WHERE group_id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.group_dimension WHERE id=7", 1)
+	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_id=7", 1)
 
 	var maskedPrefix string
 	if err := restrictedDB.QueryRowContext(ctx, "SELECT masked_prefix FROM extensions_self_ro.api_key_dimension WHERE id=70").Scan(&maskedPrefix); err != nil {
@@ -285,7 +331,8 @@ CREATE TABLE public.usage_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,use
 CREATE TABLE public.ops_error_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,request_id TEXT,client_request_id TEXT,user_id BIGINT,api_key_id BIGINT,account_id BIGINT,group_id BIGINT,platform TEXT,model TEXT,requested_model TEXT,upstream_model TEXT,request_type SMALLINT,stream BOOLEAN,error_phase TEXT,error_type TEXT,error_source TEXT,error_owner TEXT,status_code INT,upstream_status_code INT,provider_error_code TEXT,provider_error_type TEXT,network_error_type TEXT,duration_ms BIGINT,error_message TEXT,upstream_error_message TEXT,upstream_errors JSONB);
 CREATE TABLE public.users (id BIGINT PRIMARY KEY,email TEXT,username TEXT,status TEXT,deleted_at TIMESTAMPTZ);
 CREATE TABLE public.api_keys (id BIGINT PRIMARY KEY,user_id BIGINT,name TEXT,key TEXT,status TEXT,deleted_at TIMESTAMPTZ);
-CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,deleted_at TIMESTAMPTZ);`
+CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,deleted_at TIMESTAMPTZ);
+CREATE TABLE public.account_groups (account_id BIGINT NOT NULL,group_id BIGINT NOT NULL,PRIMARY KEY(account_id,group_id));`
 
 const sourceIntegrationLegacyViewsSQL = `
 CREATE SCHEMA extensions_self_ro;
@@ -331,7 +378,8 @@ INSERT INTO public.usage_logs (id,created_at,user_id,api_key_id,account_id,group
 INSERT INTO public.ops_error_logs (id,created_at,request_id,user_id,api_key_id,account_id,group_id,platform,error_message,upstream_error_message,upstream_errors) VALUES (44,NOW(),'request-1',7,70,101,7,'openai',repeat('e',600),repeat('u',600),jsonb_build_array(jsonb_build_object('message',repeat('m',600),'detail',repeat('d',600))));
 INSERT INTO public.users VALUES (7,'alice@example.test','alice','active',NULL);
 INSERT INTO public.api_keys VALUES (70,7,'QA Key','secret-abcdef','active',NULL);
-INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',NULL);`
+INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',NULL);
+INSERT INTO public.account_groups VALUES (101,7);`
 
 func integrationDatabaseURL(t *testing.T, databaseURL, databaseName, username, password string) string {
 	t.Helper()
@@ -341,11 +389,32 @@ func integrationDatabaseURL(t *testing.T, databaseURL, databaseName, username, p
 	}
 	parsed.Path = "/" + databaseName
 	if password == "" {
+		if parsed.User != nil && parsed.User.Username() == username {
+			if existingPassword, ok := parsed.User.Password(); ok {
+				parsed.User = url.UserPassword(username, existingPassword)
+				return parsed.String()
+			}
+		}
 		parsed.User = url.User(username)
 	} else {
 		parsed.User = url.UserPassword(username, password)
 	}
 	return parsed.String()
+}
+
+func TestIntegrationDatabaseURLPreservesOwnerPassword(t *testing.T) {
+	result := integrationDatabaseURL(t, "postgres://postgres:secret@127.0.0.1:5432/postgres?sslmode=disable", "monitor", "postgres", "")
+	parsed, err := url.Parse(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, ok := parsed.User.Password()
+	if !ok || password != "secret" {
+		t.Fatalf("owner password = %q, present = %t; want preserved password", password, ok)
+	}
+	if parsed.Path != "/monitor" {
+		t.Fatalf("database path = %q, want /monitor", parsed.Path)
+	}
 }
 
 func integrationAttempt(key string, at time.Time, accountID int64, result Result) AttemptFact {

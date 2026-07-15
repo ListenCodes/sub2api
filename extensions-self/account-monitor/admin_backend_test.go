@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -28,6 +29,88 @@ func TestGroupMonitorQueriesUseOnlyDimensionsAndTenMinuteAggregates(t *testing.T
 		if !strings.Contains(content, required) {
 			t.Fatalf("group monitor query missing %q", required)
 		}
+	}
+}
+
+func TestGroupMonitorQueriesUseAdaptiveDisplayBuckets(t *testing.T) {
+	for name, query := range map[string]string{"list": groupTimelineSQL, "detail": groupModelTimelineSQL} {
+		lower := strings.ToLower(query)
+		for _, marker := range []string{"date_bin", "make_interval", "secs => $4", "1970-01-01 00:00:00+00"} {
+			if !strings.Contains(lower, marker) {
+				t.Fatalf("%s query missing %q: %s", name, marker, query)
+			}
+		}
+	}
+}
+
+func TestGroupMonitorListAggregatesHourlyBuckets(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	to := from.Add(7 * 24 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionsSQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).
+			AddRow(int64(7), "Primary", "openai", "active", nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg(), 3600).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
+			AddRow(int64(7), from.In(time.FixedZone("Asia/Shanghai", 8*60*60)), int64(6), int64(4), int64(2)),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(syncQualitySQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"source", "cursor_time", "cursor_id", "last_success_at", "last_error", "updated_at"}),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(sharedQualityFactsSQL)).WithArgs(from, to).WillReturnRows(
+		sqlmock.NewRows([]string{"available_from", "available_to", "missing_group", "exact", "estimated"}).
+			AddRow(from, to, int64(0), int64(6), int64(0)),
+	)
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceGroupMonitorGroups, From: from, To: to, Page: 1, PageSize: 12,
+		BucketSeconds: 3600, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := result.(GroupMonitorGroupsResponse)
+	if groupResponseBucketSeconds(t, page) != 3600 || len(page.Items) != 1 || len(page.Items[0].Timeline) != 168 {
+		t.Fatalf("hourly page = %+v", page)
+	}
+	if page.Items[0].TotalRequests != 6 || page.Items[0].Successes != 4 || page.Items[0].Failures != 2 || page.Items[0].Timeline[0].Total != 6 {
+		t.Fatalf("hourly card = %+v", page.Items[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGroupMonitorDetailAggregatesSixHourBuckets(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	to := from.Add(30 * 24 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionByIDSQL)).WithArgs(int64(7)).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).
+			AddRow(int64(7), "Primary", "openai", "active", nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to, 21600).WillReturnRows(
+		sqlmock.NewRows([]string{"model", "bucket", "total", "successes", "failures", "exact", "estimated"}).
+			AddRow("gpt-5", from.In(time.FixedZone("Asia/Shanghai", 8*60*60)), int64(36), int64(30), int64(6), int64(30), int64(6)),
+	)
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceGroupMonitorGroup, GroupID: 7, From: from, To: to,
+		BucketSeconds: 21600, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := result.(GroupMonitorDetailResponse)
+	if groupResponseBucketSeconds(t, detail) != 21600 || len(detail.Models) != 1 || len(detail.Models[0].Timeline) != 120 {
+		t.Fatalf("six-hour detail = %+v", detail)
+	}
+	if detail.Group.TotalRequests != 36 || detail.Models[0].TotalRequests != 36 || detail.Group.Failures != 6 || detail.Models[0].Failures != 6 {
+		t.Fatalf("six-hour totals = group:%+v model:%+v", detail.Group, detail.Models[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -88,7 +171,7 @@ func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
 			AddRow(int64(1), "Alpha", "openai", "active", nil).
 			AddRow(int64(2), "Beta", "openai", "inactive", nil),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg()).WillReturnRows(
+	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg(), 600).WillReturnRows(
 		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
 			AddRow(int64(1), to.Add(-10*time.Minute), int64(4), int64(3), int64(1)),
 	)
@@ -125,7 +208,7 @@ func TestAdminServiceGroupDetailBuildsModelTimelines(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionByIDSQL)).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).AddRow(int64(7), "Primary", "openai", "active", nil),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to).WillReturnRows(
+	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to, 600).WillReturnRows(
 		sqlmock.NewRows([]string{"model", "bucket", "total", "successes", "failures", "exact", "estimated"}).
 			AddRow("gpt-5", from, int64(2), int64(2), int64(0), int64(2), int64(0)).
 			AddRow("gpt-5", from.Add(10*time.Minute), int64(1), int64(0), int64(1), int64(0), int64(1)),
@@ -206,6 +289,138 @@ func TestRiskFilterAndSortKeepUnavailableAccountsLast(t *testing.T) {
 	filtered := filterAccountsByRisk(items, map[string]string{"min_risk_score": "20", "max_risk_score": "20"})
 	if len(filtered) != 2 || filtered[0].AccountID != 1 || filtered[1].AccountID != 2 {
 		t.Fatalf("filtered accounts = %+v", filtered)
+	}
+}
+
+func TestAdminServiceAccountsUsesFullInventory(t *testing.T) {
+	repoDB, repoMock := newSourceMock(t)
+	sourceDB, sourceMock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	expectAccountInventory(sourceMock)
+	repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(
+		sqlmock.NewRows(accountSummaryColumns()).AddRow(
+			int64(2), nil, "openai", int64(8), int64(7), int64(1), int64(120),
+			1.5, 0.8, 200.0, int64(350), to.Add(-time.Minute), to.Add(-2*time.Minute),
+			int64(1), int64(2), int64(0), int64(0), int64(0), int64(1), 0.875,
+		),
+	)
+	expectAccountHealth(repoMock, to, int64(2))
+
+	service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+	service.now = func() time.Time { return to }
+	result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := result.(PageResponse)
+	items := page.Items.([]AccountSummary)
+	if page.Total != 3 || len(items) != 3 {
+		t.Fatalf("full inventory page = %+v items=%+v", page, items)
+	}
+	if len(page.Groups) != 3 || page.Groups[0].GroupID != 11 || page.Groups[1].GroupID != 12 || page.Groups[2].GroupID != 10 {
+		t.Fatalf("full inventory group options = %+v", page.Groups)
+	}
+	idle := accountSummaryByID(t, items, 1)
+	if idle.Attempts != 0 || idle.Successes != 0 || idle.Failures != 0 || idle.Health.RiskScoreAvailable {
+		t.Fatalf("idle account = %+v, want zero metrics and unavailable risk", idle)
+	}
+	multi := accountSummaryByID(t, items, 3)
+	groups := accountSummaryGroups(t, multi)
+	if len(groups) != 2 || groups[0].GroupID != 11 || groups[1].GroupID != 12 {
+		t.Fatalf("multi-account groups = %+v", groups)
+	}
+	if err := repoMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceAccountsFiltersMultipleGroups(t *testing.T) {
+	tests := []struct {
+		name       string
+		query      map[string]string
+		factRows   *sqlmock.Rows
+		wantIDs    []int64
+		wantGroups []int64
+	}{
+		{
+			name:  "concrete group keeps every membership",
+			query: map[string]string{"group_id": "11"},
+			factRows: sqlmock.NewRows(accountSummaryColumns()).AddRow(
+				int64(3), nil, "anthropic", int64(4), int64(4), int64(0), int64(20),
+				0.4, 0.2, 150.0, int64(220), time.Date(2026, 7, 15, 0, 50, 0, 0, time.UTC), time.Time{},
+				int64(1), int64(1), int64(0), int64(0), int64(0), int64(1), 1.0,
+			),
+			wantIDs: []int64{3}, wantGroups: []int64{11, 12},
+		},
+		{
+			name:     "deleted membership counts as ungrouped",
+			query:    map[string]string{"group_id": "ungrouped"},
+			factRows: sqlmock.NewRows(accountSummaryColumns()),
+			wantIDs:  []int64{1},
+		},
+		{
+			name:  "fact filter excludes zero matches",
+			query: map[string]string{"model": "gpt"},
+			factRows: sqlmock.NewRows(accountSummaryColumns()).AddRow(
+				int64(2), nil, "openai", int64(2), int64(2), int64(0), int64(10),
+				0.2, 0.1, 100.0, int64(120), time.Date(2026, 7, 15, 0, 55, 0, 0, time.UTC), time.Time{},
+				int64(1), int64(1), int64(0), int64(0), int64(0), int64(1), 1.0,
+			),
+			wantIDs: []int64{2}, wantGroups: []int64{10},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoDB, repoMock := newSourceMock(t)
+			sourceDB, sourceMock := newSourceMock(t)
+			from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+			to := from.Add(time.Hour)
+			expectAccountInventory(sourceMock)
+			repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(test.factRows)
+			if test.name != "deleted membership counts as ungrouped" {
+				expectAccountHealth(repoMock, to, test.wantIDs...)
+			}
+
+			service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+			service.now = func() time.Time { return to }
+			result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+				Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20, Query: test.query,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			page := result.(PageResponse)
+			items := page.Items.([]AccountSummary)
+			if page.Total != int64(len(test.wantIDs)) || len(items) != len(test.wantIDs) {
+				t.Fatalf("page = %+v items=%+v", page, items)
+			}
+			for index, wantID := range test.wantIDs {
+				if items[index].AccountID != wantID {
+					t.Fatalf("account IDs = %+v, want %v", items, test.wantIDs)
+				}
+			}
+			if len(test.wantGroups) > 0 {
+				groups := accountSummaryGroups(t, items[0])
+				for index, wantID := range test.wantGroups {
+					if index >= len(groups) || groups[index].GroupID != wantID {
+						t.Fatalf("groups = %+v, want %v", groups, test.wantGroups)
+					}
+				}
+			}
+			if err := repoMock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+			if err := sourceMock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -405,21 +620,31 @@ func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
 	sourceDB, sourceMock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
-	sourceMock.ExpectQuery(regexp.QuoteMeta(accountIDsByStatusQuery)).WithArgs("active").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)).AddRow(int64(10)))
-	repoMock.ExpectQuery(`SELECT stats\.\*`).WithArgs(
-		from, to, "physical", 20, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "active", sqlmock.AnyArg(),
-	).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()))
+	sourceMock.ExpectQuery(regexp.QuoteMeta(allAccountDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}).
+			AddRow(int64(9), nil, "active account", "openai", "active", true, nil).
+			AddRow(int64(10), nil, "inactive account", "openai", "inactive", false, nil),
+	)
+	sourceMock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_deleted_at"}),
+	)
+	repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
+		AddRow(int64(9), nil, "openai", int64(2), int64(2), int64(0), int64(10), 0.2, 0.1, 100.0, int64(120), to, time.Time{}, int64(1), int64(1), int64(0), int64(0), int64(0), int64(2), 1.0).
+		AddRow(int64(10), nil, "openai", int64(3), int64(3), int64(0), int64(20), 0.3, 0.2, 110.0, int64(130), to, time.Time{}, int64(1), int64(1), int64(0), int64(0), int64(0), int64(2), 1.0))
+	expectAccountHealth(repoMock, to, int64(9))
 
-	result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
-		ExecuteAdmin(context.Background(), AdminRequest{
-			Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20,
-			Query: map[string]string{"account_status": "active"},
-		})
+	service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+	service.now = func() time.Time { return to }
+	result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: to, Page: 1, PageSize: 20,
+		Query: map[string]string{"account_status": "active"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.(PageResponse).Total != 0 {
+	page := result.(PageResponse)
+	items := page.Items.([]AccountSummary)
+	if page.Total != 1 || len(items) != 1 || items[0].AccountID != 9 || items[0].Status != "active" {
 		t.Fatalf("result = %+v", result)
 	}
 	if err := repoMock.ExpectationsWereMet(); err != nil {
@@ -464,6 +689,59 @@ func TestAdminServiceAttemptsPassesDetailFilters(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUsersDetailResponseFields(t *testing.T) {
+	repoDB, repoMock := newSourceMock(t)
+	sourceDB, sourceMock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	lastAttemptedAt := to.Add(-time.Minute)
+	repoMock.ExpectQuery(regexp.QuoteMeta(usersSQL)).WithArgs(
+		from, to, int64(9), 20, 0, "", "", "", "", int64(0), int64(0), 0, 0,
+	).WillReturnRows(sqlmock.NewRows([]string{
+		"user_id", "api_key_id", "attempts", "successes", "failures", "tokens", "user_cost", "last_attempted_at", "total",
+	}).AddRow(int64(7), int64(13), int64(4), int64(3), int64(1), int64(120), 1.25, lastAttemptedAt, int64(1)))
+	sourceMock.ExpectQuery(regexp.QuoteMeta(userDimensionQuery)).WithArgs(sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "email", "username", "status", "deleted_at"}).
+			AddRow(int64(7), "alice@example.test", "alice", "active", nil),
+	)
+	sourceMock.ExpectQuery(regexp.QuoteMeta(apiKeyDimensionQuery)).WithArgs(sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "user_id", "name", "masked_prefix", "status", "deleted_at"}).
+			AddRow(int64(13), int64(7), "Production Key", "sk-old***", "active", nil),
+	)
+
+	result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
+		ExecuteAdmin(context.Background(), AdminRequest{
+			Resource: ResourceUsers, AccountID: 9, From: from, To: to, Page: 1, PageSize: 20, Query: map[string]string{},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := result.(PageResponse).Items.([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("users = %+v", items)
+	}
+	item := items[0]
+	for _, key := range []string{"email", "api_key_name", "attempts", "successes", "failures", "success_rate", "tokens", "user_cost", "last_attempted_at"} {
+		if _, ok := item[key]; !ok {
+			t.Errorf("user detail missing %q: %+v", key, item)
+		}
+	}
+	for _, key := range []string{"username", "masked_prefix"} {
+		if _, ok := item[key]; ok {
+			t.Errorf("user detail unexpectedly exposes %q: %+v", key, item)
+		}
+	}
+	if item["email"] != "alice@example.test" || item["api_key_name"] != "Production Key" || item["success_rate"] != 0.75 || item["last_attempted_at"] != lastAttemptedAt {
+		t.Fatalf("user detail = %+v", item)
+	}
+	if err := repoMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceMock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -591,4 +869,77 @@ func accountSummaryColumns() []string {
 
 func healthMetricColumns() []string {
 	return []string{"account_id", "parent_account_id", "platform", "attempts", "successes", "failures", "last_success_at", "consecutive_model_failures", "auth_quota_failures_15m", "rate_overload_ratio_15m", "attempts_24h", "top_user_ratio_24h", "current_hour_volume", "baseline_hour_volume", "p95_duration_ms", "baseline_p95_duration_ms", "top_error_category", "top_error_count"}
+}
+
+func expectAccountInventory(mock sqlmock.Sqlmock) {
+	deletedAt := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(regexp.QuoteMeta(allAccountDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}).
+			AddRow(int64(1), nil, "idle", "grok", "active", true, nil).
+			AddRow(int64(2), nil, "busy", "openai", "active", true, nil).
+			AddRow(int64(3), nil, "multi", "anthropic", "active", true, nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_deleted_at"}).
+			AddRow(int64(1), int64(99), "Retired", "grok", "inactive", deletedAt).
+			AddRow(int64(2), int64(10), "GPT", "openai", "active", nil).
+			AddRow(int64(3), int64(11), "Claude", "anthropic", "active", nil).
+			AddRow(int64(3), int64(12), "Shared", "anthropic", "active", nil),
+	)
+}
+
+func expectAccountHealth(mock sqlmock.Sqlmock, now time.Time, accountIDs ...int64) {
+	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}),
+	)
+	rows := sqlmock.NewRows(healthMetricColumns())
+	for _, accountID := range accountIDs {
+		rows.AddRow(
+			accountID, int64(0), "openai", int64(1), int64(1), int64(0), now.Add(-time.Minute),
+			0, 0, 0.0, int64(1), 0.0, int64(1), 1.0, int64(100), 100.0, "", int64(0),
+		)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).WithArgs(now.Add(-time.Hour), now, "physical", sqlmock.AnyArg()).WillReturnRows(rows)
+}
+
+func accountSummaryByID(t *testing.T, items []AccountSummary, accountID int64) AccountSummary {
+	t.Helper()
+	for _, item := range items {
+		if item.AccountID == accountID {
+			return item
+		}
+	}
+	t.Fatalf("account %d not found in %+v", accountID, items)
+	return AccountSummary{}
+}
+
+type accountGroupContract struct {
+	GroupID  int64  `json:"group_id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+}
+
+func accountSummaryGroups(t *testing.T, item AccountSummary) []accountGroupContract {
+	t.Helper()
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Groups []accountGroupContract `json:"groups"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload.Groups
+}
+
+func groupResponseBucketSeconds(t *testing.T, response any) int64 {
+	t.Helper()
+	field := reflect.ValueOf(response).FieldByName("BucketSeconds")
+	if !field.IsValid() {
+		t.Fatalf("%T is missing BucketSeconds", response)
+	}
+	return field.Int()
 }

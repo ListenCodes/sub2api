@@ -52,12 +52,14 @@ describe('UserRiskControlRulesView', () => {
     expect(wrapper.findComponent(DataTable).exists()).toBe(true)
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
     expect(wrapper.findComponent(BaseDialog).props('show')).toBe(true)
+    expect(wrapper.findComponent(BaseDialog).props('closeOnClickOutside')).toBe(true)
     expect(wrapper.findAllComponents(Select).length).toBeGreaterThanOrEqual(3)
     await clickBody('[data-testid="template-login_failure_burst"]')
     expect(bodyElement('[data-testid="template-login_failure_burst"]').getAttribute('aria-pressed')).toBe('true')
 
     await wrapper.findComponent(BaseDialog).vm.$emit('close')
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
+    expect(wrapper.findAllComponents(BaseDialog).some((dialog) => dialog.props('show') && dialog.props('closeOnClickOutside'))).toBe(true)
     expect(wrapper.findComponent(Toggle).exists()).toBe(true)
   })
 

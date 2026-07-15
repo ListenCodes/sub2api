@@ -58,7 +58,7 @@
         </footer>
       </aside>
     </div>
-    <BaseDialog :show="confirming" :title="detail?.user?.status === 'active' ? t('admin.userRiskControl.confirmBan') : t('admin.userRiskControl.confirmUnban')" width="narrow" :z-index="80" @close="closeConfirmation">
+    <BaseDialog :show="confirming" :title="detail?.user?.status === 'active' ? t('admin.userRiskControl.confirmBan') : t('admin.userRiskControl.confirmUnban')" width="narrow" :close-on-click-outside="true" :z-index="80" @close="closeConfirmation">
       <div data-testid="status-confirmation">
         <TextArea v-model="reason" data-testid="status-reason" label="操作原因" required :placeholder="t('admin.userRiskControl.reasonPlaceholder')" :error="validationError" @update:model-value="validationError = ''" />
       </div>

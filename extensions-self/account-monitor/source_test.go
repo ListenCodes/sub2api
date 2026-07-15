@@ -57,6 +57,7 @@ func TestSourceViewSQLDoesNotExposeSensitiveColumns(t *testing.T) {
 		"create or replace view extensions_self_ro.usage_source",
 		"create or replace view extensions_self_ro.error_source",
 		"create or replace view extensions_self_ro.account_dimension",
+		"create or replace view extensions_self_ro.account_group_dimension",
 		"create or replace view extensions_self_ro.user_dimension",
 		"create or replace view extensions_self_ro.api_key_dimension",
 		"create or replace view extensions_self_ro.group_dimension",
@@ -64,6 +65,30 @@ func TestSourceViewSQLDoesNotExposeSensitiveColumns(t *testing.T) {
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("safe view SQL missing %q", required)
+		}
+	}
+}
+
+func TestSourceContractsIncludeAccountInventoryGroups(t *testing.T) {
+	raw, err := os.ReadFile("source.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(raw))
+	for _, required := range []string{
+		"accountgroupdimension",
+		"readaccountdimensions",
+		"readaccountgroupdimensions",
+		"extensions_self_ro.account_group_dimension",
+		"account_id",
+		"group_id",
+		"group_name",
+		"group_platform",
+		"group_status",
+		"group_deleted_at",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Errorf("account inventory source contract missing %q", required)
 		}
 	}
 }

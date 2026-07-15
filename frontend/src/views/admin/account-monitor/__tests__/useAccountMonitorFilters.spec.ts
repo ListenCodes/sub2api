@@ -4,6 +4,7 @@ import { parseAccountMonitorQuery, serializeAccountMonitorQuery } from '@/views/
 
 describe('account monitor URL state', () => {
   it('restores filters, risk range, sort, page, selection, and detail tab exactly', () => {
+		window.__APP_CONFIG__ = { table_page_size_options: [20, 100, 1000] } as typeof window.__APP_CONFIG__
     const state = parseAccountMonitorQuery({
       range: 'custom',
       from: '2026-07-01T00:00:00.000Z',
@@ -18,7 +19,8 @@ describe('account monitor URL state', () => {
       sort_by: 'risk_score',
       sort_order: 'asc',
       page: '3',
-      page_size: '50',
+			page_size: '1000',
+			group_id: 'ungrouped',
       account: '42',
       tab: 'errors',
     })
@@ -37,7 +39,8 @@ describe('account monitor URL state', () => {
       sortBy: 'risk_score',
       sortOrder: 'asc',
       page: 3,
-      pageSize: 50,
+			pageSize: 1000,
+			groupID: 'ungrouped',
       selectedAccountID: 42,
       detailTab: 'errors',
     })
@@ -55,7 +58,8 @@ describe('account monitor URL state', () => {
       sort_by: 'risk_score',
       sort_order: 'asc',
       page: '3',
-      page_size: '50',
+			page_size: '1000',
+			group_id: 'ungrouped',
       account: '42',
       tab: 'errors',
     })

@@ -35,17 +35,17 @@
             :placeholder="t('admin.userRiskControl.searchPlaceholder')"
             class="w-full sm:w-72"
             data-testid="risk-user-search"
-            @update:model-value="draft.search = $event"
-            @search="applyFilters"
+            @update:model-value="updateSearch"
+            @search="runFiltersNow"
           />
           <Select :model-value="draft.status || ''" class="w-full sm:w-40" data-testid="account-status-filter" :options="accountStatusFilterOptions" @update:model-value="setFilter('status', $event)" />
           <Select :model-value="draft.riskType || ''" class="w-full sm:w-44" data-testid="risk-type-filter" :options="riskTypeFilterOptions" @update:model-value="setFilter('riskType', $event)" />
           <Select :model-value="draft.riskLevel || ''" class="w-full sm:w-40" data-testid="risk-level-filter" :options="riskLevelFilterOptions" @update:model-value="setFilter('riskLevel', $event)" />
           <Select :model-value="draft.processingStatus || ''" class="w-full sm:w-40" data-testid="processing-status-filter" :options="processingStatusFilterOptions" @update:model-value="setFilter('processingStatus', $event)" />
           <div class="flex w-full items-center gap-2 sm:w-auto" aria-label="风险分范围">
-            <input v-model.number="draft.minScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-24 sm:flex-none" placeholder="最低分" data-testid="min-score-filter" @change="applyFilters" />
+            <input v-model.number="draft.minScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-24 sm:flex-none" placeholder="最低分" data-testid="min-score-filter" @input="scheduleFilters" />
             <span class="text-sm text-gray-400">至</span>
-            <input v-model.number="draft.maxScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-24 sm:flex-none" placeholder="最高分" data-testid="max-score-filter" @change="applyFilters" />
+            <input v-model.number="draft.maxScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-24 sm:flex-none" placeholder="最高分" data-testid="max-score-filter" @input="scheduleFilters" />
           </div>
           <label class="flex h-10 items-center gap-2 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
             <Toggle :model-value="Boolean(draft.riskOnly)" data-testid="risk-only-filter" @update:model-value="setRiskOnly" />
@@ -100,7 +100,7 @@
     </TablePageLayout>
 
     <UserRiskControlUserDrawer v-if="selectedUser" :user="selectedUser" @close="selectedUser = null" @updated="handleUpdated" />
-    <BaseDialog :show="Boolean(batchAction)" :title="batchDialogTitle" width="narrow" :z-index="80" @close="closeBatchAction">
+    <BaseDialog :show="Boolean(batchAction)" :title="batchDialogTitle" width="narrow" :close-on-click-outside="true" :z-index="80" @close="closeBatchAction">
       <p class="text-sm text-gray-500 dark:text-gray-400">将处理 {{ selectedIds.size }} 个账号；每个账号都会单独记录结果。</p>
       <TextArea v-model="batchReason" class="mt-4" data-testid="batch-reason" label="操作原因" required placeholder="填写操作原因（必填）" :error="batchValidationError" @update:model-value="batchValidationError = ''" />
       <template #footer><button type="button" class="btn btn-secondary" @click="closeBatchAction">{{ t('common.cancel') }}</button><button type="button" class="btn" :class="batchAction === 'disabled' ? 'btn-danger' : 'btn-primary'" data-testid="batch-confirm" :disabled="batchSaving" @click="confirmBatchAction">{{ batchSaving ? t('common.saving') : t('common.confirm') }}</button></template>
@@ -125,6 +125,7 @@ import Select from '@/components/common/Select.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import type { Column } from '@/components/common/types'
+import { useDebouncedAction } from '@/composables/useDebouncedAction'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { userRiskControlV2API, type AccountStatus, type RiskSortBy, type RiskUserRow, type UserRiskFilters } from '@/api/admin/userRiskControlV2'
 import { accountStatusOptions, formatAccountStatus, formatAuditResult, formatProcessingStatus, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType, processingStatusOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
@@ -279,6 +280,13 @@ async function applyFilters() {
   await loadUsers()
 }
 
+const { schedule: scheduleFilters, runNow: runFiltersNow } = useDebouncedAction(applyFilters, 300)
+
+function updateSearch(value: string) {
+  draft.search = value
+  scheduleFilters()
+}
+
 function normalizeScore(value: unknown): number | undefined {
   if (value === '' || value === null || value === undefined) return undefined
   const score = Number(value)
@@ -287,12 +295,12 @@ function normalizeScore(value: unknown): number | undefined {
 
 function setFilter(key: 'status' | 'riskType' | 'riskLevel' | 'processingStatus', value: string | number | boolean | null) {
   Object.assign(draft, { [key]: String(value ?? '') })
-  void applyFilters()
+  void runFiltersNow()
 }
 
 function setRiskOnly(value: boolean) {
   draft.riskOnly = value
-  void applyFilters()
+  void runFiltersNow()
 }
 
 async function setMobileSort(value: string | number | boolean | null) {
@@ -311,7 +319,7 @@ async function setMobileSort(value: string | number | boolean | null) {
 
 async function resetFilters() {
   Object.assign(draft, { search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false, minScore: undefined, maxScore: undefined })
-  await applyFilters()
+  await runFiltersNow()
 }
 
 async function changePage(next: number) {

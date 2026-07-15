@@ -6,7 +6,6 @@
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div><h2 class="text-lg font-semibold text-gray-950 dark:text-white">账号监控</h2><p class="mt-0.5 text-xs text-gray-500">{{ lastUpdated ? `更新于 ${lastUpdated.toLocaleTimeString()}` : '尚未更新' }}</p></div>
             <div class="flex flex-wrap items-center gap-2">
-              <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300"><Toggle v-model="autoRefresh" />自动刷新</label>
               <button type="button" class="btn btn-secondary" data-testid="account-thresholds-open" @click="thresholdOpen = true"><Icon name="cog" size="sm" />阈值</button>
               <button type="button" class="btn btn-secondary" data-testid="account-rebuild-open" @click="rebuildOpen = true"><Icon name="database" size="sm" />历史重建</button>
               <button type="button" class="btn btn-primary" data-testid="account-monitor-refresh" :disabled="loading" @click="refresh"><Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />刷新</button>
@@ -16,9 +15,9 @@
           <AccountMonitorOverview :overview="overview" :quality="quality" />
         </div>
       </template>
-      <template #filters><AccountMonitorFilters :state="state" @apply="setFilters" @reset="resetFilters" /></template>
+		<template #filters><AccountMonitorFilters :state="state" :groups="groupOptions" @apply="setFilters" @reset="resetFilters" /></template>
       <template #table><AccountMonitorTable :accounts="accounts" :loading="loading" :sort-by="state.sortBy" :sort-order="state.sortOrder" @select="openAccount" @sort-risk="sortRisk" /></template>
-      <template v-if="total" #pagination><Pagination :page="state.page" :total="total" :page-size="state.pageSize" :page-size-options="[20, 50, 100]" @update:page="setPage" @update:page-size="changePageSize" /></template>
+		<template v-if="total" #pagination><Pagination :page="state.page" :total="total" :page-size="state.pageSize" :page-size-options="pageSizeOptions" @update:page="setPage" @update:page-size="changePageSize" /></template>
     </TablePageLayout>
     <AccountMonitorDrawer :show="Boolean(selectedAccount)" :account="selectedAccount" :filters="requestFilters" :tab="state.detailTab" @close="closeAccount" @update:tab="changeDetailTab" />
     <AccountMonitorThresholdDialog :show="thresholdOpen" @close="thresholdOpen = false" @saved="refresh" />
@@ -30,7 +29,6 @@
 import { computed, onMounted, ref } from 'vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
-import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { accountMonitorAPI, type AccountDataQuality, type AccountFilters, type AccountMonitorAccount, type AccountMonitorOverview as AccountMonitorOverviewResponse, type AccountPageSize } from '@/api/admin/accountMonitor'
 import AccountMonitorOverview from './AccountMonitorOverview.vue'
@@ -40,10 +38,12 @@ import AccountMonitorDrawer from './AccountMonitorDrawer.vue'
 import AccountMonitorThresholdDialog from './AccountMonitorThresholdDialog.vue'
 import AccountMonitorRebuildDialog from './AccountMonitorRebuildDialog.vue'
 import { resolveTimeRange, useAccountMonitorFilters, type AccountDetailTab } from './useAccountMonitorFilters'
+import { getConfiguredTablePageSizeOptions } from '@/utils/tablePreferences'
 
 const overview = ref<AccountMonitorOverviewResponse | null>(null)
 const quality = ref<AccountDataQuality | null>(null)
 const accounts = ref<AccountMonitorAccount[]>([])
+const groupOptions = ref<AccountMonitorAccount['groups']>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
@@ -52,10 +52,16 @@ const selectedAccount = ref<AccountMonitorAccount | null>(null)
 const thresholdOpen = ref(false)
 const rebuildOpen = ref(false)
 let requestID = 0
-const { state, autoRefresh, refresh, setFilters, resetFilters, setPage, setPageSize, selectAccount, setDetailTab } = useAccountMonitorFilters(loadAll)
+const { state, refresh, setFilters, resetFilters, setPage, setPageSize, selectAccount, setDetailTab } = useAccountMonitorFilters(loadAll)
+const pageSizeOptions = getConfiguredTablePageSizeOptions()
+function accountGroups(items: AccountMonitorAccount[]) {
+	const groups = new Map<number, AccountMonitorAccount['groups'][number]>()
+	for (const account of items) for (const group of account.groups || []) groups.set(group.group_id, group)
+	return [...groups.values()].sort((left, right) => left.platform.localeCompare(right.platform) || left.name.localeCompare(right.name) || left.group_id - right.group_id)
+}
 const requestFilters = computed<AccountFilters>(() => {
   const range = resolveTimeRange(state)
-  return { ...range, page: state.page, pageSize: state.pageSize, sortBy: state.sortBy, sortOrder: state.sortOrder, platform: state.platform, accountID: state.accountID, parentAccountID: state.parentAccountID, accountStatus: state.accountStatus, model: state.model, userID: state.userID, apiKeyID: state.apiKeyID, requestType: state.requestType, result: state.result, errorCategory: state.errorCategory, statusCode: state.statusCode, rollup: state.rollup, minRiskScore: state.minRiskScore, maxRiskScore: state.maxRiskScore }
+	return { ...range, page: state.page, pageSize: state.pageSize, sortBy: state.sortBy, sortOrder: state.sortOrder, platform: state.platform, accountID: state.accountID, parentAccountID: state.parentAccountID, accountStatus: state.accountStatus, model: state.model, userID: state.userID, apiKeyID: state.apiKeyID, requestType: state.requestType, result: state.result, errorCategory: state.errorCategory, statusCode: state.statusCode, rollup: state.rollup, minRiskScore: state.minRiskScore, maxRiskScore: state.maxRiskScore, groupID: state.groupID }
 })
 const message = (value: unknown) => value instanceof Error ? value.message : typeof value === 'object' && value && 'message' in value ? String(value.message) : '账号监控加载失败'
 async function loadAll() {
@@ -66,7 +72,11 @@ async function loadAll() {
   const failures: string[] = []
   if (overviewResult.status === 'fulfilled') overview.value = overviewResult.value; else failures.push(message(overviewResult.reason))
   if (qualityResult.status === 'fulfilled') quality.value = qualityResult.value; else failures.push(message(qualityResult.reason))
-  if (accountResult.status === 'fulfilled') { accounts.value = accountResult.value.items; total.value = accountResult.value.total } else failures.push(message(accountResult.reason))
+  if (accountResult.status === 'fulfilled') {
+		accounts.value = accountResult.value.items
+		groupOptions.value = accountResult.value.groups || accountGroups(accountResult.value.items)
+		total.value = accountResult.value.total
+	} else failures.push(message(accountResult.reason))
   if (state.selectedAccountID) {
     selectedAccount.value = accounts.value.find((item) => item.account_id === state.selectedAccountID) || selectedAccount.value
     if (!selectedAccount.value) try { selectedAccount.value = await accountMonitorAPI.getAccount(state.selectedAccountID, requestFilters.value) } catch (value) { failures.push(message(value)) }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,8 +79,6 @@ func TestHandlerRejectsInvalidRangeAndPageSize(t *testing.T) {
 	tests := []string{
 		"/accounts?from=2026-07-02T00:00:00Z&to=2026-07-01T00:00:00Z",
 		"/accounts?from=2026-01-01T00:00:00Z&to=2026-07-01T00:00:00Z",
-		"/accounts?page_size=21",
-		"/accounts?page_size=101",
 		"/accounts?min_risk_score=-1",
 		"/accounts?max_risk_score=101",
 		"/accounts?min_risk_score=not-a-number",
@@ -91,6 +90,33 @@ func TestHandlerRejectsInvalidRangeAndPageSize(t *testing.T) {
 		handler.ServeAdmin(recorder, req, "/accounts", 99)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestHandlerAcceptsConfiguredPageSizes(t *testing.T) {
+	for _, pageSize := range []int{5, 12, 20, 100, 1000} {
+		t.Run(strconv.Itoa(pageSize), func(t *testing.T) {
+			backend := &fakeAdminBackend{}
+			recorder := httptest.NewRecorder()
+			path := "/accounts?page_size=" + strconv.Itoa(pageSize)
+			req := httptest.NewRequest(http.MethodGet, "http://example.test"+path, nil)
+
+			NewHandler(backend).ServeAdmin(recorder, req, "/accounts", 99)
+
+			if recorder.Code != http.StatusOK || backend.request.PageSize != pageSize {
+				t.Fatalf("page_size=%d status=%d request=%+v body=%s", pageSize, recorder.Code, backend.request, recorder.Body.String())
+			}
+		})
+	}
+
+	for _, pageSize := range []int{4, 1001} {
+		recorder := httptest.NewRecorder()
+		path := "/accounts?page_size=" + strconv.Itoa(pageSize)
+		req := httptest.NewRequest(http.MethodGet, "http://example.test"+path, nil)
+		NewHandler(&fakeAdminBackend{}).ServeAdmin(recorder, req, "/accounts", 99)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("page_size=%d status=%d body=%s", pageSize, recorder.Code, recorder.Body.String())
 		}
 	}
 }
@@ -158,6 +184,44 @@ func TestHandlerRoutesGroupMonitorUsingCompleteTenMinuteRange(t *testing.T) {
 	}
 }
 
+func TestHandlerRoutesGroupMonitorRanges(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 7, 30, 0, time.UTC)
+	tests := []struct {
+		rangeValue    string
+		duration      time.Duration
+		bucketSeconds int64
+	}{
+		{rangeValue: "1h", duration: time.Hour, bucketSeconds: 600},
+		{rangeValue: "6h", duration: 6 * time.Hour, bucketSeconds: 600},
+		{rangeValue: "12h", duration: 12 * time.Hour, bucketSeconds: 600},
+		{rangeValue: "24h", duration: 24 * time.Hour, bucketSeconds: 600},
+		{rangeValue: "7d", duration: 7 * 24 * time.Hour, bucketSeconds: 3600},
+		{rangeValue: "30d", duration: 30 * 24 * time.Hour, bucketSeconds: 21600},
+	}
+	for _, test := range tests {
+		t.Run(test.rangeValue, func(t *testing.T) {
+			backend := &fakeAdminBackend{}
+			handler := NewHandler(backend)
+			handler.now = func() time.Time { return now }
+			path := "/group-monitor/groups?range=" + test.rangeValue
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "http://example.test"+path, nil)
+
+			handler.ServeAdmin(recorder, req, "/group-monitor/groups", 99)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if got := backend.request.To.Sub(backend.request.From); got != test.duration {
+				t.Fatalf("duration=%s, want %s", got, test.duration)
+			}
+			if got := adminRequestBucketSeconds(t, backend.request); got != test.bucketSeconds {
+				t.Fatalf("bucket_seconds=%d, want %d", got, test.bucketSeconds)
+			}
+		})
+	}
+}
+
 func adminRequestGroupID(t *testing.T, request AdminRequest) int64 {
 	t.Helper()
 	field := reflect.ValueOf(request).FieldByName("GroupID")
@@ -167,10 +231,18 @@ func adminRequestGroupID(t *testing.T, request AdminRequest) int64 {
 	return field.Int()
 }
 
+func adminRequestBucketSeconds(t *testing.T, request AdminRequest) int64 {
+	t.Helper()
+	field := reflect.ValueOf(request).FieldByName("BucketSeconds")
+	if !field.IsValid() {
+		t.Fatal("AdminRequest is missing BucketSeconds")
+	}
+	return field.Int()
+}
+
 func TestHandlerRejectsInvalidGroupMonitorOptions(t *testing.T) {
 	for _, path := range []string{
 		"/group-monitor/groups?range=2h",
-		"/group-monitor/groups?page_size=20",
 		"/group-monitor/groups/no?range=6h",
 	} {
 		backend := &fakeAdminBackend{}

@@ -53,6 +53,7 @@
 | `extensions_self_ro.usage_source` | 可计费用量、账号/模型、Token、成本、延迟和媒体值 |
 | `extensions_self_ro.error_source` | 脱敏错误、重试数组和新事件的实际上游模型 |
 | `extensions_self_ro.account_dimension` | 账号 ID、母账号、名称、平台和状态 |
+| `extensions_self_ro.account_group_dimension` | 账号与其全部分组的多对多映射，以及分组名称、平台、状态和软删除时间；不含账号凭据 |
 | `extensions_self_ro.user_dimension` | 用户 ID、展示身份和状态 |
 | `extensions_self_ro.api_key_dimension` | API Key ID、名称和固定掩码前缀 |
 | `extensions_self_ro.group_dimension` | 分组 ID、名称、平台、状态和软删除时间；不含账号凭据 |

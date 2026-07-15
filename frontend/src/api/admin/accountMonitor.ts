@@ -1,12 +1,10 @@
 import apiClient from '@/api/client'
 
 const BASE_PATH = '/admin/extensions-self/account-monitor'
-const ACCOUNT_PAGE_SIZES = [20, 50, 100] as const
-const GROUP_PAGE_SIZES = [12, 24, 48] as const
-const GROUP_RANGES = ['1h', '6h', '12h', '24h'] as const
+const GROUP_RANGES = ['1h', '6h', '12h', '24h', '7d', '30d'] as const
 
-export type AccountPageSize = typeof ACCOUNT_PAGE_SIZES[number]
-export type GroupPageSize = typeof GROUP_PAGE_SIZES[number]
+export type AccountPageSize = number
+export type GroupPageSize = number
 export type GroupRange = typeof GROUP_RANGES[number]
 export type SortOrder = 'asc' | 'desc'
 export type HealthLevel = 'normal' | 'attention' | 'abnormal' | 'critical'
@@ -65,7 +63,15 @@ export interface AccountMonitorAccount {
   image_count: number
   video_count: number
   video_duration_seconds: number
+  groups: AccountGroupSummary[]
   health: AccountMonitorHealth
+}
+
+export interface AccountGroupSummary {
+  group_id: number
+  name: string
+  platform: string
+  status: string
 }
 
 export interface PageResponse<T> {
@@ -73,6 +79,10 @@ export interface PageResponse<T> {
   total: number
   page: number
   page_size: number
+}
+
+export interface AccountPageResponse extends PageResponse<AccountMonitorAccount> {
+  groups?: AccountGroupSummary[]
 }
 
 export interface AccountFilters extends TimeRange {
@@ -94,6 +104,7 @@ export interface AccountFilters extends TimeRange {
   rollup?: 'physical' | 'parent'
   minRiskScore?: number
   maxRiskScore?: number
+  groupID?: number | 'ungrouped'
 }
 
 export interface AccountModelRow {
@@ -113,14 +124,14 @@ export interface AccountUserRow {
   user_id: number
   api_key_id: number
   email?: string
-  username?: string
   api_key_name?: string
-  masked_prefix?: string
   attempts: number
   successes: number
   failures: number
+	success_rate: number
   tokens: number
   user_cost: number
+	last_attempted_at: string
 }
 
 export interface AccountErrorRow {
@@ -248,6 +259,7 @@ export interface GroupMonitorCard {
 export type GroupMonitorQuality = DataQualitySnapshot
 
 export interface GroupMonitorGroupsResponse extends PageResponse<GroupMonitorCard> {
+	bucket_seconds?: number
   platforms: string[]
   data_as_of: string | null
   data_quality: GroupMonitorQuality
@@ -268,6 +280,7 @@ export interface GroupMonitorDetailResponse {
   group: GroupMonitorCard
   models: GroupMonitorModel[]
   data_as_of: string
+	bucket_seconds?: number
 }
 
 export interface GroupFilters {
@@ -294,10 +307,14 @@ function validatePage(page: number | undefined) {
   if (page !== undefined && (!Number.isInteger(page) || page <= 0)) throw new Error('page must be a positive integer')
 }
 
+function validatePageSize(pageSize: number, label: string) {
+  if (!Number.isInteger(pageSize) || pageSize < 5 || pageSize > 1000) throw new Error(`${label} page size must be an integer from 5 to 1000`)
+}
+
 function accountParams(filters: AccountFilters = {}) {
   validatePage(filters.page)
   const pageSize = filters.pageSize ?? 20
-  if (!ACCOUNT_PAGE_SIZES.includes(pageSize as AccountPageSize)) throw new Error('account page size must be one of 20, 50, or 100')
+  validatePageSize(pageSize, 'account')
   return compact({
     from: filters.from,
     to: filters.to,
@@ -319,6 +336,7 @@ function accountParams(filters: AccountFilters = {}) {
     rollup: filters.rollup,
     min_risk_score: filters.minRiskScore,
     max_risk_score: filters.maxRiskScore,
+    group_id: filters.groupID,
   })
 }
 
@@ -370,7 +388,7 @@ class AccountMonitorAPI {
   }
 
   async listAccounts(filters: AccountFilters = {}) {
-    const { data } = await apiClient.get<PageResponse<AccountMonitorAccount>>(`${BASE_PATH}/accounts`, { params: accountParams(filters), signal: this.nextSignal('accounts') })
+    const { data } = await apiClient.get<AccountPageResponse>(`${BASE_PATH}/accounts`, { params: accountParams(filters), signal: this.nextSignal('accounts') })
     return data
   }
 
@@ -434,9 +452,9 @@ class AccountMonitorAPI {
   async listGroups(filters: GroupFilters = {}) {
     validatePage(filters.page)
     const pageSize = filters.pageSize ?? 12
-    if (!GROUP_PAGE_SIZES.includes(pageSize as GroupPageSize)) throw new Error('group page size must be one of 12, 24, or 48')
+    validatePageSize(pageSize, 'group')
     const range = filters.range ?? '6h'
-    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 1h, 6h, 12h, or 24h')
+    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 1h, 6h, 12h, 24h, 7d, or 30d')
     const params = compact({ page: filters.page ?? 1, page_size: pageSize, range, query: filters.query, platform: filters.platform, group_status: filters.groupStatus, call_status: filters.callStatus })
     const { data } = await apiClient.get<GroupMonitorGroupsResponse>(`${BASE_PATH}/group-monitor/groups`, { params, signal: this.nextSignal('groups') })
     return data
@@ -445,7 +463,7 @@ class AccountMonitorAPI {
   async getGroup(groupID: number, filters: Pick<GroupFilters, 'range'> = {}) {
     validatePositiveID(groupID, 'group ID')
     const range = filters.range ?? '6h'
-    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 1h, 6h, 12h, or 24h')
+    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 1h, 6h, 12h, 24h, 7d, or 30d')
     const { data } = await apiClient.get<GroupMonitorDetailResponse>(`${BASE_PATH}/group-monitor/groups/${groupID}`, { params: { range }, signal: this.nextSignal(`group-${groupID}`) })
     return data
   }
