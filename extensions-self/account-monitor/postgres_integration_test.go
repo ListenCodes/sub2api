@@ -389,11 +389,32 @@ func integrationDatabaseURL(t *testing.T, databaseURL, databaseName, username, p
 	}
 	parsed.Path = "/" + databaseName
 	if password == "" {
+		if parsed.User != nil && parsed.User.Username() == username {
+			if existingPassword, ok := parsed.User.Password(); ok {
+				parsed.User = url.UserPassword(username, existingPassword)
+				return parsed.String()
+			}
+		}
 		parsed.User = url.User(username)
 	} else {
 		parsed.User = url.UserPassword(username, password)
 	}
 	return parsed.String()
+}
+
+func TestIntegrationDatabaseURLPreservesOwnerPassword(t *testing.T) {
+	result := integrationDatabaseURL(t, "postgres://postgres:secret@127.0.0.1:5432/postgres?sslmode=disable", "monitor", "postgres", "")
+	parsed, err := url.Parse(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, ok := parsed.User.Password()
+	if !ok || password != "secret" {
+		t.Fatalf("owner password = %q, present = %t; want preserved password", password, ok)
+	}
+	if parsed.Path != "/monitor" {
+		t.Fatalf("database path = %q, want /monitor", parsed.Path)
+	}
 }
 
 func integrationAttempt(key string, at time.Time, accountID int64, result Result) AttemptFact {
