@@ -4,6 +4,8 @@ import { ref } from 'vue'
 
 import { accountMonitorAPI } from '@/api/admin/accountMonitor'
 import AccountMonitorPanel from '@/views/admin/account-monitor/AccountMonitorPanel.vue'
+import AccountMonitorDrawer from '@/views/admin/account-monitor/AccountMonitorDrawer.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 
 vi.mock('@/api/admin/accountMonitor', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/api/admin/accountMonitor')>()
@@ -92,7 +94,7 @@ function seed() {
   })
 	vi.mocked(accountMonitorAPI.listAccounts).mockResolvedValue({ items: [account, idleAccount], total: 895, page: 1, page_size: 20 })
   vi.mocked(accountMonitorAPI.getModels).mockResolvedValue({ items: [{ actual_model: 'gpt-5', model_attribution: 'exact', attempts: 100, successes: 91, failures: 9, tokens: 12345, user_cost: 4.2, account_cost: 2.1, average_duration_ms: 220, p95_duration_ms: 480 }], total: 1, page: 1, page_size: 20 })
-  vi.mocked(accountMonitorAPI.getUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+	vi.mocked(accountMonitorAPI.getUsers).mockResolvedValue({ items: [{ user_id: 7, api_key_id: 9, email: 'alice@example.test', api_key_name: 'Prod Key', attempts: 4, successes: 3, failures: 1, success_rate: 0.75, tokens: 120, user_cost: 1.25, last_attempted_at: '2026-07-15T07:59:00Z' }], total: 1, page: 1, page_size: 20 })
   vi.mocked(accountMonitorAPI.getErrors).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
   vi.mocked(accountMonitorAPI.getTrends).mockResolvedValue([])
   vi.mocked(accountMonitorAPI.getAttempts).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
@@ -147,7 +149,7 @@ describe('AccountMonitorPanel', () => {
     expect(document.body.textContent).toContain('Primary OpenAI')
   })
 
-  it('loads all six detail tabs and keeps a tab-local error retryable', async () => {
+	it('loads five detail tabs without requesting attempts and keeps a tab-local error retryable', async () => {
     vi.mocked(accountMonitorAPI.getErrors).mockRejectedValue(new Error('错误明细暂不可用'))
     const wrapper = mount(AccountMonitorPanel, { global: { stubs: { Icon: true } } })
     await flushPromises()
@@ -162,10 +164,38 @@ describe('AccountMonitorPanel', () => {
     await flushPromises()
     expect(accountMonitorAPI.getErrors).toHaveBeenCalledTimes(2)
 
-    for (const tab of ['models', 'users', 'trends', 'attempts', 'media']) {
+		for (const tab of ['models', 'users', 'trends', 'media']) {
       const button = document.querySelector(`[data-testid="account-detail-tab-${tab}"]`) as HTMLElement
       button.click()
       await flushPromises()
     }
+		expect(document.querySelector('[data-testid="account-detail-tab-attempts"]')).toBeNull()
+		expect(accountMonitorAPI.getAttempts).not.toHaveBeenCalled()
   })
+
+	it('keeps a fixed scrollable detail shell with sticky approved user columns', async () => {
+		const wrapper = mount(AccountMonitorPanel, { global: { stubs: { Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="account-row-42"]').trigger('click')
+		await flushPromises()
+		;(document.querySelector('[data-testid="account-detail-tab-users"]') as HTMLElement).click()
+		await flushPromises()
+
+		const shell = document.querySelector('[data-testid="account-monitor-drawer"]') as HTMLElement
+		const content = document.querySelector('[data-testid="account-detail-content"]') as HTMLElement
+		expect(shell.className).toContain('h-[80vh]')
+		expect(shell.className).toContain('max-h-[80vh]')
+		expect(content.className).toContain('overflow-auto')
+		expect(document.querySelector('thead th')?.className).toContain('sticky')
+		expect(document.body.textContent).toContain('成功率')
+		expect(document.body.textContent).toContain('最近调用')
+		expect(document.body.textContent).not.toContain('用户名')
+		expect(document.body.textContent).not.toContain('脱敏前缀')
+
+		shell.click()
+		await flushPromises()
+		expect(document.querySelector('[data-testid="account-monitor-drawer"]')).not.toBeNull()
+		const drawer = wrapper.findComponent(AccountMonitorDrawer)
+		expect(drawer.findComponent(BaseDialog).props('closeOnClickOutside')).toBe(true)
+	})
 })

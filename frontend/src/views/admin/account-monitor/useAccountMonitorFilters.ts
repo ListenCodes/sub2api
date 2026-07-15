@@ -5,7 +5,7 @@ import { accountMonitorAPI, type AccountFilters, type AccountPageSize } from '@/
 import { getConfiguredTablePageSizeOptions, normalizeTablePageSize } from '@/utils/tablePreferences'
 
 export type AccountRange = 'today' | '24h' | '7d' | '30d' | '90d' | 'custom'
-export type AccountDetailTab = 'models' | 'users' | 'errors' | 'trends' | 'attempts' | 'media'
+export type AccountDetailTab = 'models' | 'users' | 'errors' | 'trends' | 'media'
 
 export interface AccountMonitorFilterState extends AccountFilters {
   range: AccountRange
@@ -19,7 +19,7 @@ export interface AccountMonitorFilterState extends AccountFilters {
 }
 
 const RANGES: AccountRange[] = ['today', '24h', '7d', '30d', '90d', 'custom']
-const TABS: AccountDetailTab[] = ['models', 'users', 'errors', 'trends', 'attempts', 'media']
+const TABS: AccountDetailTab[] = ['models', 'users', 'errors', 'trends', 'media']
 const PAGE_SIZES = () => getConfiguredTablePageSizeOptions()
 
 function queryText(query: LocationQuery | Record<string, unknown>, key: string): string {

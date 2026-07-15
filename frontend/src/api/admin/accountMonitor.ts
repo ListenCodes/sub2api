@@ -120,14 +120,14 @@ export interface AccountUserRow {
   user_id: number
   api_key_id: number
   email?: string
-  username?: string
   api_key_name?: string
-  masked_prefix?: string
   attempts: number
   successes: number
   failures: number
+	success_rate: number
   tokens: number
   user_cost: number
+	last_attempted_at: string
 }
 
 export interface AccountErrorRow {
