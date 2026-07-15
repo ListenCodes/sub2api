@@ -30,7 +30,17 @@ func main() {
 	if err := ApplySchema(ctx, db); err != nil {
 		log.Fatal(err)
 	}
-	server := &http.Server{Addr: cfg.Listen, Handler: NewHTTPServer(cfg, NewSQLRepository(db)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	monitorRuntime, err := newAccountMonitorRuntime(ctx, cfg, db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer monitorRuntime.Close()
+	var monitorHandlers = NewHTTPServer(cfg, NewSQLRepository(db))
+	if monitorRuntime != nil {
+		monitorHandlers = NewHTTPServer(cfg, NewSQLRepository(db), monitorRuntime.handler)
+		go monitorRuntime.collector.Run(ctx)
+	}
+	server := &http.Server{Addr: cfg.Listen, Handler: monitorHandlers, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		log.Printf("extensions-self listening on %s mode=%s", cfg.Listen, cfg.Mode)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

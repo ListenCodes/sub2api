@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	accountmonitor "github.com/ListenCodes/sub2api-account-monitor"
 )
 
 var ErrWeakInternalSecret = errors.New("RISK_CONTROL_INTERNAL_SECRET must be at least 32 characters")
@@ -19,7 +21,7 @@ func validateConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return errors.New("RISK_CONTROL_DATABASE_URL is required")
 	}
-	return nil
+	return cfg.AccountMonitor.Validate()
 }
 
 type Config struct {
@@ -31,6 +33,7 @@ type Config struct {
 	DecisionFailMode  string
 	MaxBodyBytes      int64
 	AdminProxyTimeout int
+	AccountMonitor    accountmonitor.Config
 }
 
 func loadConfig() Config {
@@ -43,6 +46,7 @@ func loadConfig() Config {
 		DecisionFailMode:  normalizeFailMode(envOr("RISK_CONTROL_DECISION_FAIL_MODE", "open")),
 		MaxBodyBytes:      envInt64("RISK_CONTROL_MAX_BODY_BYTES", 256*1024),
 		AdminProxyTimeout: int(envInt64("RISK_CONTROL_ADMIN_TIMEOUT_MS", 3000)),
+		AccountMonitor:    accountmonitor.LoadConfig(os.Getenv),
 	}
 }
 

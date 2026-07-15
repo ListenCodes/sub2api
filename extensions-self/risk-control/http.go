@@ -10,18 +10,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	accountmonitor "github.com/ListenCodes/sub2api-account-monitor"
 )
 
 type HTTPServer struct {
-	service *RiskService
-	repo    RiskRepository
-	cfg     Config
-	nonces  *nonceStore
-	homepage http.Handler
+	service   *RiskService
+	repo      RiskRepository
+	cfg       Config
+	nonces    *nonceStore
+	homepage  http.Handler
 	homeReady bool
+	monitor   *accountmonitor.Handler
 }
 
-func NewHTTPServer(cfg Config, repo RiskRepository) *HTTPServer {
+func NewHTTPServer(cfg Config, repo RiskRepository, monitors ...*accountmonitor.Handler) *HTTPServer {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 256 * 1024
 	}
@@ -31,6 +34,10 @@ func NewHTTPServer(cfg Config, repo RiskRepository) *HTTPServer {
 	}
 	info, err := os.Stat(filepath.Join(cfg.HomepageDir, "index.html"))
 	homeReady := err == nil && !info.IsDir()
+	var monitor *accountmonitor.Handler
+	if len(monitors) > 0 {
+		monitor = monitors[0]
+	}
 	return &HTTPServer{
 		service:   NewRiskService(cfg, repo),
 		repo:      repo,
@@ -38,11 +45,29 @@ func NewHTTPServer(cfg Config, repo RiskRepository) *HTTPServer {
 		nonces:    newNonceStore(),
 		homepage:  http.StripPrefix("/homepage/", http.FileServer(http.Dir(cfg.HomepageDir))),
 		homeReady: homeReady,
+		monitor:   monitor,
 	}
 }
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Path == "/account-monitor" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		http.Redirect(w, r, "/account-monitor/", http.StatusPermanentRedirect)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/account-monitor/") {
+		if s.monitor == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("account monitor unavailable"))
+			return
+		}
+		s.monitor.ServeWeb(w, r, strings.TrimPrefix(r.URL.Path, "/account-monitor/"))
+		return
+	}
 	if r.URL.Path == "/homepage" {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -109,6 +134,21 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byte) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
+	case strings.HasPrefix(path, "/api/v1/admin/account-monitor"):
+		if s.monitor == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("account monitor unavailable"))
+			return
+		}
+		actor, err := actorID(r)
+		if err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+		relative := strings.TrimPrefix(path, "/api/v1/admin/account-monitor")
+		if relative == "" {
+			relative = "/"
+		}
+		s.monitor.ServeAdmin(w, r, relative, actor)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/events/evaluate":
 		s.handleEvaluateEvent(w, r, body, true)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/events":
