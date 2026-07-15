@@ -60,7 +60,7 @@
                   :key="child.path"
                   :to="child.path"
                   class="sidebar-link mb-0.5 py-1.5 text-sm"
-                  :class="{ 'sidebar-link-active': route.path === child.path }"
+                  :class="{ 'sidebar-link-active': isChildActive(child) }"
                   @click="handleMenuItemClick(child.path)"
                 >
                   <component :is="child.icon" class="h-4 w-4 flex-shrink-0" />
@@ -197,6 +197,7 @@ interface NavItem {
   iconSvg?: string
   hideInSimpleMode?: boolean
   children?: NavItem[]
+  activePrefix?: string
   /**
    * When true, the parent item only toggles the expand/collapse state and
    * does NOT navigate to its `path`. The `path` is purely a stable key.
@@ -761,7 +762,18 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
-    { path: '/admin/extensions', label: '扩展中心', icon: ShieldIcon, hideInSimpleMode: true },
+    {
+      path: '/admin/extensions',
+      label: '扩展中心',
+      icon: ShieldIcon,
+      hideInSimpleMode: true,
+      expandOnly: true,
+      children: [
+        { path: '/admin/extensions/user-risk/users', activePrefix: '/admin/extensions/user-risk', label: '用户风控', icon: ShieldIcon },
+        { path: '/admin/extensions/account-monitor', label: '账号监控', icon: ChartIcon },
+        { path: '/admin/extensions/group-monitor', label: '分组监控', icon: FolderIcon },
+      ],
+    },
     { path: '/admin/risk-control', label: t('nav.contentModeration'), icon: ShieldIcon, featureFlag: flagRiskControl },
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
     { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
@@ -854,7 +866,14 @@ function isActive(path: string): boolean {
 
 function isGroupActive(item: NavItem): boolean {
   if (!item.children) return false
-  return item.children.some(child => route.path === child.path)
+  return isActive(item.path) || item.children.some(isChildActive)
+}
+
+function isChildActive(item: NavItem): boolean {
+  if (item.activePrefix) {
+    return route.path === item.activePrefix || route.path.startsWith(item.activePrefix + '/')
+  }
+  return route.path === item.path
 }
 
 function isGroupExpanded(item: NavItem): boolean {
