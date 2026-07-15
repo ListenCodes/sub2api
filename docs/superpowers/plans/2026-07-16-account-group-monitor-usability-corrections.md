@@ -58,8 +58,8 @@ material, rates, and user columns.
 - [ ] **Step 2: Run the tests and verify RED**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestSourceContractsIncludeAccountInventoryGroups|TestSourceViewSQLDoesNotExposeSensitiveColumns' -count=1
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestSourceContractsIncludeAccountInventoryGroups|TestSourceViewSQLDoesNotExposeSensitiveColumns' -count=1
 ```
 
 Expected: FAIL because the view/query is missing.
@@ -93,9 +93,9 @@ Add a publish transaction probe for
 `extensions_self_ro.account_group_dimension`, then run:
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestSourceContractsIncludeAccountInventoryGroups|TestSourceViewSQLDoesNotExposeSensitiveColumns' -count=1
-Set-Location ..
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestSourceContractsIncludeAccountInventoryGroups|TestSourceViewSQLDoesNotExposeSensitiveColumns' -count=1
+Set-Location ../..
 pwsh -File deploy/ops/test-deploy-contracts.ps1
 ```
 
@@ -139,8 +139,8 @@ zero-match accounts.
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestAdminServiceAccountsUsesFullInventory|TestAdminServiceAccountsFiltersMultipleGroups' -count=1
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestAdminServiceAccountsUsesFullInventory|TestAdminServiceAccountsFiltersMultipleGroups' -count=1
 ```
 
 Expected: FAIL because summaries have no groups and facts define candidates.
@@ -177,9 +177,9 @@ and de-duplicates child memberships. Keep the 5000 risk-candidate safety limit.
 - [ ] **Step 5: Verify GREEN and commit**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestAdminServiceAccounts|TestAccountRisk|TestAdminServiceOverview' -count=1
-Set-Location ..
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestAdminServiceAccounts|TestAccountRisk|TestAdminServiceOverview' -count=1
+Set-Location ../..
 git add extensions-self/account-monitor/admin_backend.go extensions-self/account-monitor/admin_backend_test.go
 git commit -m "feat(monitor): include complete account inventory"
 ```
@@ -205,8 +205,8 @@ Accept sizes 5, 12, 20, 100, 1000 and reject 4/1001. Add handler cases:
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestHandlerAcceptsConfiguredPageSizes|TestHandlerRoutesGroupMonitorRanges' -count=1
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestHandlerAcceptsConfiguredPageSizes|TestHandlerRoutesGroupMonitorRanges' -count=1
 ```
 
 Expected: FAIL on 1000, 7d, and 30d.
@@ -239,9 +239,9 @@ database timestamps with `UTC()`.
 - [ ] **Step 6: Verify GREEN and commit**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestHandler|TestGroupMonitor|TestPostgresMigrationAggregationRebuildAndRetention' -count=1
-Set-Location ..
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestHandler|TestGroupMonitor|TestPostgresMigrationAggregationRebuildAndRetention' -count=1
+Set-Location ../..
 git add extensions-self/account-monitor/http.go extensions-self/account-monitor/http_test.go extensions-self/account-monitor/admin_backend.go extensions-self/account-monitor/admin_backend_test.go extensions-self/account-monitor/postgres_integration_test.go
 git commit -m "feat(monitor): support configured pages and long ranges"
 ```
@@ -261,8 +261,8 @@ tokens, `user_cost`, and `last_attempted_at`; forbid `username` and
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run TestUsersDetailResponseFields -count=1
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run TestUsersDetailResponseFields -count=1
 ```
 
 Expected: FAIL for missing/new and forbidden/old fields.
@@ -282,9 +282,9 @@ do not emit username or masked prefix.
 - [ ] **Step 4: Verify GREEN and commit**
 
 ```powershell
-Set-Location extensions-self
-go test ./account-monitor -run 'TestUsersDetail|TestSource' -count=1
-Set-Location ..
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test ./... -run 'TestUsersDetail|TestSource' -count=1
+Set-Location ../..
 git add extensions-self/account-monitor/admin_backend.go extensions-self/account-monitor/admin_backend_test.go
 git commit -m "refactor(monitor): simplify user key details"
 ```
@@ -314,7 +314,7 @@ expect(wrapper.findComponent(Select).props('options')).toEqual([
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/components/common/__tests__/Pagination.pageSizeOptions.spec.ts
+npm run test:run -- src/components/common/__tests__/Pagination.pageSizeOptions.spec.ts
 ```
 
 Expected: FAIL because `Pagination` ignores its prop.
@@ -344,7 +344,7 @@ Build `PlatformBadge.vue` from `PlatformIcon`, `platformBadgeLightClass`, and
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/components/common/__tests__/Pagination.pageSizeOptions.spec.ts src/components/common/__tests__/PlatformBadge.spec.ts
+npm run test:run -- src/components/common/__tests__/Pagination.pageSizeOptions.spec.ts src/components/common/__tests__/PlatformBadge.spec.ts
 Set-Location ..
 git add frontend/src/components/common/Pagination.vue frontend/src/components/common/PlatformBadge.vue frontend/src/components/common/__tests__/Pagination.pageSizeOptions.spec.ts frontend/src/components/common/__tests__/PlatformBadge.spec.ts frontend/src/utils/platformColors.ts
 git commit -m "fix(frontend): share monitor paging and platform badges"
@@ -375,7 +375,7 @@ expect(action).toHaveBeenCalledTimes(1)
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/composables/__tests__/useDebouncedAction.spec.ts
+npm run test:run -- src/composables/__tests__/useDebouncedAction.spec.ts
 ```
 
 Expected: FAIL because the composable is missing.
@@ -397,7 +397,7 @@ export function useDebouncedAction(action: () => void | Promise<void>, delay = 3
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/composables/__tests__/useDebouncedAction.spec.ts
+npm run test:run -- src/composables/__tests__/useDebouncedAction.spec.ts
 Set-Location ..
 git add frontend/src/composables/useDebouncedAction.ts frontend/src/composables/__tests__/useDebouncedAction.spec.ts
 git commit -m "feat(frontend): add immediate filter debounce"
@@ -426,7 +426,7 @@ platform/group selects query immediately, and `group_id=ungrouped` serializes.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/api/admin/__tests__/accountMonitor.spec.ts src/views/admin/account-monitor/__tests__/useAccountMonitorFilters.spec.ts src/views/admin/account-monitor/__tests__/AccountMonitorPanel.spec.ts
+npm run test:run -- src/api/admin/__tests__/accountMonitor.spec.ts src/views/admin/account-monitor/__tests__/useAccountMonitorFilters.spec.ts src/views/admin/account-monitor/__tests__/AccountMonitorPanel.spec.ts
 ```
 
 Expected: FAIL on groups, 1000, badge, and timer behavior.
@@ -459,8 +459,8 @@ a multi-group account to the selected filter group.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/api/admin/__tests__/accountMonitor.spec.ts src/views/admin/account-monitor/__tests__
-npm run type-check
+npm run test:run -- src/api/admin/__tests__/accountMonitor.spec.ts src/views/admin/account-monitor/__tests__
+npm run typecheck
 Set-Location ..
 git add frontend/src/api/admin/accountMonitor.ts frontend/src/api/admin/__tests__/accountMonitor.spec.ts frontend/src/views/admin/account-monitor
 git commit -m "feat(frontend): show complete grouped account inventory"
@@ -485,7 +485,7 @@ not.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/views/admin/account-monitor/__tests__/AccountMonitorPanel.spec.ts src/views/admin/account-monitor/__tests__/AccountMonitorDialogs.spec.ts
+npm run test:run -- src/views/admin/account-monitor/__tests__/AccountMonitorPanel.spec.ts src/views/admin/account-monitor/__tests__/AccountMonitorDialogs.spec.ts
 ```
 
 Expected: FAIL on current six-tab and flexible-height behavior.
@@ -502,7 +502,7 @@ Format success rate, cost, and `last_attempted_at` explicitly.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/views/admin/account-monitor/__tests__
+npm run test:run -- src/views/admin/account-monitor/__tests__
 Set-Location ..
 git add frontend/src/views/admin/account-monitor/AccountMonitorDrawer.vue frontend/src/views/admin/account-monitor/useAccountMonitorFilters.ts frontend/src/views/admin/account-monitor/__tests__
 git commit -m "fix(frontend): stabilize account detail dialog"
@@ -532,7 +532,7 @@ shared badge, and one-hour/six-hour accessibility labels from `bucket_seconds`.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/views/admin/group-monitor/__tests__ src/api/admin/__tests__/accountMonitor.spec.ts
+npm run test:run -- src/views/admin/group-monitor/__tests__ src/api/admin/__tests__/accountMonitor.spec.ts
 ```
 
 Expected: FAIL on long range, paging, and presentation contracts.
@@ -553,8 +553,8 @@ approved platform/name ordering.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/views/admin/group-monitor/__tests__ src/api/admin/__tests__/accountMonitor.spec.ts
-npm run type-check
+npm run test:run -- src/views/admin/group-monitor/__tests__ src/api/admin/__tests__/accountMonitor.spec.ts
+npm run typecheck
 Set-Location ..
 git add frontend/src/api/admin/accountMonitor.ts frontend/src/views/admin/group-monitor
 git commit -m "feat(frontend): improve group monitor range and filters"
@@ -585,7 +585,7 @@ and detail/editor dialogs opt into backdrop close.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/views/admin/__tests__/UserRiskControlUsersView.spec.ts src/views/admin/__tests__/UserRiskControlRulesView.spec.ts src/views/admin/__tests__/UserRiskControlAuditView.spec.ts src/router/__tests__/user-risk-control-routes.spec.ts src/router/__tests__/account-monitor-route.spec.ts
+npm run test:run -- src/views/admin/__tests__/UserRiskControlUsersView.spec.ts src/views/admin/__tests__/UserRiskControlRulesView.spec.ts src/views/admin/__tests__/UserRiskControlAuditView.spec.ts src/router/__tests__/user-risk-control-routes.spec.ts src/router/__tests__/account-monitor-route.spec.ts
 ```
 
 Expected: FAIL for parent heading and non-debounced user inputs.
@@ -602,7 +602,7 @@ Save/Create/Test in Rules because they are commands, not filters. Pass
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run src/views/admin/__tests__/UserRiskControlUsersView.spec.ts src/views/admin/__tests__/UserRiskControlRulesView.spec.ts src/views/admin/__tests__/UserRiskControlAuditView.spec.ts src/router/__tests__/user-risk-control-routes.spec.ts src/router/__tests__/account-monitor-route.spec.ts
+npm run test:run -- src/views/admin/__tests__/UserRiskControlUsersView.spec.ts src/views/admin/__tests__/UserRiskControlRulesView.spec.ts src/views/admin/__tests__/UserRiskControlAuditView.spec.ts src/router/__tests__/user-risk-control-routes.spec.ts src/router/__tests__/account-monitor-route.spec.ts
 Set-Location ..
 git add frontend/src/views/admin/ExtensionsCenterView.vue frontend/src/views/admin/UserRiskControlUsersView.vue frontend/src/views/admin/UserRiskControlRulesView.vue frontend/src/views/admin/UserRiskControlAuditView.vue frontend/src/components/admin/UserRiskControlUserDrawer.vue frontend/src/views/admin/__tests__/UserRiskControlUsersView.spec.ts frontend/src/views/admin/__tests__/UserRiskControlRulesView.spec.ts frontend/src/views/admin/__tests__/UserRiskControlAuditView.spec.ts frontend/src/router/__tests__/user-risk-control-routes.spec.ts frontend/src/router/__tests__/account-monitor-route.spec.ts
 git commit -m "fix(frontend): align extension filter interactions"
@@ -653,10 +653,11 @@ git commit -m "docs: add monitor correction release checks"
 ```powershell
 docker run --rm -d --name sub2api-monitor-test-postgres -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:17-alpine
 $env:ACCOUNT_MONITOR_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable'
-Set-Location extensions-self
-go test -count=1 ./account-monitor/...
-go test -count=1 ./risk-control/...
-Set-Location ..
+Set-Location extensions-self/account-monitor
+& 'D:\Go\bin\go.exe' test -count=1 ./...
+Set-Location ../risk-control
+& 'D:\Go\bin\go.exe' test -count=1 ./...
+Set-Location ../..
 docker stop sub2api-monitor-test-postgres
 ```
 
@@ -666,7 +667,7 @@ Expected: both suites PASS and the PostgreSQL test does not skip.
 
 ```powershell
 Set-Location backend
-go test -count=1 -p 1 ./...
+& 'D:\Go\bin\go.exe' test -count=1 -p 1 ./...
 Set-Location ..
 ```
 
@@ -676,9 +677,9 @@ Expected: PASS.
 
 ```powershell
 Set-Location frontend
-npm run test:unit -- --run
-npm run type-check
-npm run lint
+npm run test:run
+npm run typecheck
+npm run lint:check
 npm run build
 Set-Location ..
 ```
