@@ -33,3 +33,18 @@ func TestAggregateRefreshCoversAllTablesAndMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateRefreshDeletesBeforeReinsertInSeparateStatements(t *testing.T) {
+	if len(refreshAggregateSQL) != 12 {
+		t.Fatalf("aggregate refresh statements = %d, want 12 delete/insert statements", len(refreshAggregateSQL))
+	}
+	for index, query := range refreshAggregateSQL {
+		prefix := "delete from"
+		if index%2 == 1 {
+			prefix = "insert into"
+		}
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(query)), prefix) {
+			t.Fatalf("aggregate refresh statement %d must start with %q", index, prefix)
+		}
+	}
+}
