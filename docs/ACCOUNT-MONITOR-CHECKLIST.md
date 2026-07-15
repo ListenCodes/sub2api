@@ -33,11 +33,19 @@ BEGIN;
 SET ROLE extensions_self_monitor_ro;
 SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1;
 SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1;
+SELECT 1 FROM extensions_self_ro.account_group_dimension LIMIT 1;
 ROLLBACK;
 ```
 
 - [ ] `extensions_self_monitor` 可经 TCP 登录并读取视图，不能读取
       `public.api_keys.key` 或 `public.accounts.credentials`。
+- [ ] 使用同一只读登录执行下列拒绝探测，两个查询都必须返回 `permission denied`，不得返回任何行：
+
+```sql
+SELECT key FROM public.api_keys LIMIT 1;
+SELECT credentials FROM public.accounts LIMIT 1;
+```
+
 - [ ] Docker Compose `config --quiet` 通过；运行时只有一个 `extensions-self` 应用容器。
 
 ## Publish And Verify
@@ -48,6 +56,8 @@ ROLLBACK;
 - [ ] 未认证访问 `/api/v1/admin/extensions-self/account-monitor/data-quality` 被管理员鉴权拒绝。
 - [ ] 管理员 `/admin/extensions/account-monitor` 在桌面和移动视口可加载、筛选、翻页、展开账号。
 - [ ] 管理员 `/admin/extensions/group-monitor` 可筛选、分页并打开实际模型详情。
+- [ ] 账号监控选择 `page_size=1000` 后保持该值；平台、分组和文本筛选生效，零调用账号仍在全量清单中。
+- [ ] 账号与分组监控只由输入/选择或“手动刷新”按钮发起更新；用户风控输入/选择后查询；页面空闲时不产生监控轮询请求。
 - [ ] 侧边栏“扩展中心”可展开用户风控、账号监控、分组监控三个子菜单，父页面不重复一级页签。
 - [ ] 风控三页和自定义首页无回归。
 - [ ] 抽样对账成功、失败、重试后成功、模型、Token、成本、图片和视频。
@@ -56,6 +66,38 @@ ROLLBACK;
 - [ ] 对实际 `available_from/to` 执行 `deploy/ops/backfill-account-monitor.sh`；每段不超过 31 天、
       不重叠，`backfill-jobs.tsv` 中所有 job 均 completed 并记录 `processed_rows`。
 - [ ] 抽样核对分组总数满足 `total_requests=successes+failures`，缺失分组只进入数据质量。
+- [ ] 记录主库“全量非删除账号数”和扩展库近 30 天“事实活跃账号数”；账号监控总数必须等于前者，不能再以存在事实的账号数代替。
+- [ ] 记录至少一个“多分组账号样本”，核对账号卡片显示全部有效分组，按任一所属分组筛选均能命中且不重复账号。
+- [ ] 分别选择 `7d/30d`，将分组卡片与详情总数和相同完整桶范围内的 `account_monitor_group_model_10m` 汇总对账。
+
+对账查询示例：
+
+```sql
+-- 主库；使用 extensions_self_monitor 登录。
+SELECT count(*) AS full_non_deleted_accounts
+FROM extensions_self_ro.account_dimension
+WHERE deleted_at IS NULL;
+
+SELECT ag.account_id, array_agg(ag.group_id ORDER BY ag.group_id) AS group_ids
+FROM extensions_self_ro.account_group_dimension AS ag
+JOIN extensions_self_ro.account_dimension AS a ON a.id = ag.account_id
+WHERE a.deleted_at IS NULL AND ag.group_deleted_at IS NULL
+GROUP BY ag.account_id
+HAVING count(DISTINCT ag.group_id) > 1
+LIMIT 10;
+
+-- 扩展库；时间边界必须与 API 请求相同。
+SELECT count(DISTINCT account_id) AS fact_active_accounts
+FROM account_monitor_attempt_facts
+WHERE attempted_at >= now() - interval '30 days';
+
+SELECT group_id, sum(total_requests) AS total_requests,
+       sum(successes) AS successes, sum(failures) AS failures
+FROM account_monitor_group_model_10m
+WHERE bucket_at >= :'from_utc'::timestamptz
+  AND bucket_at < :'to_utc'::timestamptz
+GROUP BY group_id;
+```
 
 ## Troubleshooting
 

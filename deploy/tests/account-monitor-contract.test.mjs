@@ -181,3 +181,27 @@ test('account monitor documentation covers ownership, formulas, operations, and 
   assert.match(deployDocs, /backup|备份/i)
   assert.match(deployDocs, /rollback|回滚/i)
 })
+
+test('monitor correction documentation defines inventory, grouping, range, and refresh checks', () => {
+  const checklist = read('docs/ACCOUNT-MONITOR-CHECKLIST.md')
+  const runbook = read('deploy/RELEASE-RUNBOOK.md')
+  const dictionary = read('docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md')
+
+  for (const document of [checklist, runbook]) {
+    for (const marker of [
+      'extensions_self_ro.account_group_dimension',
+      '全量非删除账号数',
+      '事实活跃账号数',
+      '多分组账号样本',
+      'page_size=1000',
+      '7d/30d',
+      '手动刷新',
+    ]) {
+      assert.match(document, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    }
+  }
+
+  assert.match(dictionary, /extensions_self_ro\.account_group_dimension/)
+  assert.doesNotMatch(`${checklist}\n${runbook}`, /账号详情.{0,20}(?:六|6).{0,5}页签/)
+  assert.doesNotMatch(`${checklist}\n${runbook}`, /(?:周期|定时|自动).{0,8}刷新/)
+})
