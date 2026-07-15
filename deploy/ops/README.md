@@ -38,6 +38,21 @@ database and production configuration, builds from `/root/sub2api`, recreates
 only `sub2api` and the unified `extensions-self` service, then verifies the
 main API, risk API, public homepage proxy, and running binary version.
 
+When `ACCOUNT_MONITOR_ENABLED=true`, the publisher additionally:
+
+1. parses the rendered `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` and requires the
+   `extensions_self_monitor` login on the `postgres` service;
+2. backs up both `sub2api-postgres` and `risk-control-postgres` before changes;
+3. runs `install-account-monitor-source.sql` and verifies
+   `SET ROLE extensions_self_monitor_ro` can read the safe views;
+4. proves the login cannot read `public.api_keys.key` or
+   `public.accounts.credentials`;
+5. checks the account-monitor static page, signed `data-quality` API, and main
+   authenticated proxy route after recreation.
+
+Any failure stops publication. The script never prints the source password and
+never manages the `risk-control-postgres` lifecycle.
+
 The retired standalone `/root/sub2api-risk-control` deployment must not be
 reintroduced. The canonical source is `/root/sub2api/extensions-self`; its
 single Go process serves both risk APIs and `/homepage/`. The publisher removes

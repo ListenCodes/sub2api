@@ -72,6 +72,8 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
 
   assert.ok(backupIndex >= 0 && installIndex > backupIndex && buildIndex > installIndex)
   assert.match(publisher, /ACCOUNT_MONITOR_ENABLED/)
+  assert.match(publisher, /docker exec risk-control-postgres pg_dump/)
+  assert.match(publisher, /risk_control_db\.dump/)
   assert.match(publisher, /extensions_self_monitor/)
   assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
   assert.match(publisher, /extensions_self_ro\.usage_source/)
@@ -84,4 +86,76 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
+})
+
+test('account monitor documentation covers ownership, formulas, operations, and handoff', () => {
+  const requiredDocs = [
+    'extensions-self/README.md',
+    'extensions-self/account-monitor/README.md',
+    'docs/EXTENSIONS-SELF-ARCHITECTURE.md',
+    'docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md',
+    'docs/ACCOUNT-MONITOR-CHECKLIST.md',
+  ]
+  for (const doc of requiredDocs) {
+    assert.match(read(doc), /account monitor|账号监控/i, `${doc} does not identify the account monitor`)
+  }
+
+  const moduleReadme = read('extensions-self/account-monitor/README.md')
+  for (const marker of [
+    '账号尝试成功率 = 成功账号尝试 / 总账号尝试',
+    '用户最终成功率 = 最终成功请求 / 用户请求总数',
+    'model_attribution=exact',
+    'model_attribution=estimated',
+    '重试后成功',
+    'extensions_self_ro',
+    'risk-control-postgres',
+    '/api/v1/admin/account-monitor',
+    '/api/v1/extensions-self/account-monitor/',
+    'ACCOUNT_MONITOR_SOURCE_DATABASE_URL',
+  ]) {
+    assert.match(moduleReadme, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+
+  const dataDictionary = read('docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md')
+  for (const table of [
+    'account_monitor_attempt_facts',
+    'account_monitor_request_facts',
+    'account_monitor_sync_state',
+    'account_monitor_rebuild_jobs',
+    'account_monitor_thresholds',
+  ]) {
+    assert.match(dataDictionary, new RegExp(table))
+  }
+  assert.match(dataDictionary, /90 天/)
+  assert.match(dataDictionary, /365 天|1 年/)
+  assert.match(dataDictionary, /不完整|缺口/)
+
+  const checklist = read('docs/ACCOUNT-MONITOR-CHECKLIST.md')
+  for (const marker of [
+    '31 天',
+    'install-account-monitor-source.sql',
+    'SET ROLE extensions_self_monitor_ro',
+    'ACCOUNT_MONITOR_ENABLED=false',
+    'risk-control-postgres',
+    '代码完成不等于生产发布',
+  ]) {
+    assert.match(checklist, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+
+  const deployDocs = [
+    read('AGENTS.md'),
+    read('deploy/README.md'),
+    read('deploy/ops/README.md'),
+    read('deploy/RELEASE-RUNBOOK.md'),
+  ].join('\n')
+  for (const marker of [
+    '/admin/account-monitor',
+    'extensions_self_monitor',
+    'ACCOUNT_MONITOR_ENABLED',
+    'data-quality',
+  ]) {
+    assert.match(deployDocs, new RegExp(marker))
+  }
+  assert.match(deployDocs, /backup|备份/i)
+  assert.match(deployDocs, /rollback|回滚/i)
 })

@@ -46,6 +46,7 @@ config = json.load(sys.stdin)["services"]
 sub2api = config["sub2api"]["environment"]
 extensions = config["extensions-self"]["environment"]
 postgres = config["postgres"]["environment"]
+risk_postgres = config["risk-control-postgres"]["environment"]
 values = [
     sub2api.get("RISK_CONTROL_URL", ""),
     extensions.get("ACCOUNT_MONITOR_ENABLED", "false"),
@@ -53,17 +54,21 @@ values = [
     extensions.get("RISK_CONTROL_INTERNAL_SECRET", ""),
     postgres.get("POSTGRES_USER", "sub2api"),
     postgres.get("POSTGRES_DB", "sub2api"),
+    risk_postgres.get("POSTGRES_USER", "risk_control_app"),
+    risk_postgres.get("POSTGRES_DB", "risk_control"),
 ]
 print("\n".join(str(value) for value in values))
 ')" || fail 'could not read rendered extension configuration'
 mapfile -t deploy_values <<< "$rendered_values"
-[[ "${#deploy_values[@]}" -eq 6 ]] || fail 'rendered extension configuration is incomplete'
+[[ "${#deploy_values[@]}" -eq 8 ]] || fail 'rendered extension configuration is incomplete'
 rendered_risk_url="${deploy_values[0]}"
 monitor_enabled="$(printf '%s' "${deploy_values[1]}" | tr '[:upper:]' '[:lower:]')"
 monitor_source_url="${deploy_values[2]}"
 rendered_internal_secret="${deploy_values[3]}"
 postgres_owner="${deploy_values[4]}"
 postgres_database="${deploy_values[5]}"
+risk_postgres_owner="${deploy_values[6]}"
+risk_postgres_database="${deploy_values[7]}"
 [[ "$rendered_risk_url" == 'http://extensions-self:8090' ]] || fail "rendered RISK_CONTROL_URL must be http://extensions-self:8090, got $rendered_risk_url"
 [[ "$monitor_enabled" == true || "$monitor_enabled" == false ]] || fail 'ACCOUNT_MONITOR_ENABLED must be true or false'
 
@@ -94,7 +99,8 @@ print(password, end="")
 fi
 
 log "Backing up approved release $APPROVED_COMMIT"
-docker exec sub2api-postgres pg_dump -U sub2api -d sub2api -Fc > "$BACKUP_DIR/sub2api_db.dump" || fail 'database backup failed'
+docker exec sub2api-postgres pg_dump -U "$postgres_owner" -d "$postgres_database" -Fc > "$BACKUP_DIR/sub2api_db.dump" || fail 'main database backup failed'
+docker exec risk-control-postgres pg_dump -U "$risk_postgres_owner" -d "$risk_postgres_database" -Fc > "$BACKUP_DIR/risk_control_db.dump" || fail 'extensions database backup failed'
 cp -p "$ENV_FILE" "$BACKUP_DIR/main.env"
 cp -p "$COMPOSE" "$BACKUP_DIR/main-docker-compose.yml"
 cp -p /etc/nginx/sites-available/sub.ailisten.top "$BACKUP_DIR/nginx-sub.ailisten.top.conf" 2>/dev/null || true
@@ -114,7 +120,7 @@ fi
 if [[ -n "$old_extension_image" ]]; then
   docker tag "$old_extension_image" "deploy-extensions-self:rollback-$STAMP"
 fi
-sha256sum "$BACKUP_DIR/sub2api_db.dump" > "$BACKUP_DIR/SHA256SUMS"
+sha256sum "$BACKUP_DIR/sub2api_db.dump" "$BACKUP_DIR/risk_control_db.dump" > "$BACKUP_DIR/SHA256SUMS"
 
 if [[ "$monitor_enabled" == true ]]; then
   log 'Installing account monitor source views and dedicated login role'

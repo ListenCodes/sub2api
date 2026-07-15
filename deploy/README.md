@@ -163,6 +163,35 @@ docker compose -f docker-compose.local.yml exec -T risk-control-postgres \
 
 Restore with the service stopped using `pg_restore --clean --if-exists`. The risk service runs its idempotent schema at startup and records schema version `1`; do not delete `risk_control_postgres_data` during rollback. A schema change must include a new versioned migration before production rollout.
 
+### Account-monitor operations
+
+The account monitor runs inside the same `extensions-self` container and stores
+facts/aggregates in `risk-control-postgres`. It reads Sub2API only through the
+`extensions_self_ro` views with the dedicated `extensions_self_monitor` login.
+Do not reuse `POSTGRES_USER` in `ACCOUNT_MONITOR_SOURCE_DATABASE_URL`.
+
+The default is disabled. For production, URL-encode the generated login
+password and configure:
+
+```dotenv
+ACCOUNT_MONITOR_ENABLED=true
+ACCOUNT_MONITOR_SOURCE_DATABASE_URL=postgres://extensions_self_monitor:<URL-encoded-password>@postgres:5432/sub2api?sslmode=disable
+ACCOUNT_MONITOR_POLL_SECONDS=60
+ACCOUNT_MONITOR_LOOKBACK_SECONDS=300
+ACCOUNT_MONITOR_BATCH_SIZE=1000
+ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000
+```
+
+Use only `deploy/ops/publish-custom.sh` for the first enabled release. After
+backing up both databases, it runs `install-account-monitor-source.sql`, checks
+`SET ROLE extensions_self_monitor_ro`, proves that the login cannot read full
+keys or credentials, builds, and verifies the static page and signed
+`data-quality` API. A failed permission probe stops before build.
+
+The admin entry is `/admin/account-monitor`; the authenticated static proxy is
+`/api/v1/extensions-self/account-monitor/`. Details and rollback steps are in
+[`../docs/ACCOUNT-MONITOR-CHECKLIST.md`](../docs/ACCOUNT-MONITOR-CHECKLIST.md).
+
 ### Custom fork update and release
 
 For this deployment, `upstream/main` is only an input to local integration.
@@ -295,6 +324,12 @@ docker compose down -v
 | `SERVER_PORT` | No | `8080` | Server port |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
+| `ACCOUNT_MONITOR_ENABLED` | No | `false` | Enable account-monitor collection and admin page |
+| `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | When enabled | - | Dedicated `extensions_self_monitor` read-only DSN |
+| `ACCOUNT_MONITOR_POLL_SECONDS` | No | `60` | Incremental collection interval |
+| `ACCOUNT_MONITOR_LOOKBACK_SECONDS` | No | `300` | Late-event lookback window |
+| `ACCOUNT_MONITOR_BATCH_SIZE` | No | `1000` | Maximum source rows per page |
+| `ACCOUNT_MONITOR_QUERY_TIMEOUT_MS` | No | `3000` | Safe-view query timeout |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
 | `GEMINI_OAUTH_CLIENT_ID` | No | *(builtin)* | Google OAuth client ID (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
 | `GEMINI_OAUTH_CLIENT_SECRET` | No | *(builtin)* | Google OAuth client secret (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
@@ -634,6 +669,7 @@ sudo systemctl status redis
 2. **Database connection failed**: Check PostgreSQL is running and credentials are correct
 3. **Redis connection failed**: Check Redis is running and password is correct
 4. **Permission denied**: Ensure proper file ownership for binary install
+5. **Account monitor unavailable**: Check `extensions-self` logs, `data-quality`, source-role grants, and source DSN; do not interpret an incomplete historical range as zero traffic
 
 ---
 

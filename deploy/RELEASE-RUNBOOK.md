@@ -8,7 +8,7 @@ extensions service.
 | Unit | Source | Runtime image | Production path |
 |---|---|---|---|
 | Main application and risk hooks | `origin/custom` | `sub2api:custom` | `/root/sub2api` |
-| Risk control and homepage | `origin/custom:extensions-self/` | `deploy-extensions-self` | `/root/sub2api/extensions-self` |
+| Risk control, account monitor, and homepage | `origin/custom:extensions-self/` | `deploy-extensions-self` | `/root/sub2api/extensions-self` |
 
 Publish the two units as a recorded pair when either one changes. The main
 application's `RISK_CONTROL_URL` must point to the running risk service.
@@ -55,6 +55,7 @@ The normal publish command is:
 
 It backs up production, builds the approved source, recreates only the main
 and extensions-self services, and verifies health and the running version.
+The backup contains both `sub2api_db.dump` and `risk_control_db.dump`.
 
 The admin trigger and the daily scheduled job both call
 `sync-and-publish.sh`. A conflict or changed custom base stops before
@@ -108,17 +109,20 @@ The unified extension service is built from the approved main repository checkou
 
 ```text
 /root/sub2api/extensions-self/risk-control
+/root/sub2api/extensions-self/account-monitor
 /root/sub2api/extensions-self/homepage
 /root/sub2api/deploy/docker-compose.yml
 /root/sub2api/deploy/.env
 ```
 
 The main application must use `http://extensions-self:8090`. The extension Go
-process serves signed risk APIs and the public static `/homepage/` route. The
-browser reaches it only through the same-origin main application proxy:
+process serves signed risk/account-monitor APIs and the static `/homepage/` and
+`/account-monitor/` routes. The browser reaches them only through same-origin
+main application proxies:
 
 ```text
 https://sub.ailisten.top/api/v1/extensions-self/homepage/
+https://sub.ailisten.top/api/v1/extensions-self/account-monitor/
 ```
 
 `risk-control-postgres` and `risk_control_postgres_data` remain independent and
@@ -159,6 +163,32 @@ Keep the main application in shadow/review mode until registration events,
 user identity, risk reason, action records, and administrator visibility have
 been verified with real traffic.
 
+## Account Monitor Release
+
+The account monitor is disabled unless `ACCOUNT_MONITOR_ENABLED=true`. Its
+source DSN must use the dedicated `extensions_self_monitor` login on the main
+`postgres` service; the login only inherits `extensions_self_monitor_ro` and
+must never be the main DB owner.
+
+For the first enabled release, use this order:
+
+1. Record the approved commit and current image IDs.
+2. Back up the main database, `risk-control-postgres`, Compose, `.env`, Nginx,
+   and container metadata.
+3. Run `deploy/ops/install-account-monitor-source.sql` as the main DB owner.
+4. Verify the NOLOGIN role and TCP login can read
+   `extensions_self_ro.usage_source`, while full keys and credentials are denied.
+5. Build both images and recreate only `sub2api` and `extensions-self`.
+6. Verify `/admin/account-monitor`, the authenticated static proxy, signed
+   `data-quality`, risk pages, and custom homepage.
+7. Reconcile sampled success, failure, retry-after-failure, model, cost, and
+   media counts. Record the actual available historical range.
+
+The publisher enforces steps 2 through 6 when the monitor is enabled. A rebuild
+range may not exceed 31 days. Facts/minute aggregates are retained for 90 days;
+daily aggregates for 365 days. Existing main error history may be shorter, so
+historical gaps must be reported rather than backfilled with zeros.
+
 ## Verification Checklist
 
 - [ ] Git worktree is clean after commit.
@@ -166,6 +196,10 @@ been verified with real traffic.
 - [ ] `sub2api` container is healthy.
 - [ ] `extensions-self` container is healthy.
 - [ ] Public extensions homepage returns success and is the configured iframe.
+- [ ] `/admin/account-monitor` and its authenticated static proxy load.
+- [ ] Signed account-monitor `data-quality` reports a recent sync or an explicit source error.
+- [ ] Source login reads only `extensions_self_ro` and cannot read credentials/full keys.
+- [ ] Sample account-attempt and user-final counts reconcile, including retry-after-failure.
 - [ ] The retired `risk-control` application container is absent.
 - [ ] `risk-control-postgres` kept the same container/volume identity.
 - [ ] PostgreSQL and Redis are healthy.
@@ -193,6 +227,12 @@ Retag the selected rollback image to its active Compose image name, restore
 the matching configuration and previous inline homepage setting, and recreate
 only the affected application service. Never delete the risk database during
 rollback.
+
+For an account-monitor-only rollback, set `ACCOUNT_MONITOR_ENABLED=false`,
+restore the matching application images and environment, and recreate only
+`sub2api` and `extensions-self`. Keep monitor tables and safe views for diagnosis.
+Restore `risk_control_db.dump` only for confirmed schema/data corruption; a
+normal code rollback must not discard newly collected risk or monitor data.
 
 After rollback, verify the same health checklist and record the failed commit,
 the rollback target, and the reason.

@@ -1,7 +1,7 @@
 # Extensions-Self Risk Control Module
 
 This module runs inside the `extensions-self` container beside the static custom
-homepage. It stores risk events and rule state separately from the main Sub2API
+homepage and the account monitor. It stores risk events and rule state separately from the main Sub2API
 database. It does not read or write the main user tables. The main service
 remains authoritative for administrator authentication, account status, and
 token revocation.
@@ -19,6 +19,12 @@ Optional variables:
 - `RISK_CONTROL_MODE`, default `shadow`; use `review` before `enforce`.
 - `RISK_CONTROL_DECISION_FAIL_MODE`, default `open` in the main service.
 - `EXTENSIONS_SELF_HOMEPAGE_DIR`, default `/app/homepage`.
+
+Account-monitor variables and source DB permissions belong to the sibling
+[`../account-monitor`](../account-monitor/README.md) module. Both modules share
+the process and `risk-control-postgres` connection, but risk tables, monitor
+tables, routes, and tests remain separate. Risk control must never query the
+main database through the monitor source DSN.
 
 The service initializes `schema.sql` on startup, exposes `/healthz`, and serves
 the read-only homepage at `/homepage/`. Internal event and audit endpoints
@@ -41,7 +47,8 @@ and testing rules, and the audit page shows the administrator, target, reason,
 result and failure detail. Raw values such as `login_failure` and `critical`
 are protocol values and must not be the primary text in the admin UI.
 
-The service owns only its risk database. Back it up separately from Sub2API:
+The service owns the extensions database, including risk-control and account-monitor
+tables. Back it up separately from Sub2API:
 
 ```bash
 docker compose -f deploy/docker-compose.local.yml exec -T risk-control-postgres \

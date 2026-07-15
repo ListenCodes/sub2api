@@ -16,11 +16,32 @@ development conversations working in this repository.
 - Extensions container and network hostname: `extensions-self`
 - Extensions image: `deploy-extensions-self`
 
-Risk control and the custom homepage are versioned under `extensions-self/` and
+Risk control, account monitoring, and the custom homepage are versioned under `extensions-self/` and
 released in one container from the same approved `origin/custom` commit as the
 main application. The dedicated `risk-control-postgres` service and volume stay
 independent. Production secrets remain in `deploy/.env` and must never be
 committed.
+
+## Account-Monitor Contract
+
+Account-monitor implementation, aggregation, anomaly rules, APIs, and page
+assets belong to `extensions-self/account-monitor`. Official Sub2API code is
+limited to exact failed-attempt model attribution, authenticated/signed proxy
+routes, and the thin `/admin/account-monitor` menu/iframe shell.
+
+The monitor may read the main database only through `extensions_self_ro` views
+using the dedicated `extensions_self_monitor` login, which inherits the
+`extensions_self_monitor_ro` NOLOGIN role. Never reuse the main database owner
+or expose account credentials, full API keys, request bodies, or headers. Facts,
+aggregates, cursors, thresholds, and rebuild jobs live in
+`risk-control-postgres`; publishing must back up that database without
+recreating or deleting its container/volume.
+
+Read `extensions-self/account-monitor/README.md`,
+`docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md`, and
+`docs/ACCOUNT-MONITOR-CHECKLIST.md` before changing monitor semantics or
+deployment. Code completion is not a production release; report implementation,
+merge/push, backup, deployment, reconciliation, and rollback separately.
 
 ## Risk-Control Admin Product Contract
 
@@ -91,6 +112,7 @@ Every production deployment must:
 
 - Record the source commit and image tags.
 - Back up the PostgreSQL database, Compose/configuration, and Nginx vhost.
+- Back up `risk-control-postgres` before publishing extensions schema or account-monitor changes.
 - Build and deploy the exact intended image tag.
 - Check application, extensions-self, PostgreSQL, Redis, and public HTTP health.
 - Keep a previous image and configuration available for rollback.

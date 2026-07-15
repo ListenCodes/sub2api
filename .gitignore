@@ -135,6 +135,9 @@ docs/*
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
+!docs/EXTENSIONS-SELF-ARCHITECTURE.md
+!docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md
+!docs/ACCOUNT-MONITOR-CHECKLIST.md
 !docs/legal/
 !docs/legal/*.md
 .serena/
