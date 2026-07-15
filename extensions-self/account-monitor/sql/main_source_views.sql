@@ -17,7 +17,6 @@ SELECT
     u.user_id,
     u.api_key_id,
     u.account_id,
-    u.group_id,
     a.parent_account_id,
     u.request_id,
     a.platform,
@@ -41,7 +40,8 @@ SELECT
     u.image_size_breakdown,
     u.video_count,
     u.video_resolution,
-    u.video_duration_seconds
+    u.video_duration_seconds,
+    u.group_id
 FROM public.usage_logs AS u
 JOIN public.accounts AS a ON a.id = u.account_id;
 
@@ -55,7 +55,6 @@ SELECT
     o.user_id,
     o.api_key_id,
     o.account_id,
-    o.group_id,
     o.platform,
     o.model,
     o.requested_model,
@@ -88,7 +87,8 @@ SELECT
         )) ORDER BY event.ordinality)
         FROM jsonb_array_elements(COALESCE(o.upstream_errors, '[]'::jsonb))
             WITH ORDINALITY AS event(value, ordinality)
-    ), '[]'::jsonb) AS upstream_errors
+    ), '[]'::jsonb) AS upstream_errors,
+    o.group_id
 FROM public.ops_error_logs AS o;
 
 CREATE OR REPLACE VIEW extensions_self_ro.account_dimension
