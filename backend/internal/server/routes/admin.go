@@ -16,6 +16,12 @@ func RegisterAdminRoutes(
 	adminAuth middleware.AdminAuthMiddleware,
 	settingService *service.SettingService,
 ) {
+	monitorPage := v1.Group("/extensions-self/account-monitor")
+	monitorPage.Use(gin.HandlerFunc(adminAuth))
+	monitorPage.Use(middleware.AdminComplianceGuard(settingService))
+	monitorPage.GET("/*path", h.Auth.ProxyExtensionsAccountMonitor)
+	monitorPage.HEAD("/*path", h.Auth.ProxyExtensionsAccountMonitor)
+
 	admin := v1.Group("/admin")
 	admin.Use(gin.HandlerFunc(adminAuth))
 	admin.Use(middleware.AdminComplianceGuard(settingService))
@@ -106,6 +112,9 @@ func RegisterAdminRoutes(
 
 		// 用户风险控制代理（主站鉴权后转发到独立风险服务）
 		admin.Group("/user-risk-control").Any("/*path", h.Admin.User.ProxyRiskControl)
+
+		// 账号监控代理（扩展签名 API，严格白名单）
+		admin.Group("/extensions-self/account-monitor").Any("/*path", h.Admin.User.ProxyAccountMonitor)
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)

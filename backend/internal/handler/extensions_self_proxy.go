@@ -9,11 +9,25 @@ import (
 )
 
 func (h *AuthHandler) ProxyExtensionsHomepage(c *gin.Context) {
+	h.proxyExtensionsAsset(c, false)
+}
+
+func (h *AuthHandler) ProxyExtensionsAccountMonitor(c *gin.Context) {
+	h.proxyExtensionsAsset(c, true)
+}
+
+func (h *AuthHandler) proxyExtensionsAsset(c *gin.Context, accountMonitor bool) {
 	if h == nil || h.riskControlClient == nil {
 		c.Status(http.StatusServiceUnavailable)
 		return
 	}
-	asset, err := h.riskControlClient.ProxyHomepage(c.Request.Context(), c.Request.Method, c.Param("path"))
+	var asset *service.HomepageAsset
+	var err error
+	if accountMonitor {
+		asset, err = h.riskControlClient.ProxyAccountMonitorAsset(c.Request.Context(), c.Request.Method, c.Param("path"))
+	} else {
+		asset, err = h.riskControlClient.ProxyHomepage(c.Request.Context(), c.Request.Method, c.Param("path"))
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidHomepageRequest):
@@ -34,4 +48,3 @@ func (h *AuthHandler) ProxyExtensionsHomepage(c *gin.Context) {
 	}
 	c.Data(asset.Status, contentType, asset.Body)
 }
-

@@ -40,6 +40,73 @@ func (h *UserHandler) ProxyRiskControl(c *gin.Context) {
 	c.Data(status, "application/json", upstreamBody)
 }
 
+// ProxyAccountMonitor forwards only the account-monitor admin API after the
+// main-site admin middleware has authenticated the request.
+func (h *UserHandler) ProxyAccountMonitor(c *gin.Context) {
+	path := strings.TrimSuffix(c.Param("path"), "/")
+	if !allowedAccountMonitorPath(c.Request.Method, path) {
+		response.NotFound(c, "Account monitor endpoint not found")
+		return
+	}
+	if h == nil || h.riskControlClient == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account monitor service is not configured")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRiskControlProxyBody+1))
+	if err != nil || len(body) > maxRiskControlProxyBody {
+		response.BadRequest(c, "Invalid account monitor request body")
+		return
+	}
+	upstreamPath := "/api/v1/admin/account-monitor" + path + querySuffix(c)
+	upstreamBody, status, err := h.riskControlClient.ProxyAdmin(c.Request.Context(), c.Request.Method, upstreamPath, getAdminIDFromContext(c), body)
+	if err != nil && len(upstreamBody) == 0 {
+		response.Error(c, http.StatusServiceUnavailable, "Account monitor service is unavailable")
+		return
+	}
+	if status == 0 {
+		status = http.StatusServiceUnavailable
+	}
+	c.Data(status, "application/json", upstreamBody)
+}
+
+func allowedAccountMonitorPath(method, path string) bool {
+	switch {
+	case method == http.MethodGet && (path == "/overview" || path == "/accounts" || path == "/attempts" || path == "/data-quality" || path == "/thresholds"):
+		return true
+	case method == http.MethodGet && isAccountMonitorAccountPath(path):
+		return true
+	case method == http.MethodGet && isAccountMonitorRebuildPath(path):
+		return true
+	case method == http.MethodPut && path == "/thresholds":
+		return true
+	case method == http.MethodPost && path == "/rebuild-jobs":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAccountMonitorAccountPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] != "accounts" {
+		return false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || id <= 0 {
+		return false
+	}
+	return len(parts) == 2 || parts[2] == "models" || parts[2] == "users" || parts[2] == "errors"
+}
+
+func isAccountMonitorRebuildPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[0] != "rebuild-jobs" {
+		return false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	return err == nil && id > 0
+}
+
 func allowedRiskControlPath(method, path string) bool {
 	switch {
 	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/audit"):

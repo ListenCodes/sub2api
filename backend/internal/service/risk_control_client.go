@@ -92,6 +92,14 @@ func NewRiskControlClientFromEnv() *RiskControlClient {
 }
 
 func (c *RiskControlClient) ProxyHomepage(ctx context.Context, method, assetPath string) (*HomepageAsset, error) {
+	return c.proxyExtensionAsset(ctx, method, "/homepage", assetPath)
+}
+
+func (c *RiskControlClient) ProxyAccountMonitorAsset(ctx context.Context, method, assetPath string) (*HomepageAsset, error) {
+	return c.proxyExtensionAsset(ctx, method, "/account-monitor", assetPath)
+}
+
+func (c *RiskControlClient) proxyExtensionAsset(ctx context.Context, method, prefix, assetPath string) (*HomepageAsset, error) {
 	if c == nil || c.http == nil {
 		return nil, fmt.Errorf("risk control client is not configured")
 	}
@@ -103,13 +111,13 @@ func (c *RiskControlClient) ProxyHomepage(ctx context.Context, method, assetPath
 		return nil, ErrInvalidHomepageRequest
 	}
 	relativePath := strings.TrimPrefix(rawPath, "/")
-	upstreamPath := "/homepage/"
+	upstreamPath := prefix + "/"
 	if relativePath != "" {
 		cleanPath := pathpkg.Clean("/" + relativePath)
 		if cleanPath != "/"+relativePath || strings.Contains(relativePath, "..") {
 			return nil, ErrInvalidHomepageRequest
 		}
-		upstreamPath = "/homepage" + cleanPath
+		upstreamPath = prefix + cleanPath
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+upstreamPath, nil)
 	if err != nil {
