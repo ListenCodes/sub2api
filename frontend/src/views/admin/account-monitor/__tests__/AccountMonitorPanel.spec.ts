@@ -92,7 +92,14 @@ function seed() {
 		error_cursor: { cursor_time: '2026-07-15T07:59:00Z', cursor_id: 22, last_success_at: '2026-07-15T07:59:00Z' },
 		available_from: '2026-07-01T00:00:00Z', available_to: '2026-07-15T08:00:00Z', data_source: '90 天明细',
   })
-	vi.mocked(accountMonitorAPI.listAccounts).mockResolvedValue({ items: [account, idleAccount], total: 895, page: 1, page_size: 20 })
+	vi.mocked(accountMonitorAPI.listAccounts).mockResolvedValue({
+		items: [account, idleAccount], total: 895, page: 1, page_size: 20,
+		groups: [
+			{ group_id: 11, name: 'GPT Pro', platform: 'openai', status: 'active' },
+			{ group_id: 12, name: 'Shared Pool', platform: 'openai', status: 'active' },
+			{ group_id: 99, name: 'Archive Only', platform: 'gemini', status: 'active' },
+		],
+	})
   vi.mocked(accountMonitorAPI.getModels).mockResolvedValue({ items: [{ actual_model: 'gpt-5', model_attribution: 'exact', attempts: 100, successes: 91, failures: 9, tokens: 12345, user_cost: 4.2, account_cost: 2.1, average_duration_ms: 220, p95_duration_ms: 480 }], total: 1, page: 1, page_size: 20 })
 	vi.mocked(accountMonitorAPI.getUsers).mockResolvedValue({ items: [{ user_id: 7, api_key_id: 9, email: 'alice@example.test', api_key_name: 'Prod Key', attempts: 4, successes: 3, failures: 1, success_rate: 0.75, tokens: 120, user_cost: 1.25, last_attempted_at: '2026-07-15T07:59:00Z' }], total: 1, page: 1, page_size: 20 })
   vi.mocked(accountMonitorAPI.getErrors).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
@@ -131,6 +138,14 @@ describe('AccountMonitorPanel', () => {
 		expect(wrapper.text()).toContain('错误游标 22')
     expect(wrapper.find('iframe').exists()).toBe(false)
   })
+
+	it('offers groups from the complete inventory rather than only the current account page', async () => {
+		const wrapper = mount(AccountMonitorPanel, { global: { stubs: { Icon: true } } })
+		await flushPromises()
+
+		await wrapper.findAll('[data-testid="account-monitor-filters"] button[aria-label="Select option"]')[2].trigger('click')
+		expect(document.body.textContent).toContain('Archive Only')
+	})
 
   it('uses server-side risk sorting and preserves an open account on manual refresh', async () => {
     const wrapper = mount(AccountMonitorPanel, { global: { stubs: { Icon: true } } })

@@ -346,10 +346,11 @@ type accountInventory struct {
 }
 
 type PageResponse struct {
-	Items    any   `json:"items"`
-	Total    int64 `json:"total"`
-	Page     int   `json:"page"`
-	PageSize int   `json:"page_size"`
+	Items    any                   `json:"items"`
+	Total    int64                 `json:"total"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
+	Groups   []AccountGroupSummary `json:"groups,omitempty"`
 }
 
 type ThresholdResponse struct {
@@ -1041,6 +1042,30 @@ func paginateAccountSummaries(items []AccountSummary, page, pageSize int) []Acco
 	return items[start:end]
 }
 
+func accountInventoryGroups(in accountInventory) []AccountGroupSummary {
+	byID := make(map[int64]AccountGroupSummary)
+	for _, groups := range in.Groups {
+		for _, group := range groups {
+			byID[group.GroupID] = group
+		}
+	}
+	groups := make([]AccountGroupSummary, 0, len(byID))
+	for _, group := range byID {
+		groups = append(groups, group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		left, right := groups[i], groups[j]
+		if platformCompare := strings.Compare(strings.ToLower(left.Platform), strings.ToLower(right.Platform)); platformCompare != 0 {
+			return platformCompare < 0
+		}
+		if nameCompare := strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)); nameCompare != 0 {
+			return nameCompare < 0
+		}
+		return left.GroupID < right.GroupID
+	})
+	return groups
+}
+
 func (s *AdminService) accountsFromInventory(ctx context.Context, request AdminRequest) (PageResponse, error) {
 	rollup := request.Query["rollup"]
 	if rollup != "parent" {
@@ -1050,9 +1075,10 @@ func (s *AdminService) accountsFromInventory(ctx context.Context, request AdminR
 	if err != nil {
 		return PageResponse{}, err
 	}
+	groupOptions := accountInventoryGroups(allInventory)
 	inventory := filterAccountInventory(allInventory, request.Query)
 	if len(inventory.Accounts) == 0 {
-		return PageResponse{Items: []AccountSummary{}, Total: 0, Page: request.Page, PageSize: request.PageSize}, nil
+		return PageResponse{Items: []AccountSummary{}, Total: 0, Page: request.Page, PageSize: request.PageSize, Groups: groupOptions}, nil
 	}
 
 	userID, _ := strconv.ParseInt(request.Query["user_id"], 10, 64)
@@ -1115,7 +1141,7 @@ func (s *AdminService) accountsFromInventory(ctx context.Context, request AdminR
 	sortAccountSummaries(items, request.SortBy, request.SortOrder)
 	total := int64(len(items))
 	items = paginateAccountSummaries(items, request.Page, request.PageSize)
-	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize, Groups: groupOptions}, nil
 }
 
 func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (PageResponse, error) {

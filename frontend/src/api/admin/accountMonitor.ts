@@ -81,6 +81,10 @@ export interface PageResponse<T> {
   page_size: number
 }
 
+export interface AccountPageResponse extends PageResponse<AccountMonitorAccount> {
+  groups?: AccountGroupSummary[]
+}
+
 export interface AccountFilters extends TimeRange {
   page?: number
   pageSize?: AccountPageSize | number
@@ -384,7 +388,7 @@ class AccountMonitorAPI {
   }
 
   async listAccounts(filters: AccountFilters = {}) {
-    const { data } = await apiClient.get<PageResponse<AccountMonitorAccount>>(`${BASE_PATH}/accounts`, { params: accountParams(filters), signal: this.nextSignal('accounts') })
+    const { data } = await apiClient.get<AccountPageResponse>(`${BASE_PATH}/accounts`, { params: accountParams(filters), signal: this.nextSignal('accounts') })
     return data
   }
 

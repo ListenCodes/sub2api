@@ -320,6 +320,9 @@ func TestAdminServiceAccountsUsesFullInventory(t *testing.T) {
 	if page.Total != 3 || len(items) != 3 {
 		t.Fatalf("full inventory page = %+v items=%+v", page, items)
 	}
+	if len(page.Groups) != 3 || page.Groups[0].GroupID != 11 || page.Groups[1].GroupID != 12 || page.Groups[2].GroupID != 10 {
+		t.Fatalf("full inventory group options = %+v", page.Groups)
+	}
 	idle := accountSummaryByID(t, items, 1)
 	if idle.Attempts != 0 || idle.Successes != 0 || idle.Failures != 0 || idle.Health.RiskScoreAvailable {
 		t.Fatalf("idle account = %+v, want zero metrics and unavailable risk", idle)

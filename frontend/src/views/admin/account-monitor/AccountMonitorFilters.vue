@@ -12,8 +12,8 @@
       <button type="button" class="btn btn-ghost" data-testid="account-filter-reset" @click="$emit('reset')"><Icon name="x" size="sm" />重置</button>
     </div>
     <div v-if="draft.range === 'custom'" class="flex flex-wrap items-center gap-3">
-      <label class="text-xs text-gray-500">开始<input v-model="customFrom" type="datetime-local" class="input ml-2" /></label>
-      <label class="text-xs text-gray-500">结束<input v-model="customTo" type="datetime-local" class="input ml-2" /></label>
+      <label class="text-xs text-gray-500">开始<input v-model="customFrom" type="datetime-local" class="input ml-2" @change="runImmediate" /></label>
+      <label class="text-xs text-gray-500">结束<input v-model="customTo" type="datetime-local" class="input ml-2" @change="runImmediate" /></label>
     </div>
   </section>
 </template>

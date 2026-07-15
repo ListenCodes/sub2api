@@ -43,6 +43,7 @@ import { getConfiguredTablePageSizeOptions } from '@/utils/tablePreferences'
 const overview = ref<AccountMonitorOverviewResponse | null>(null)
 const quality = ref<AccountDataQuality | null>(null)
 const accounts = ref<AccountMonitorAccount[]>([])
+const groupOptions = ref<AccountMonitorAccount['groups']>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
@@ -53,11 +54,11 @@ const rebuildOpen = ref(false)
 let requestID = 0
 const { state, refresh, setFilters, resetFilters, setPage, setPageSize, selectAccount, setDetailTab } = useAccountMonitorFilters(loadAll)
 const pageSizeOptions = getConfiguredTablePageSizeOptions()
-const groupOptions = computed(() => {
+function accountGroups(items: AccountMonitorAccount[]) {
 	const groups = new Map<number, AccountMonitorAccount['groups'][number]>()
-	for (const account of accounts.value) for (const group of account.groups || []) groups.set(group.group_id, group)
+	for (const account of items) for (const group of account.groups || []) groups.set(group.group_id, group)
 	return [...groups.values()].sort((left, right) => left.platform.localeCompare(right.platform) || left.name.localeCompare(right.name) || left.group_id - right.group_id)
-})
+}
 const requestFilters = computed<AccountFilters>(() => {
   const range = resolveTimeRange(state)
 	return { ...range, page: state.page, pageSize: state.pageSize, sortBy: state.sortBy, sortOrder: state.sortOrder, platform: state.platform, accountID: state.accountID, parentAccountID: state.parentAccountID, accountStatus: state.accountStatus, model: state.model, userID: state.userID, apiKeyID: state.apiKeyID, requestType: state.requestType, result: state.result, errorCategory: state.errorCategory, statusCode: state.statusCode, rollup: state.rollup, minRiskScore: state.minRiskScore, maxRiskScore: state.maxRiskScore, groupID: state.groupID }
@@ -71,7 +72,11 @@ async function loadAll() {
   const failures: string[] = []
   if (overviewResult.status === 'fulfilled') overview.value = overviewResult.value; else failures.push(message(overviewResult.reason))
   if (qualityResult.status === 'fulfilled') quality.value = qualityResult.value; else failures.push(message(qualityResult.reason))
-  if (accountResult.status === 'fulfilled') { accounts.value = accountResult.value.items; total.value = accountResult.value.total } else failures.push(message(accountResult.reason))
+  if (accountResult.status === 'fulfilled') {
+		accounts.value = accountResult.value.items
+		groupOptions.value = accountResult.value.groups || accountGroups(accountResult.value.items)
+		total.value = accountResult.value.total
+	} else failures.push(message(accountResult.reason))
   if (state.selectedAccountID) {
     selectedAccount.value = accounts.value.find((item) => item.account_id === state.selectedAccountID) || selectedAccount.value
     if (!selectedAccount.value) try { selectedAccount.value = await accountMonitorAPI.getAccount(state.selectedAccountID, requestFilters.value) } catch (value) { failures.push(message(value)) }
