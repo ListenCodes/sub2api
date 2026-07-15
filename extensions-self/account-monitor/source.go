@@ -166,13 +166,14 @@ func (s *PostgresSource) readUsage(ctx context.Context, query string, args ...an
 		var parentID, duration, videoDuration sql.NullInt64
 		var requestedModel, upstreamModel, imageSize, imageInputSize, imageOutputSize, videoResolution sql.NullString
 		var accountMultiplier sql.NullFloat64
+		var imageSizeBreakdown []byte
 		if err := rows.Scan(
 			&item.ID, &item.CreatedAt, &item.UserID, &item.APIKeyID, &item.AccountID, &parentID,
 			&item.RequestID, &item.Platform, &item.Model, &requestedModel, &upstreamModel,
 			&item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens,
 			&item.TotalCost, &item.ActualCost, &accountMultiplier, &duration,
 			&item.RequestType, &item.Stream, &item.ImageCount, &imageSize, &imageInputSize,
-			&imageOutputSize, &item.ImageSizeBreakdown, &item.VideoCount, &videoResolution, &videoDuration,
+			&imageOutputSize, &imageSizeBreakdown, &item.VideoCount, &videoResolution, &videoDuration,
 		); err != nil {
 			return nil, err
 		}
@@ -185,6 +186,7 @@ func (s *PostgresSource) readUsage(ctx context.Context, query string, args ...an
 		item.ImageSize = imageSize.String
 		item.ImageInputSize = imageInputSize.String
 		item.ImageOutputSize = imageOutputSize.String
+		item.ImageSizeBreakdown = imageSizeBreakdown
 		item.VideoResolution = videoResolution.String
 		item.VideoDurationSeconds = int(videoDuration.Int64)
 		result = append(result, item)
@@ -214,14 +216,14 @@ func (s *PostgresSource) readErrors(ctx context.Context, query string, args ...a
 	result := make([]ErrorSourceRow, 0)
 	for rows.Next() {
 		var item ErrorSourceRow
-		var requestID, clientRequestID, platform, requestedModel, upstreamModel sql.NullString
+		var requestID, clientRequestID, platform, model, requestedModel, upstreamModel sql.NullString
 		var errorSource, errorOwner, providerCode, providerType, networkType sql.NullString
 		var upstreamMessage sql.NullString
-		var userID, apiKeyID, accountID, statusCode, upstreamStatus, duration sql.NullInt64
+		var userID, apiKeyID, accountID, requestType, statusCode, upstreamStatus, duration sql.NullInt64
 		if err := rows.Scan(
 			&item.ID, &item.CreatedAt, &requestID, &clientRequestID, &userID, &apiKeyID,
-			&accountID, &platform, &item.Model, &requestedModel, &upstreamModel,
-			&item.RequestType, &item.Stream, &item.ErrorPhase, &item.ErrorType, &errorSource,
+			&accountID, &platform, &model, &requestedModel, &upstreamModel,
+			&requestType, &item.Stream, &item.ErrorPhase, &item.ErrorType, &errorSource,
 			&errorOwner, &statusCode, &upstreamStatus, &providerCode, &providerType,
 			&networkType, &duration, &item.ErrorMessage, &upstreamMessage, &item.UpstreamErrors,
 		); err != nil {
@@ -233,8 +235,10 @@ func (s *PostgresSource) readErrors(ctx context.Context, query string, args ...a
 		item.APIKeyID = apiKeyID.Int64
 		item.AccountID = accountID.Int64
 		item.Platform = platform.String
+		item.Model = model.String
 		item.RequestedModel = requestedModel.String
 		item.UpstreamModel = upstreamModel.String
+		item.RequestType = int(requestType.Int64)
 		item.ErrorSource = errorSource.String
 		item.ErrorOwner = errorOwner.String
 		item.StatusCode = int(statusCode.Int64)

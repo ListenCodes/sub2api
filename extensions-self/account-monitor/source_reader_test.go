@@ -75,6 +75,47 @@ func TestPostgresSourceRangeUsesExclusiveUpperBound(t *testing.T) {
 	}
 }
 
+func TestPostgresSourceReadsUsageWithNullOptionalPayloadFields(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(regexp.QuoteMeta(usageSourceQuery)).
+		WithArgs(from, time.Time{}, int64(0), 10).
+		WillReturnRows(sqlmock.NewRows(usageSourceColumns()).AddRow(
+			int64(1), from, int64(2), int64(3), int64(4), nil,
+			"request-1", "openai", "gpt-5", nil, nil,
+			int64(10), int64(20), int64(0), int64(0),
+			0.2, 0.1, nil, nil, 1, false, 0, nil, nil, nil, nil, 0, nil, nil,
+		))
+
+	rows, err := NewPostgresSource(db, time.Second, 100).ReadUsage(context.Background(), Cursor{}, from, 10)
+	if err != nil {
+		t.Fatalf("ReadUsage() error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].ImageSizeBreakdown != nil {
+		t.Fatalf("ReadUsage() rows = %+v", rows)
+	}
+}
+
+func TestPostgresSourceReadsLegacyErrorsWithNullModelAndRequestType(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(regexp.QuoteMeta(errorSourceQuery)).
+		WithArgs(from, time.Time{}, int64(0), 10).
+		WillReturnRows(sqlmock.NewRows(errorSourceColumns()).AddRow(
+			int64(1), from, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			nil, false, "upstream", "provider", nil, nil, nil, nil, nil, nil, nil, nil,
+			"provider error", nil, []byte("[]"),
+		))
+
+	rows, err := NewPostgresSource(db, time.Second, 100).ReadErrors(context.Background(), Cursor{}, from, 10)
+	if err != nil {
+		t.Fatalf("ReadErrors() error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].Model != "" || rows[0].RequestType != 0 {
+		t.Fatalf("ReadErrors() rows = %+v", rows)
+	}
+}
+
 func newSourceMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New()
