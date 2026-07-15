@@ -47,8 +47,8 @@ When `ACCOUNT_MONITOR_ENABLED=true`, the publisher additionally:
    `SET ROLE extensions_self_monitor_ro` can read the safe views;
 4. proves the login cannot read `public.api_keys.key` or
    `public.accounts.credentials`;
-5. checks the account-monitor static page, signed `data-quality` API, and main
-   authenticated proxy route after recreation.
+5. checks the signed account-monitor `data-quality` API and main authenticated
+   admin proxy route after recreation.
 
 Any failure stops publication. The script never prints the source password and
 never manages the `risk-control-postgres` lifecycle.

@@ -192,7 +192,6 @@ for attempt in $(seq 1 60); do
     docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null || fail 'extensions-self health check failed'
     curl -fsS http://127.0.0.1:8081/api/v1/extensions-self/homepage/ >/dev/null || fail 'public homepage proxy health check failed'
     if [[ "$monitor_enabled" == true ]]; then
-      docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/account-monitor/ >/dev/null || fail 'account monitor static health check failed'
       monitor_timestamp="$(date +%s)"
       monitor_nonce="publish-$STAMP-$attempt"
       monitor_signature="$(
@@ -209,8 +208,6 @@ print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).h
         --header='X-Risk-Actor-ID: 1' \
         http://extensions-self:8090/api/v1/admin/account-monitor/data-quality \
         >/dev/null || fail 'account monitor API readiness check failed'
-      monitor_proxy_status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/api/v1/extensions-self/account-monitor/)" || fail 'account monitor proxy route check failed'
-      [[ "$monitor_proxy_status" == 401 || "$monitor_proxy_status" == 423 ]] || fail "account monitor proxy returned unexpected HTTP $monitor_proxy_status"
     fi
     if docker container inspect risk-control >/dev/null 2>&1; then
       docker rm -f risk-control >> "$LOG" 2>&1 || fail 'retired risk-control container removal failed'

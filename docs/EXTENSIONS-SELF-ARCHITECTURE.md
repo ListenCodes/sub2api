@@ -27,7 +27,7 @@ flowchart LR
 | 风控事件、规则、审计 | 同源签名代理 | 业务所有者 | `risk-control-postgres` |
 | 账号尝试、聚合、阈值、重建 | 菜单/路由/代理 | 业务所有者 | `risk-control-postgres` |
 | 成功/错误来源数据 | 业务写入 | 只读采集 | 主库 `extensions_self_ro` |
-| 页面主体 | iframe 薄壳 | 静态资源 | 无 |
+| 账号与分组监控页面 | 原生 Vue、鉴权与同源代理 | 管理 API | 无 |
 
 ## Trust Boundaries
 
@@ -42,7 +42,7 @@ flowchart LR
 
 主应用和 `extensions-self` 必须来自同一批准的 `origin/custom` commit。发布器先验证干净
 工作树和 Compose，再备份主库与扩展库，安装/探测安全视图，构建两个镜像，只重建
-`sub2api` 与 `extensions-self`，最后检查主应用、首页、账号监控静态页和签名 API。
+`sub2api` 与 `extensions-self`，最后检查主应用、首页、原生账号/分组监控页面和签名 API。
 
 代码完成不等于生产发布。实现 commit、合并、推送、生产备份、发布和回滚是独立状态，
 必须分别报告。

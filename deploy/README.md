@@ -185,11 +185,12 @@ ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000
 Use only `deploy/ops/publish-custom.sh` for the first enabled release. After
 backing up both databases, it runs `install-account-monitor-source.sql`, checks
 `SET ROLE extensions_self_monitor_ro`, proves that the login cannot read full
-keys or credentials, builds, and verifies the static page and signed
-`data-quality` API. A failed permission probe stops before build.
+keys or credentials, builds, and verifies the signed `data-quality` API. A failed
+permission probe stops before build.
 
-The admin entry is `/admin/account-monitor`; the authenticated static proxy is
-`/api/v1/extensions-self/account-monitor/`. Details and rollback steps are in
+The native Vue entries are `/admin/extensions/account-monitor` and
+`/admin/extensions/group-monitor`; both use the authenticated admin proxy
+`/api/v1/admin/extensions-self/account-monitor/*`. Details and rollback steps are in
 [`../docs/ACCOUNT-MONITOR-CHECKLIST.md`](../docs/ACCOUNT-MONITOR-CHECKLIST.md).
 
 ### Custom fork update and release

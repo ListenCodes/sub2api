@@ -16,12 +16,6 @@ func RegisterAdminRoutes(
 	adminAuth middleware.AdminAuthMiddleware,
 	settingService *service.SettingService,
 ) {
-	monitorPage := v1.Group("/extensions-self/account-monitor")
-	monitorPage.Use(gin.HandlerFunc(adminAuth))
-	monitorPage.Use(middleware.AdminComplianceGuard(settingService))
-	monitorPage.GET("/*path", h.Auth.ProxyExtensionsAccountMonitor)
-	monitorPage.HEAD("/*path", h.Auth.ProxyExtensionsAccountMonitor)
-
 	admin := v1.Group("/admin")
 	admin.Use(gin.HandlerFunc(adminAuth))
 	admin.Use(middleware.AdminComplianceGuard(settingService))

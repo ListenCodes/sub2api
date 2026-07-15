@@ -2,6 +2,7 @@ package accountmonitor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,7 +50,7 @@ func TestHandlerRoutesAdminEndpoints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			backend := &fakeAdminBackend{}
-			handler := NewHandler(backend, "")
+			handler := NewHandler(backend)
 			body := ""
 			if tt.method == http.MethodPut {
 				body = `{"scope":"global","scope_id":0,"success_rate":0.9}`
@@ -73,7 +74,7 @@ func TestHandlerRoutesAdminEndpoints(t *testing.T) {
 
 func TestHandlerRejectsInvalidRangeAndPageSize(t *testing.T) {
 	backend := &fakeAdminBackend{}
-	handler := NewHandler(backend, "")
+	handler := NewHandler(backend)
 	tests := []string{
 		"/accounts?from=2026-07-02T00:00:00Z&to=2026-07-01T00:00:00Z",
 		"/accounts?from=2026-01-01T00:00:00Z&to=2026-07-01T00:00:00Z",
@@ -92,7 +93,7 @@ func TestHandlerRejectsInvalidRangeAndPageSize(t *testing.T) {
 
 func TestHandlerDecodesRebuildRangeAndCapsItAt31Days(t *testing.T) {
 	backend := &fakeAdminBackend{}
-	handler := NewHandler(backend, "")
+	handler := NewHandler(backend)
 	body, _ := json.Marshal(map[string]string{
 		"from": time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
 		"to":   time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
@@ -107,7 +108,7 @@ func TestHandlerDecodesRebuildRangeAndCapsItAt31Days(t *testing.T) {
 
 func TestHandlerRejectsUnknownEndpoint(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	NewHandler(&fakeAdminBackend{}, "").ServeAdmin(recorder, httptest.NewRequest(http.MethodGet, "/secret", nil), "/secret", 99)
+	NewHandler(&fakeAdminBackend{}).ServeAdmin(recorder, httptest.NewRequest(http.MethodGet, "/secret", nil), "/secret", 99)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", recorder.Code)
 	}
@@ -126,7 +127,7 @@ func TestHandlerRoutesGroupMonitorUsingCompleteTenMinuteRange(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
 			backend := &fakeAdminBackend{}
-			handler := NewHandler(backend, "")
+			handler := NewHandler(backend)
 			handler.now = func() time.Time { return now }
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "http://example.test"+test.path, nil)
@@ -169,12 +170,25 @@ func TestHandlerRejectsInvalidGroupMonitorOptions(t *testing.T) {
 		"/group-monitor/groups/no?range=6h",
 	} {
 		backend := &fakeAdminBackend{}
-		handler := NewHandler(backend, "")
+		handler := NewHandler(backend)
 		recorder := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "http://example.test"+path, nil)
 		handler.ServeAdmin(recorder, req, strings.Split(path, "?")[0], 99)
 		if recorder.Code != http.StatusBadRequest && recorder.Code != http.StatusNotFound {
 			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+func TestHandlerReturnsNotFoundWhenGroupDetailWasDeleted(t *testing.T) {
+	backend := &fakeAdminBackend{err: sql.ErrNoRows}
+	handler := NewHandler(backend)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/group-monitor/groups/42?range=6h", nil)
+
+	handler.ServeAdmin(recorder, req, "/group-monitor/groups/42", 99)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

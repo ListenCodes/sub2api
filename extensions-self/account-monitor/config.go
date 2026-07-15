@@ -18,7 +18,6 @@ type Config struct {
 	DetailRetention   time.Duration
 	DailyRetention    time.Duration
 	QueryTimeout      time.Duration
-	WebDir            string
 }
 
 func LoadConfig(getenv func(string) string) Config {
@@ -34,7 +33,6 @@ func LoadConfig(getenv func(string) string) Config {
 		DetailRetention:   90 * 24 * time.Hour,
 		DailyRetention:    365 * 24 * time.Hour,
 		QueryTimeout:      envDurationMilliseconds(getenv("ACCOUNT_MONITOR_QUERY_TIMEOUT_MS"), 3*time.Second),
-		WebDir:            envString(getenv("EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR"), "/app/account-monitor"),
 	}
 }
 
@@ -75,11 +73,4 @@ func envInt64(value string, fallback int64) int64 {
 		return fallback
 	}
 	return parsed
-}
-
-func envString(value, fallback string) string {
-	if value = strings.TrimSpace(value); value != "" {
-		return value
-	}
-	return fallback
 }

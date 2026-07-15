@@ -37,7 +37,7 @@ func newAccountMonitorRuntime(ctx context.Context, cfg Config, extensionDB *sql.
 	repository := accountmonitor.NewRepository(extensionDB)
 	service := accountmonitor.NewAdminService(repository, source, monitorCfg.QueryTimeout)
 	return &accountMonitorRuntime{
-		handler:   accountmonitor.NewHandler(service, monitorCfg.WebDir),
+		handler:   accountmonitor.NewHandler(service),
 		collector: accountmonitor.NewCollector(source, repository, monitorCfg, nil),
 		sourceDB:  sourceDB,
 	}, nil

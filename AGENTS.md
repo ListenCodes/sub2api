@@ -27,7 +27,7 @@ committed.
 Account-monitor implementation, aggregation, anomaly rules, APIs, and page
 assets belong to `extensions-self/account-monitor`. Official Sub2API code is
 limited to exact failed-attempt model attribution, authenticated/signed proxy
-routes, and the thin `/admin/account-monitor` menu/iframe shell.
+routes, and the native `/admin/extensions/account-monitor` and group-monitor pages.
 
 The monitor may read the main database only through `extensions_self_ro` views
 using the dedicated `extensions_self_monitor` login, which inherits the

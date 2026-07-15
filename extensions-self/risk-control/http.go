@@ -51,23 +51,6 @@ func NewHTTPServer(cfg Config, repo RiskRepository, monitors ...*accountmonitor.
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if r.URL.Path == "/account-monitor" {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
-			return
-		}
-		http.Redirect(w, r, "/account-monitor/", http.StatusPermanentRedirect)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/account-monitor/") {
-		if s.monitor == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("account monitor unavailable"))
-			return
-		}
-		s.monitor.ServeWeb(w, r, strings.TrimPrefix(r.URL.Path, "/account-monitor/"))
-		return
-	}
 	if r.URL.Path == "/homepage" {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")

@@ -17,9 +17,7 @@ RUN adduser -D -H -u 10001 extensions-self
 WORKDIR /app
 COPY --from=builder /out/extensions-self /app/extensions-self
 COPY homepage/ /app/homepage/
-COPY account-monitor/web/ /app/account-monitor/
 ENV EXTENSIONS_SELF_HOMEPAGE_DIR=/app/homepage
-ENV EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR=/app/account-monitor
 USER extensions-self
 EXPOSE 8090
 ENTRYPOINT ["/app/extensions-self"]

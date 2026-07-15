@@ -22,7 +22,7 @@ test('compose wires the account monitor into the existing extensions-self servic
     assert.match(compose, /ACCOUNT_MONITOR_LOOKBACK_SECONDS=\$\{ACCOUNT_MONITOR_LOOKBACK_SECONDS:-300\}/)
     assert.match(compose, /ACCOUNT_MONITOR_BATCH_SIZE=\$\{ACCOUNT_MONITOR_BATCH_SIZE:-1000\}/)
     assert.match(compose, /ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=\$\{ACCOUNT_MONITOR_QUERY_TIMEOUT_MS:-3000\}/)
-    assert.match(compose, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR=\/app\/account-monitor/)
+    assert.doesNotMatch(compose, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
     assert.match(compose, /extensions-self:[\s\S]*depends_on:[\s\S]*postgres:[\s\S]*condition: service_healthy/)
     assert.match(compose, /^  risk-control-postgres:\s*$/m)
   }
@@ -37,10 +37,10 @@ test('the example environment is disabled by default and documents every monitor
     'ACCOUNT_MONITOR_LOOKBACK_SECONDS=300',
     'ACCOUNT_MONITOR_BATCH_SIZE=1000',
     'ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000',
-    'EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR=/app/account-monitor',
   ]) {
     assert.match(env, new RegExp(`^${setting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))
   }
+  assert.doesNotMatch(env, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
   assert.match(env, /extensions_self_monitor/)
   assert.match(env, /dedicated read-only login|专用只读登录角色/)
 })
@@ -56,12 +56,12 @@ test('the source installer keeps group privileges separate from the login role',
   assert.doesNotMatch(installer, /GRANT[^\n]*(sub2api|risk_control_app)/)
 })
 
-test('the extensions image contains both modules and the monitor web assets', () => {
+test('the extensions image contains both modules without monitor web assets', () => {
   const dockerfile = read('extensions-self/Dockerfile')
   assert.match(dockerfile, /COPY account-monitor\/go\.mod account-monitor\/go\.sum/)
   assert.match(dockerfile, /COPY risk-control\/go\.mod risk-control\/go\.sum/)
   assert.match(dockerfile, /go build[^\n]*-o \/out\/extensions-self/)
-  assert.match(dockerfile, /COPY account-monitor\/web\/ \/app\/account-monitor\//)
+  assert.doesNotMatch(dockerfile, /account-monitor\/web|EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
 })
 
 test('the publisher gates enabled monitoring on source privileges and readiness', () => {
@@ -80,9 +80,8 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
   assert.match(publisher, /public\.api_keys/)
   assert.match(publisher, /public\.accounts/)
   assert.match(publisher, /SELECT credentials/)
-  assert.match(publisher, /account-monitor\//)
   assert.match(publisher, /api\/v1\/admin\/account-monitor\/data-quality/)
-  assert.match(publisher, /api\/v1\/extensions-self\/account-monitor\//)
+  assert.doesNotMatch(publisher, /account monitor static health check|api\/v1\/extensions-self\/account-monitor\//)
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
@@ -110,7 +109,7 @@ test('account monitor documentation covers ownership, formulas, operations, and 
     'extensions_self_ro',
     'risk-control-postgres',
     '/api/v1/admin/account-monitor',
-    '/api/v1/extensions-self/account-monitor/',
+    '/admin/extensions/account-monitor',
     'ACCOUNT_MONITOR_SOURCE_DATABASE_URL',
   ]) {
     assert.match(moduleReadme, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
@@ -149,7 +148,7 @@ test('account monitor documentation covers ownership, formulas, operations, and 
     read('deploy/RELEASE-RUNBOOK.md'),
   ].join('\n')
   for (const marker of [
-    '/admin/account-monitor',
+    '/admin/extensions/account-monitor',
     'extensions_self_monitor',
     'ACCOUNT_MONITOR_ENABLED',
     'data-quality',

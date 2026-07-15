@@ -2,12 +2,11 @@ package accountmonitor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -53,12 +52,11 @@ type AdminBackend interface {
 
 type Handler struct {
 	backend AdminBackend
-	webDir  string
 	now     func() time.Time
 }
 
-func NewHandler(backend AdminBackend, webDir string) *Handler {
-	return &Handler{backend: backend, webDir: strings.TrimSpace(webDir), now: func() time.Time { return time.Now().UTC() }}
+func NewHandler(backend AdminBackend) *Handler {
+	return &Handler{backend: backend, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (h *Handler) ServeAdmin(w http.ResponseWriter, r *http.Request, relativePath string, actorID int64) {
@@ -79,6 +77,10 @@ func (h *Handler) ServeAdmin(w http.ResponseWriter, r *http.Request, relativePat
 	}
 	result, err := h.backend.ExecuteAdmin(r.Context(), request)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMonitorError(w, http.StatusNotFound, "account monitor resource not found")
+			return
+		}
 		if errors.Is(err, ErrRebuildOverlap) {
 			writeMonitorError(w, http.StatusConflict, err.Error())
 			return
@@ -87,33 +89,6 @@ func (h *Handler) ServeAdmin(w http.ResponseWriter, r *http.Request, relativePat
 		return
 	}
 	writeMonitorJSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) ServeWeb(w http.ResponseWriter, r *http.Request, relativePath string) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeMonitorError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if h.webDir == "" {
-		writeMonitorError(w, http.StatusServiceUnavailable, "account monitor web assets are unavailable")
-		return
-	}
-	clean := filepath.Clean("/" + strings.TrimSpace(relativePath))
-	if strings.Contains(relativePath, "\\") || strings.Contains(clean, "..") {
-		writeMonitorError(w, http.StatusBadRequest, "invalid asset path")
-		return
-	}
-	if clean == "/" || clean == "/." {
-		clean = "/index.html"
-	}
-	fullPath := filepath.Join(h.webDir, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
-	if _, err := os.Stat(fullPath); err != nil {
-		writeMonitorError(w, http.StatusNotFound, "asset not found")
-		return
-	}
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFile(w, r, fullPath)
 }
 
 func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorID int64) (AdminRequest, int, error) {

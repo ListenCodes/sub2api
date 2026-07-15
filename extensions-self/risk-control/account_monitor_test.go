@@ -4,8 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,7 +29,7 @@ func (s *monitorBackendStub) ExecuteAdmin(context.Context, accountmonitor.AdminR
 
 func TestAccountMonitorAdminRequiresSignatureAndActor(t *testing.T) {
 	backend := &monitorBackendStub{}
-	monitor := accountmonitor.NewHandler(backend, "")
+	monitor := accountmonitor.NewHandler(backend)
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(defaultRules()), monitor)
 
 	unsigned := serveJSON(server, httptest.NewRequest(http.MethodGet, "/api/v1/admin/account-monitor/overview", nil))
@@ -54,20 +52,16 @@ func TestAccountMonitorAdminRequiresSignatureAndActor(t *testing.T) {
 	}
 }
 
-func TestAccountMonitorWebServesOnlyReadMethods(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("monitor-marker"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	monitor := accountmonitor.NewHandler(&monitorBackendStub{}, dir)
+func TestAccountMonitorWebRouteDoesNotExist(t *testing.T) {
+	monitor := accountmonitor.NewHandler(&monitorBackendStub{})
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(defaultRules()), monitor)
 
 	get := serveJSON(server, httptest.NewRequest(http.MethodGet, "/account-monitor/", nil))
-	if get.Code != http.StatusOK || get.Body.String() != "monitor-marker" {
+	if get.Code != http.StatusNotFound {
 		t.Fatalf("GET status=%d body=%q", get.Code, get.Body.String())
 	}
 	post := serveJSON(server, httptest.NewRequest(http.MethodPost, "/account-monitor/", nil))
-	if post.Code != http.StatusMethodNotAllowed {
+	if post.Code != http.StatusNotFound {
 		t.Fatalf("POST status=%d", post.Code)
 	}
 }

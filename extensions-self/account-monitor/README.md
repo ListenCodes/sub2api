@@ -60,21 +60,20 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 `scope_id` 使用 `PlatformScopeID`：对去空格、转小写后的平台名计算 FNV-1a 64 位哈希，
 再清除符号位；该映射稳定且不依赖主库内部枚举。
 
-静态页面由扩展 `/account-monitor/` 提供，通过主应用鉴权后的
-`/api/v1/extensions-self/account-monitor/` 加载。Vue 路由 `/admin/account-monitor` 只是
-同源 iframe 薄壳，不包含统计业务逻辑。
+页面由主应用原生 Vue 组件提供，入口为 `/admin/extensions/account-monitor`；分组监控入口为
+`/admin/extensions/group-monitor`。浏览器只调用主应用管理员代理，扩展不提供 iframe、静态页面
+或公开代理路由。兼容路由 `/admin/account-monitor` 只负责保留查询参数并重定向到原生页面。
 
 ## Configuration
 
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
-| `ACCOUNT_MONITOR_ENABLED` | `false` | 采集器和页面总开关 |
+| `ACCOUNT_MONITOR_ENABLED` | `false` | 采集器和管理 API 总开关 |
 | `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | 空 | 启用时必填的专用只读 DSN |
 | `ACCOUNT_MONITOR_POLL_SECONDS` | `60` | 采集周期 |
 | `ACCOUNT_MONITOR_LOOKBACK_SECONDS` | `300` | 晚到事件回看窗口 |
 | `ACCOUNT_MONITOR_BATCH_SIZE` | `1000` | 每页最大来源行数 |
 | `ACCOUNT_MONITOR_QUERY_TIMEOUT_MS` | `3000` | 主库查询超时 |
-| `EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR` | `/app/account-monitor` | 静态页面目录 |
 
 ## 数据质量和排障
 

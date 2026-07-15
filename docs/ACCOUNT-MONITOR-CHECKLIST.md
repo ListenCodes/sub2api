@@ -41,9 +41,10 @@ ROLLBACK;
 
 - [ ] 只重建 `sub2api` 与 `extensions-self`；不重建 `risk-control-postgres`。
 - [ ] 主应用 `/health`、`extensions-self /healthz` 和首页代理正常。
-- [ ] 账号监控静态页、签名 `/api/v1/admin/account-monitor/data-quality` 正常。
-- [ ] 未认证访问 `/api/v1/extensions-self/account-monitor/` 返回鉴权/合规状态而不是 404。
-- [ ] 管理员 `/admin/account-monitor` 在桌面和移动视口可加载、筛选、翻页、展开账号。
+- [ ] 签名 `/api/v1/admin/account-monitor/data-quality` 正常，旧静态 `/account-monitor/` 路由不存在。
+- [ ] 未认证访问 `/api/v1/admin/extensions-self/account-monitor/data-quality` 被管理员鉴权拒绝。
+- [ ] 管理员 `/admin/extensions/account-monitor` 在桌面和移动视口可加载、筛选、翻页、展开账号。
+- [ ] 管理员 `/admin/extensions/group-monitor` 可筛选、分页并打开实际模型详情。
 - [ ] 风控三页和自定义首页无回归。
 - [ ] 抽样对账成功、失败、重试后成功、模型、Token、成本、图片和视频。
 - [ ] `data-quality` 显示最近同步、延迟、未归属错误和 exact/estimated 比例。

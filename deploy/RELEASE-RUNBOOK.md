@@ -116,13 +116,12 @@ The unified extension service is built from the approved main repository checkou
 ```
 
 The main application must use `http://extensions-self:8090`. The extension Go
-process serves signed risk/account-monitor APIs and the static `/homepage/` and
-`/account-monitor/` routes. The browser reaches them only through same-origin
-main application proxies:
+process serves signed risk/account-monitor APIs and the static `/homepage/` route.
+The browser reaches them only through same-origin main application proxies:
 
 ```text
 https://sub.ailisten.top/api/v1/extensions-self/homepage/
-https://sub.ailisten.top/api/v1/extensions-self/account-monitor/
+https://sub.ailisten.top/api/v1/admin/extensions-self/account-monitor/data-quality
 ```
 
 `risk-control-postgres` and `risk_control_postgres_data` remain independent and
@@ -179,8 +178,8 @@ For the first enabled release, use this order:
 4. Verify the NOLOGIN role and TCP login can read
    `extensions_self_ro.usage_source`, while full keys and credentials are denied.
 5. Build both images and recreate only `sub2api` and `extensions-self`.
-6. Verify `/admin/account-monitor`, the authenticated static proxy, signed
-   `data-quality`, risk pages, and custom homepage.
+6. Verify `/admin/extensions/account-monitor`, `/admin/extensions/group-monitor`,
+   signed `data-quality`, risk pages, and custom homepage.
 7. Reconcile sampled success, failure, retry-after-failure, model, cost, and
    media counts. Record the actual available historical range.
 
@@ -196,7 +195,7 @@ historical gaps must be reported rather than backfilled with zeros.
 - [ ] `sub2api` container is healthy.
 - [ ] `extensions-self` container is healthy.
 - [ ] Public extensions homepage returns success and is the configured iframe.
-- [ ] `/admin/account-monitor` and its authenticated static proxy load.
+- [ ] Native `/admin/extensions/account-monitor` and `/admin/extensions/group-monitor` load.
 - [ ] Signed account-monitor `data-quality` reports a recent sync or an explicit source error.
 - [ ] Source login reads only `extensions_self_ro` and cannot read credentials/full keys.
 - [ ] Sample account-attempt and user-final counts reconcile, including retry-after-failure.
