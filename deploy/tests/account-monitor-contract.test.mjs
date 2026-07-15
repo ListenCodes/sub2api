@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -74,9 +74,16 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
   assert.match(publisher, /ACCOUNT_MONITOR_ENABLED/)
   assert.match(publisher, /docker exec risk-control-postgres pg_dump/)
   assert.match(publisher, /risk_control_db\.dump/)
-  assert.match(publisher, /extensions_self_monitor/)
-  assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
-  assert.match(publisher, /extensions_self_ro\.usage_source/)
+  assert.match(publisher, /pg_restore[^\n]*--list/)
+  assert.match(publisher, /ssl_certificate/)
+  assert.match(publisher, /certificate-metadata|certificates/)
+  assert.match(publisher, /rollback-main-image|ROLLBACK_MAIN_IMAGE/)
+  assert.match(publisher, /rollback-extension-image|ROLLBACK_EXTENSION_IMAGE/)
+  assert.match(publisher, /backfill.*pending|BACKFILL_STATUS.*pending/i)
+	assert.match(publisher, /extensions_self_monitor/)
+	assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
+	assert.match(publisher, /extensions_self_ro\.usage_source/)
+	assert.match(publisher, /extensions_self_ro\.group_dimension/)
   assert.match(publisher, /public\.api_keys/)
   assert.match(publisher, /public\.accounts/)
   assert.match(publisher, /SELECT credentials/)
@@ -85,6 +92,21 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
+})
+
+test('the segmented backfill command bounds, polls, stops, and records every job', () => {
+  const relative = 'deploy/ops/backfill-account-monitor.sh'
+  assert.equal(existsSync(resolve(repoRoot, relative)), true)
+  const script = read(relative)
+  assert.match(script, /31\s*\*\s*24|31 days|31-day/i)
+  assert.match(script, /rebuild-jobs/)
+  assert.match(script, /pending|running/)
+  assert.match(script, /completed/)
+  assert.match(script, /failed/)
+  assert.match(script, /processed_rows/)
+  assert.match(script, /data-quality/)
+  assert.match(script, /backfill-jobs|BACKFILL_RANGE|backfill_range/i)
+  assert.doesNotMatch(script, /continue[^\n]*failed/i)
 })
 
 test('account monitor documentation covers ownership, formulas, operations, and handoff', () => {

@@ -35,7 +35,7 @@ func newAccountMonitorRuntime(ctx context.Context, cfg Config, extensionDB *sql.
 	sourceDB.SetConnMaxLifetime(30 * time.Minute)
 	source := accountmonitor.NewPostgresSource(sourceDB, monitorCfg.QueryTimeout, monitorCfg.BatchSize)
 	repository := accountmonitor.NewRepository(extensionDB)
-	service := accountmonitor.NewAdminService(repository, source, monitorCfg.QueryTimeout)
+	service := accountmonitor.NewAdminService(repository, source, monitorCfg.QueryTimeout, 2*monitorCfg.PollInterval)
 	return &accountMonitorRuntime{
 		handler:   accountmonitor.NewHandler(service),
 		collector: accountmonitor.NewCollector(source, repository, monitorCfg, nil),

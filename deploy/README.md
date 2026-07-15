@@ -188,10 +188,24 @@ backing up both databases, it runs `install-account-monitor-source.sql`, checks
 keys or credentials, builds, and verifies the signed `data-quality` API. A failed
 permission probe stops before build.
 
+The publisher also verifies both dump archives, captures the Nginx origin
+certificate/key and container/image metadata, and writes exact rollback tags to
+`release-metadata.env`. It probes both `usage_source` and `group_dimension`.
+
 The native Vue entries are `/admin/extensions/account-monitor` and
 `/admin/extensions/group-monitor`; both use the authenticated admin proxy
 `/api/v1/admin/extensions-self/account-monitor/*`. Details and rollback steps are in
 [`../docs/ACCOUNT-MONITOR-CHECKLIST.md`](../docs/ACCOUNT-MONITOR-CHECKLIST.md).
+
+After a healthy publish, backfill only the `data-quality` `available_from/to`
+interval. The command creates contiguous segments of at most 31 days, waits for
+each job, stops on the first failure, and records results in the release backup:
+
+```bash
+/root/sub2api/deploy/ops/backfill-account-monitor.sh \
+  --from <available-from-RFC3339> --to <available-to-RFC3339> \
+  --record-dir /root/backups/sub2api/<release-id>
+```
 
 ### Custom fork update and release
 

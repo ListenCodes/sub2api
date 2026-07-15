@@ -173,7 +173,28 @@ export interface AccountAttemptRow {
   identity_quality: string
 }
 
-export interface AccountDataQuality {
+export interface CursorQuality {
+  cursor_time: string | null
+  cursor_id: number
+  last_success_at: string | null
+  last_error?: string
+}
+
+export interface DataQualitySnapshot {
+  data_as_of: string | null
+  collection_lag_seconds: number | null
+  stale_data_warning?: string
+  usage_cursor: CursorQuality
+  error_cursor: CursorQuality
+  recent_source_error?: string
+  available_from: string | null
+  available_to: string | null
+  missing_group_requests: number
+  exact_model_requests: number
+  estimated_model_requests: number
+}
+
+export interface AccountDataQuality extends DataQualitySnapshot {
   source_connected: boolean
   error_attribution_rate?: number | null
   unattributed_errors: number
@@ -181,7 +202,6 @@ export interface AccountDataQuality {
   exact_models: number
   estimated_models: number
   fallback_identities: number
-  missing_group_requests: number
   data_source: string
 }
 
@@ -225,15 +245,11 @@ export interface GroupMonitorCard {
   timeline: GroupMonitorBucket[]
 }
 
-export interface GroupMonitorQuality {
-  missing_group_requests: number
-  exact_model_requests: number
-  estimated_model_requests: number
-}
+export type GroupMonitorQuality = DataQualitySnapshot
 
 export interface GroupMonitorGroupsResponse extends PageResponse<GroupMonitorCard> {
   platforms: string[]
-  data_as_of: string
+  data_as_of: string | null
   data_quality: GroupMonitorQuality
 }
 

@@ -29,9 +29,9 @@ SELECT COUNT(*),COUNT(*) FILTER (WHERE result='succeeded')
 FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
 
 const syncOverviewSQL = `
-SELECT COALESCE(MAX(last_success_at),to_timestamp(0)),
-       EXTRACT(EPOCH FROM (NOW()-COALESCE(MAX(last_success_at),NOW())))
-FROM account_monitor_sync_state`
+SELECT COALESCE(MIN(last_success_at),to_timestamp(0)),
+       EXTRACT(EPOCH FROM (NOW()-COALESCE(MIN(last_success_at),NOW())))
+FROM account_monitor_sync_state WHERE source IN ('usage','errors')`
 
 const accountBaseSQL = `
 SELECT CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END AS rollup_account_id,
@@ -131,9 +131,22 @@ FROM account_monitor_attempt_facts WHERE attempted_at >= $1 AND attempted_at < $
 
 const requestQualitySQL = `
 SELECT COUNT(*) FILTER (WHERE result='failed' AND account_id IS NULL),
-       COUNT(*) FILTER (WHERE result='failed'),
-       COUNT(*) FILTER (WHERE group_id IS NULL)
+       COUNT(*) FILTER (WHERE result='failed')
 FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
+
+const syncQualitySQL = `
+SELECT source,cursor_time,cursor_id,last_success_at,last_error,updated_at
+FROM account_monitor_sync_state
+WHERE source IN ('usage','errors','groups')
+ORDER BY updated_at DESC,source`
+
+const sharedQualityFactsSQL = `
+SELECT MIN(occurred_at),MAX(occurred_at),
+       COUNT(*) FILTER (WHERE group_id IS NULL),
+       COUNT(*) FILTER (WHERE model_attribution='exact'),
+       COUNT(*) FILTER (WHERE model_attribution<>'exact')
+FROM account_monitor_request_facts
+WHERE occurred_at >= $1 AND occurred_at < $2`
 
 const selectThresholdSQL = `SELECT config FROM account_monitor_thresholds WHERE scope_type='global' AND scope_id=0`
 const selectThresholdOverridesSQL = `SELECT scope_type,scope_id,config FROM account_monitor_thresholds ORDER BY scope_type,scope_id`
@@ -246,25 +259,23 @@ FROM account_monitor_group_model_10m
 WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
 ORDER BY LOWER(actual_model),actual_model,bucket_at`
 
-const groupMonitorQualitySQL = `
-SELECT COUNT(*) FILTER (WHERE group_id IS NULL),
-       COUNT(*) FILTER (WHERE model_attribution='exact'),
-       COUNT(*) FILTER (WHERE model_attribution<>'exact')
-FROM account_monitor_request_facts
-WHERE occurred_at >= $1 AND occurred_at < $2`
-
 type AdminService struct {
 	repo         *Repository
 	source       *PostgresSource
 	queryTimeout time.Duration
 	now          func() time.Time
+	staleAfter   time.Duration
 }
 
-func NewAdminService(repo *Repository, source *PostgresSource, queryTimeout time.Duration) *AdminService {
+func NewAdminService(repo *Repository, source *PostgresSource, queryTimeout time.Duration, staleAfter ...time.Duration) *AdminService {
 	if queryTimeout <= 0 {
 		queryTimeout = 3 * time.Second
 	}
-	return &AdminService{repo: repo, source: source, queryTimeout: queryTimeout, now: func() time.Time { return time.Now().UTC() }}
+	staleThreshold := 2 * time.Minute
+	if len(staleAfter) > 0 && staleAfter[0] > 0 {
+		staleThreshold = staleAfter[0]
+	}
+	return &AdminService{repo: repo, source: source, queryTimeout: queryTimeout, staleAfter: staleThreshold, now: func() time.Time { return time.Now().UTC() }}
 }
 
 type OverviewResponse struct {
@@ -325,6 +336,7 @@ type ThresholdResponse struct {
 }
 
 type DataQualityResponse struct {
+	DataQualitySnapshot
 	SourceConnected      bool     `json:"source_connected"`
 	ErrorAttributionRate *float64 `json:"error_attribution_rate,omitempty"`
 	UnattributedErrors   int64    `json:"unattributed_errors"`
@@ -332,7 +344,6 @@ type DataQualityResponse struct {
 	ExactModels          int64    `json:"exact_models"`
 	EstimatedModels      int64    `json:"estimated_models"`
 	FallbackIdentities   int64    `json:"fallback_identities"`
-	MissingGroupRequests int64    `json:"missing_group_requests"`
 	DataSource           string   `json:"data_source"`
 }
 
@@ -344,11 +355,7 @@ type GroupMonitorBucket struct {
 	Status    string    `json:"status"`
 }
 
-type GroupMonitorQuality struct {
-	MissingGroupRequests   int64 `json:"missing_group_requests"`
-	ExactModelRequests     int64 `json:"exact_model_requests"`
-	EstimatedModelRequests int64 `json:"estimated_model_requests"`
-}
+type GroupMonitorQuality = DataQualitySnapshot
 
 type GroupMonitorCard struct {
 	GroupID       int64                `json:"group_id"`
@@ -369,7 +376,7 @@ type GroupMonitorGroupsResponse struct {
 	Page      int                 `json:"page"`
 	PageSize  int                 `json:"page_size"`
 	Platforms []string            `json:"platforms"`
-	DataAsOf  time.Time           `json:"data_as_of"`
+	DataAsOf  *time.Time          `json:"data_as_of"`
 	Quality   GroupMonitorQuality `json:"data_quality"`
 }
 
@@ -436,7 +443,7 @@ func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (
 func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequest) (GroupMonitorGroupsResponse, error) {
 	result := GroupMonitorGroupsResponse{
 		Items: make([]GroupMonitorCard, 0), Page: request.Page, PageSize: request.PageSize,
-		Platforms: make([]string, 0), DataAsOf: request.To,
+		Platforms: make([]string, 0),
 	}
 	dimensions, err := s.loadVisibleGroupDimensions(ctx)
 	if err != nil {
@@ -484,11 +491,12 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 	}
 	result.Total = int64(len(result.Items))
 	result.Items = pageGroupCards(result.Items, request.Page, request.PageSize)
-	if err := s.repo.db.QueryRowContext(ctx, groupMonitorQualitySQL, request.From, request.To).Scan(
-		&result.Quality.MissingGroupRequests, &result.Quality.ExactModelRequests, &result.Quality.EstimatedModelRequests,
-	); err != nil {
+	quality, err := s.qualitySnapshot(ctx, request.From, request.To)
+	if err != nil {
 		return result, err
 	}
+	result.Quality = quality
+	result.DataAsOf = quality.DataAsOf
 	return result, nil
 }
 
@@ -1123,13 +1131,97 @@ func (s *AdminService) dataQuality(ctx context.Context, request AdminRequest) (D
 	}
 	var failed int64
 	if err := s.repo.db.QueryRowContext(ctx, requestQualitySQL, request.From, request.To).Scan(
-		&result.UnattributedErrors, &failed, &result.MissingGroupRequests,
+		&result.UnattributedErrors, &failed,
 	); err != nil {
 		return result, err
+	}
+	snapshot, err := s.qualitySnapshot(ctx, request.From, request.To)
+	if err != nil {
+		return result, err
+	}
+	result.DataQualitySnapshot = snapshot
+	if !result.SourceConnected && result.StaleDataWarning == "" {
+		result.StaleDataWarning = "主库只读连接不可用"
 	}
 	if failed > 0 {
 		rate := float64(failed-result.UnattributedErrors) / float64(failed)
 		result.ErrorAttributionRate = &rate
+	}
+	return result, nil
+}
+
+func (s *AdminService) qualitySnapshot(ctx context.Context, from, to time.Time) (DataQualitySnapshot, error) {
+	var result DataQualitySnapshot
+	rows, err := s.repo.db.QueryContext(ctx, syncQualitySQL)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	var usageSeen, errorsSeen bool
+	for rows.Next() {
+		var source, lastError string
+		var cursorTime, lastSuccessAt, updatedAt time.Time
+		var cursorID int64
+		if err := rows.Scan(&source, &cursorTime, &cursorID, &lastSuccessAt, &lastError, &updatedAt); err != nil {
+			return result, err
+		}
+		state := CursorQuality{CursorID: cursorID, LastError: lastError}
+		if cursorTime.Unix() > 0 {
+			cursor := cursorTime.UTC()
+			state.CursorTime = &cursor
+		}
+		if lastSuccessAt.Unix() > 0 {
+			success := lastSuccessAt.UTC()
+			state.LastSuccessAt = &success
+		}
+		if result.RecentSourceError == "" && lastError != "" {
+			result.RecentSourceError = lastError
+		}
+		switch source {
+		case "usage":
+			usageSeen = true
+			result.UsageCursor = state
+		case "errors":
+			errorsSeen = true
+			result.ErrorCursor = state
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	if usageSeen && errorsSeen && result.UsageCursor.LastSuccessAt != nil && result.ErrorCursor.LastSuccessAt != nil {
+		dataAsOf := *result.UsageCursor.LastSuccessAt
+		if result.ErrorCursor.LastSuccessAt.Before(dataAsOf) {
+			dataAsOf = *result.ErrorCursor.LastSuccessAt
+		}
+		result.DataAsOf = &dataAsOf
+		lag := s.now().Sub(dataAsOf).Seconds()
+		if lag < 0 {
+			lag = 0
+		}
+		result.CollectionLagSeconds = &lag
+	}
+	var availableFrom, availableTo sql.NullTime
+	if err := s.repo.db.QueryRowContext(ctx, sharedQualityFactsSQL, from, to).Scan(
+		&availableFrom, &availableTo, &result.MissingGroupRequests, &result.ExactModelRequests, &result.EstimatedModelRequests,
+	); err != nil {
+		return result, err
+	}
+	if availableFrom.Valid {
+		value := availableFrom.Time.UTC()
+		result.AvailableFrom = &value
+	}
+	if availableTo.Valid {
+		value := availableTo.Time.UTC()
+		result.AvailableTo = &value
+	}
+	switch {
+	case result.RecentSourceError != "":
+		result.StaleDataWarning = "最近采集错误：" + result.RecentSourceError
+	case result.DataAsOf == nil:
+		result.StaleDataWarning = "采集尚未成功"
+	case result.CollectionLagSeconds != nil && *result.CollectionLagSeconds > s.staleAfter.Seconds():
+		result.StaleDataWarning = fmt.Sprintf("采集已延迟 %.0f 秒", *result.CollectionLagSeconds)
 	}
 	return result, nil
 }

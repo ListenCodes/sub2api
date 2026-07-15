@@ -24,8 +24,8 @@ committed.
 
 ## Account-Monitor Contract
 
-Account-monitor implementation, aggregation, anomaly rules, APIs, and page
-assets belong to `extensions-self/account-monitor`. Official Sub2API code is
+Account-monitor collection, aggregation, anomaly rules, and APIs belong to
+`extensions-self/account-monitor`; native page components belong to the main frontend. Official Sub2API code is
 limited to exact failed-attempt model attribution, authenticated/signed proxy
 routes, and the native `/admin/extensions/account-monitor` and group-monitor pages.
 
@@ -36,6 +36,12 @@ or expose account credentials, full API keys, request bodies, or headers. Facts,
 aggregates, cursors, thresholds, and rebuild jobs live in
 `risk-control-postgres`; publishing must back up that database without
 recreating or deleting its container/volume.
+
+Account and group monitoring share `account_monitor_request_facts`. The final result owns
+`group_id` and the actual model; ungrouped requests remain visible only in data quality.
+Group cards read only the mirrored group dimension and complete 10-minute aggregates.
+Historical rebuilds use `deploy/ops/backfill-account-monitor.sh` in non-overlapping segments
+of at most 31 days and record every job in the matching release backup directory.
 
 Read `extensions-self/account-monitor/README.md`,
 `docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md`, and

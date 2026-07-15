@@ -42,9 +42,10 @@ When `ACCOUNT_MONITOR_ENABLED=true`, the publisher additionally:
 
 1. parses the rendered `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` and requires the
    `extensions_self_monitor` login on the `postgres` service;
-2. backs up both `sub2api-postgres` and `risk-control-postgres` before changes;
+2. backs up and verifies both databases plus Compose, `.env`, Nginx certificates,
+   container/image metadata, checksums, and rollback tags before changes;
 3. runs `install-account-monitor-source.sql` and verifies
-   `SET ROLE extensions_self_monitor_ro` can read the safe views;
+   `SET ROLE extensions_self_monitor_ro` can read `usage_source` and `group_dimension`;
 4. proves the login cannot read `public.api_keys.key` or
    `public.accounts.credentials`;
 5. checks the signed account-monitor `data-quality` API and main authenticated
@@ -52,6 +53,12 @@ When `ACCOUNT_MONITOR_ENABLED=true`, the publisher additionally:
 
 Any failure stops publication. The script never prints the source password and
 never manages the `risk-control-postgres` lifecycle.
+
+`backfill-account-monitor.sh` is the post-publish operator command. It requires
+an explicit RFC3339 range and matching release backup directory, splits the range
+into non-overlapping segments of at most 31 days, submits signed rebuild jobs one
+at a time, polls to completion, and writes `backfill-jobs.tsv` plus the final
+`data-quality-after-backfill.json`. A failed or timed-out job terminates the run.
 
 The retired standalone `/root/sub2api-risk-control` deployment must not be
 reintroduced. The canonical source is `/root/sub2api/extensions-self`; its

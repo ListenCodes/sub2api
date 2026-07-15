@@ -22,6 +22,18 @@ type CollectorStore interface {
 	Cleanup(ctx context.Context, now time.Time, detailRetention, dailyRetention time.Duration) error
 }
 
+type syncErrorRecorder interface {
+	RecordSyncError(ctx context.Context, source string, syncErr error) error
+}
+
+type syncErrorClearer interface {
+	ClearSyncError(ctx context.Context, source string) error
+}
+
+type syncSuccessRecorder interface {
+	RecordSyncSuccess(ctx context.Context, source string, at time.Time) error
+}
+
 type GroupDimensionSource interface {
 	ReadGroupDimensions(ctx context.Context) ([]GroupDimension, error)
 }
@@ -99,10 +111,12 @@ func (c *Collector) SyncOnce(ctx context.Context) error {
 	errorFrom := lookbackStart(errorCursor, c.now(), c.cfg.Lookback)
 	usageRows, latestUsage, err := c.readAllUsage(ctx, usageCursor, usageFrom)
 	if err != nil {
+		c.recordSyncError(ctx, "usage", err)
 		return err
 	}
 	errorRows, latestError, err := c.readAllErrors(ctx, errorCursor, errorFrom)
 	if err != nil {
+		c.recordSyncError(ctx, "errors", err)
 		return err
 	}
 	batch, err := Normalize(usageRows, errorRows)
@@ -114,6 +128,7 @@ func (c *Collector) SyncOnce(ctx context.Context) error {
 	if groupSource, ok := c.source.(GroupDimensionSource); ok {
 		groupDimensions, err := groupSource.ReadGroupDimensions(ctx)
 		if err != nil {
+			c.recordSyncError(ctx, "groups", err)
 			return err
 		}
 		for i := range groupDimensions {
@@ -123,10 +138,52 @@ func (c *Collector) SyncOnce(ctx context.Context) error {
 	}
 	if len(usageRows) > 0 || len(errorRows) > 0 || len(batch.GroupDimensions) > 0 {
 		if err := c.store.CommitBatch(ctx, batch); err != nil {
+			c.recordSyncError(ctx, "collector", err)
 			return err
 		}
 	}
-	return c.store.Cleanup(ctx, c.now(), c.cfg.DetailRetention, c.cfg.DailyRetention)
+	if err := c.store.Cleanup(ctx, c.now(), c.cfg.DetailRetention, c.cfg.DailyRetention); err != nil {
+		c.recordSyncError(ctx, "collector", err)
+		return err
+	}
+	if err := c.recordSyncSuccesses(ctx); err != nil {
+		c.recordSyncError(ctx, "collector", err)
+		return err
+	}
+	c.clearCollectorError(ctx)
+	return nil
+}
+
+func (c *Collector) recordSyncError(ctx context.Context, source string, syncErr error) {
+	if recorder, ok := c.store.(syncErrorRecorder); ok {
+		_ = recorder.RecordSyncError(ctx, source, syncErr)
+	}
+}
+
+func (c *Collector) recordSyncSuccesses(ctx context.Context) error {
+	recorder, ok := c.store.(syncSuccessRecorder)
+	if !ok {
+		return nil
+	}
+	sources := []string{"usage", "errors"}
+	if _, ok := c.source.(GroupDimensionSource); ok {
+		sources = append(sources, "groups")
+	}
+	at := c.now()
+	for _, source := range sources {
+		if err := recorder.RecordSyncSuccess(ctx, source, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Collector) clearCollectorError(ctx context.Context) {
+	clearer, ok := c.store.(syncErrorClearer)
+	if !ok {
+		return
+	}
+	_ = clearer.ClearSyncError(ctx, "collector")
 }
 
 func (c *Collector) readAllUsage(ctx context.Context, cursor Cursor, from time.Time) ([]UsageSourceRow, Cursor, error) {

@@ -64,10 +64,15 @@ function seed() {
     users: 8, tokens: 12345, user_cost: 4.2, account_cost: 2.1,
     average_duration_ms: 220, p95_duration_ms: 480, last_sync_at: '2026-07-15T08:00:00Z', sync_lag_seconds: 15,
   })
-  vi.mocked(accountMonitorAPI.getDataQuality).mockResolvedValue({
+	vi.mocked(accountMonitorAPI.getDataQuality).mockResolvedValue({
     source_connected: true, error_attribution_rate: 0.98, unattributed_errors: 2,
     recovered_failures: 4, exact_models: 88, estimated_models: 12, fallback_identities: 1,
-    missing_group_requests: 3, data_source: '90 天明细',
+		missing_group_requests: 3, exact_model_requests: 80, estimated_model_requests: 20,
+		data_as_of: '2026-07-15T08:00:00Z', collection_lag_seconds: 900,
+		stale_data_warning: '采集已延迟 900 秒', recent_source_error: '',
+		usage_cursor: { cursor_time: '2026-07-15T08:00:00Z', cursor_id: 11, last_success_at: '2026-07-15T08:00:00Z' },
+		error_cursor: { cursor_time: '2026-07-15T07:59:00Z', cursor_id: 22, last_success_at: '2026-07-15T07:59:00Z' },
+		available_from: '2026-07-01T00:00:00Z', available_to: '2026-07-15T08:00:00Z', data_source: '90 天明细',
   })
   vi.mocked(accountMonitorAPI.listAccounts).mockResolvedValue({ items: [account], total: 1, page: 1, page_size: 20 })
   vi.mocked(accountMonitorAPI.getModels).mockResolvedValue({ items: [{ actual_model: 'gpt-5', model_attribution: 'exact', attempts: 100, successes: 91, failures: 9, tokens: 12345, user_cost: 4.2, account_cost: 2.1, average_duration_ms: 220, p95_duration_ms: 480 }], total: 1, page: 1, page_size: 20 })
@@ -94,7 +99,11 @@ describe('AccountMonitorPanel', () => {
     expect(wrapper.text()).toContain('Primary OpenAI')
     expect(wrapper.text()).toContain('72')
     expect(wrapper.text()).toContain('严重')
-    expect(wrapper.text()).toContain('认证错误增多')
+		expect(wrapper.text()).toContain('认证错误增多')
+		expect(wrapper.text()).toContain('采集已延迟 900 秒')
+		expect(wrapper.text()).toContain('2026/7/1')
+		expect(wrapper.text()).toContain('用量游标 11')
+		expect(wrapper.text()).toContain('错误游标 22')
     expect(wrapper.find('iframe').exists()).toBe(false)
   })
 

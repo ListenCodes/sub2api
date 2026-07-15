@@ -69,8 +69,12 @@ func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
 		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
 			AddRow(int64(1), to.Add(-10*time.Minute), int64(4), int64(3), int64(1)),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupMonitorQualitySQL)).WithArgs(from, to).WillReturnRows(
-		sqlmock.NewRows([]string{"missing_group", "exact", "estimated"}).AddRow(int64(2), int64(8), int64(1)),
+	mock.ExpectQuery(regexp.QuoteMeta(syncQualitySQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"source", "cursor_time", "cursor_id", "last_success_at", "last_error", "updated_at"}),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(sharedQualityFactsSQL)).WithArgs(from, to).WillReturnRows(
+		sqlmock.NewRows([]string{"available_from", "available_to", "missing_group", "exact", "estimated"}).
+			AddRow(from, to.Add(-time.Minute), int64(2), int64(8), int64(1)),
 	)
 
 	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
@@ -447,19 +451,46 @@ func TestAdminServiceDataQualityChecksSourceConnectivity(t *testing.T) {
 
 			from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
 			to := from.Add(time.Hour)
+			now := to.Add(5 * time.Minute)
+			usageCursor := from.Add(45 * time.Minute)
+			errorCursor := from.Add(40 * time.Minute)
+			availableFrom := from.Add(-24 * time.Hour)
+			availableTo := from.Add(50 * time.Minute)
 			repoMock.ExpectQuery(regexp.QuoteMeta(dataQualitySQL)).WithArgs(from, to).
 				WillReturnRows(sqlmock.NewRows([]string{"exact", "estimated", "fallback", "recovered"}).AddRow(int64(8), int64(2), int64(1), int64(3)))
 			repoMock.ExpectQuery(regexp.QuoteMeta(requestQualitySQL)).WithArgs(from, to).
-				WillReturnRows(sqlmock.NewRows([]string{"unattributed", "failed", "missing_group"}).AddRow(int64(1), int64(4), int64(2)))
+				WillReturnRows(sqlmock.NewRows([]string{"unattributed", "failed"}).AddRow(int64(1), int64(4)))
+			repoMock.ExpectQuery(regexp.QuoteMeta(syncQualitySQL)).WillReturnRows(
+				sqlmock.NewRows([]string{"source", "cursor_time", "cursor_id", "last_success_at", "last_error", "updated_at"}).
+					AddRow("errors", errorCursor, int64(22), errorCursor, "error source timeout", now).
+					AddRow("usage", usageCursor, int64(11), usageCursor, "", now.Add(-time.Minute)),
+			)
+			repoMock.ExpectQuery(regexp.QuoteMeta(sharedQualityFactsSQL)).WithArgs(from, to).WillReturnRows(
+				sqlmock.NewRows([]string{"available_from", "available_to", "missing_group", "exact", "estimated"}).
+					AddRow(availableFrom, availableTo, int64(2), int64(7), int64(3)),
+			)
 
-			result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
-				ExecuteAdmin(context.Background(), AdminRequest{Resource: ResourceDataQuality, From: from, To: to})
+			service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+			service.now = func() time.Time { return now }
+			result, err := service.ExecuteAdmin(context.Background(), AdminRequest{Resource: ResourceDataQuality, From: from, To: to})
 			if err != nil {
 				t.Fatal(err)
 			}
 			quality := result.(DataQualityResponse)
 			if quality.SourceConnected != test.connected || quality.ExactModels != 8 || quality.UnattributedErrors != 1 {
 				t.Fatalf("quality = %+v", quality)
+			}
+			if quality.DataAsOf == nil || !quality.DataAsOf.Equal(errorCursor) || quality.CollectionLagSeconds == nil || *quality.CollectionLagSeconds != 25*60 {
+				t.Fatalf("quality collection snapshot = %+v", quality.DataQualitySnapshot)
+			}
+			if quality.UsageCursor.CursorID != 11 || quality.ErrorCursor.CursorID != 22 || quality.RecentSourceError != "error source timeout" {
+				t.Fatalf("quality cursors = %+v", quality.DataQualitySnapshot)
+			}
+			if quality.AvailableFrom == nil || !quality.AvailableFrom.Equal(availableFrom) || quality.AvailableTo == nil || !quality.AvailableTo.Equal(availableTo) {
+				t.Fatalf("quality history = %+v", quality.DataQualitySnapshot)
+			}
+			if quality.MissingGroupRequests != 2 || quality.ExactModelRequests != 7 || quality.EstimatedModelRequests != 3 || quality.StaleDataWarning == "" {
+				t.Fatalf("quality attribution/stale state = %+v", quality.DataQualitySnapshot)
 			}
 			raw, err := json.Marshal(quality)
 			if err != nil {

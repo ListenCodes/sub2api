@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -91,6 +92,18 @@ INSERT INTO account_monitor_sync_state(source, cursor_time, cursor_id, last_succ
 VALUES ($1,$2,$3,$4,'',NOW())
 ON CONFLICT (source) DO UPDATE SET cursor_time=EXCLUDED.cursor_time,
 cursor_id=EXCLUDED.cursor_id,last_success_at=EXCLUDED.last_success_at,last_error='',updated_at=NOW()`
+
+const upsertSyncErrorSQL = `
+INSERT INTO account_monitor_sync_state(source,cursor_time,cursor_id,last_success_at,last_error,updated_at)
+VALUES ($1,to_timestamp(0),0,to_timestamp(0),$2,NOW())
+ON CONFLICT (source) DO UPDATE SET last_error=EXCLUDED.last_error,updated_at=NOW()`
+
+const clearSyncErrorSQL = `UPDATE account_monitor_sync_state SET last_error='',updated_at=NOW() WHERE source=$1 AND last_error<>''`
+
+const upsertSyncSuccessSQL = `
+INSERT INTO account_monitor_sync_state(source,cursor_time,cursor_id,last_success_at,last_error,updated_at)
+VALUES ($1,to_timestamp(0),0,$2,'',NOW())
+ON CONFLICT (source) DO UPDATE SET last_success_at=EXCLUDED.last_success_at,last_error='',updated_at=NOW()`
 
 const rebuildLockSQL = `SELECT pg_advisory_xact_lock(87921345)`
 
@@ -355,6 +368,9 @@ func (r *Repository) LoadCursors(ctx context.Context) (Cursor, Cursor, error) {
 		if err := rows.Scan(&source, &cursor.Time, &cursor.ID); err != nil {
 			return Cursor{}, Cursor{}, err
 		}
+		if cursor.Time.Unix() <= 0 {
+			cursor = Cursor{}
+		}
 		if source == "usage" {
 			usage = cursor
 		} else if source == "errors" {
@@ -362,6 +378,34 @@ func (r *Repository) LoadCursors(ctx context.Context) (Cursor, Cursor, error) {
 		}
 	}
 	return usage, errorCursor, rows.Err()
+}
+
+func (r *Repository) RecordSyncError(ctx context.Context, source string, syncErr error) error {
+	if r == nil || r.db == nil || syncErr == nil {
+		return nil
+	}
+	message := strings.TrimSpace(syncErr.Error())
+	if len(message) > 2048 {
+		message = message[:2048]
+	}
+	_, err := r.db.ExecContext(ctx, upsertSyncErrorSQL, source, message)
+	return err
+}
+
+func (r *Repository) ClearSyncError(ctx context.Context, source string) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, clearSyncErrorSQL, source)
+	return err
+}
+
+func (r *Repository) RecordSyncSuccess(ctx context.Context, source string, at time.Time) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, upsertSyncSuccessSQL, source, at)
+	return err
 }
 
 func (r *Repository) Cleanup(ctx context.Context, now time.Time, detailRetention, dailyRetention time.Duration) error {

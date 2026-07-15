@@ -26,7 +26,7 @@ describe('group monitor URL state', () => {
 describe('GroupMonitorPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(accountMonitorAPI.listGroups).mockResolvedValue({ items: [group], total: 1, page: 1, page_size: 12, platforms: ['openai'], data_as_of: '2026-07-15T08:00:00Z', data_quality: { missing_group_requests: 2, exact_model_requests: 9, estimated_model_requests: 1 } })
+		vi.mocked(accountMonitorAPI.listGroups).mockResolvedValue({ items: [group], total: 1, page: 1, page_size: 12, platforms: ['openai'], data_as_of: '2026-07-15T08:00:00Z', data_quality: { missing_group_requests: 2, exact_model_requests: 9, estimated_model_requests: 1, data_as_of: '2026-07-15T08:00:00Z', collection_lag_seconds: 900, stale_data_warning: '采集已延迟 900 秒', recent_source_error: '', usage_cursor: { cursor_time: '2026-07-15T08:00:00Z', cursor_id: 11, last_success_at: '2026-07-15T08:00:00Z' }, error_cursor: { cursor_time: '2026-07-15T07:59:00Z', cursor_id: 22, last_success_at: '2026-07-15T07:59:00Z' }, available_from: '2026-07-01T00:00:00Z', available_to: '2026-07-15T08:00:00Z' } })
   })
 
   it('renders deterministic cards in a responsive one-to-four column grid and refreshes without discarding the last success', async () => {
@@ -34,7 +34,8 @@ describe('GroupMonitorPanel', () => {
     await flushPromises()
     const grid = wrapper.get('[data-testid="group-monitor-grid"]')
     expect(grid.classes()).toEqual(expect.arrayContaining(['grid-cols-1', 'md:grid-cols-2', 'xl:grid-cols-3', '2xl:grid-cols-4']))
-    expect(wrapper.text()).toContain('OpenAI Primary')
+		expect(wrapper.text()).toContain('OpenAI Primary')
+		expect(wrapper.text()).toContain('采集已延迟 900 秒')
 
     vi.mocked(accountMonitorAPI.listGroups).mockRejectedValueOnce(new Error('分组聚合暂不可用'))
     await wrapper.get('[data-testid="group-monitor-refresh"]').trigger('click')
