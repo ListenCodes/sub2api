@@ -48,3 +48,17 @@ func TestAggregateRefreshDeletesBeforeReinsertInSeparateStatements(t *testing.T)
 		}
 	}
 }
+
+func TestDailyAggregateRefreshUsesUTCBoundaries(t *testing.T) {
+	utcFrom := "(($1::timestamptz at time zone 'utc')::date::timestamp at time zone 'utc')"
+	utcTo := "(((($2::timestamptz at time zone 'utc')::date + 1)::timestamp) at time zone 'utc')"
+	for _, index := range []int{5, 7, 9, 11} {
+		query := strings.ToLower(refreshAggregateSQL[index])
+		if !strings.Contains(query, utcFrom) || !strings.Contains(query, utcTo) {
+			t.Fatalf("daily aggregate insert %d must use UTC fact boundaries", index)
+		}
+		if strings.Contains(query, "date_trunc('day'") {
+			t.Fatalf("daily aggregate insert %d uses the database session timezone", index)
+		}
+	}
+}

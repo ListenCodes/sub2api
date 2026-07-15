@@ -50,8 +50,8 @@ SELECT (attempted_at AT TIME ZONE 'UTC')::date,account_id,COUNT(*),
        percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),
        SUM(image_count),SUM(video_count),SUM(video_duration_seconds)
 FROM account_monitor_attempt_facts
-WHERE attempted_at >= date_trunc('day',$1::timestamptz)
-  AND attempted_at < date_trunc('day',$2::timestamptz) + interval '1 day'
+WHERE attempted_at >= (($1::timestamptz AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC')
+  AND attempted_at < (((($2::timestamptz AT TIME ZONE 'UTC')::date + 1)::timestamp) AT TIME ZONE 'UTC')
 GROUP BY 1,2`,
 	`DELETE FROM account_monitor_account_model_daily
     WHERE bucket_date >= ($1::timestamptz AT TIME ZONE 'UTC')::date
@@ -64,8 +64,8 @@ SELECT (attempted_at AT TIME ZONE 'UTC')::date,account_id,actual_model,COUNT(*),
        SUM(user_cost),SUM(account_cost),SUM(COALESCE(duration_ms,0)),COUNT(duration_ms),
        percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL)
 FROM account_monitor_attempt_facts
-WHERE attempted_at >= date_trunc('day',$1::timestamptz)
-  AND attempted_at < date_trunc('day',$2::timestamptz) + interval '1 day'
+WHERE attempted_at >= (($1::timestamptz AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC')
+  AND attempted_at < (((($2::timestamptz AT TIME ZONE 'UTC')::date + 1)::timestamp) AT TIME ZONE 'UTC')
 GROUP BY 1,2,3`,
 	`DELETE FROM account_monitor_account_user_daily
     WHERE bucket_date >= ($1::timestamptz AT TIME ZONE 'UTC')::date
@@ -76,8 +76,8 @@ SELECT (attempted_at AT TIME ZONE 'UTC')::date,account_id,COALESCE(user_id,0),CO
        COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
        SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),SUM(user_cost)
 FROM account_monitor_attempt_facts
-WHERE attempted_at >= date_trunc('day',$1::timestamptz)
-  AND attempted_at < date_trunc('day',$2::timestamptz) + interval '1 day'
+WHERE attempted_at >= (($1::timestamptz AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC')
+  AND attempted_at < (((($2::timestamptz AT TIME ZONE 'UTC')::date + 1)::timestamp) AT TIME ZONE 'UTC')
 GROUP BY 1,2,3,4`,
 	`DELETE FROM account_monitor_account_error_daily
     WHERE bucket_date >= ($1::timestamptz AT TIME ZONE 'UTC')::date
@@ -87,8 +87,9 @@ GROUP BY 1,2,3,4`,
 SELECT (attempted_at AT TIME ZONE 'UTC')::date,account_id,error_category,COALESCE(upstream_status_code,0),provider_error_code,
        COUNT(*),COUNT(*) FILTER (WHERE recovered)
 FROM account_monitor_attempt_facts
-WHERE result='failed' AND attempted_at >= date_trunc('day',$1::timestamptz)
-  AND attempted_at < date_trunc('day',$2::timestamptz) + interval '1 day'
+WHERE result='failed'
+  AND attempted_at >= (($1::timestamptz AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC')
+  AND attempted_at < (((($2::timestamptz AT TIME ZONE 'UTC')::date + 1)::timestamp) AT TIME ZONE 'UTC')
 GROUP BY 1,2,3,4,5`,
 }
 
