@@ -95,3 +95,25 @@ type Batch struct {
 	UsageCursor Cursor
 	ErrorCursor Cursor
 }
+
+type RebuildStatus string
+
+const (
+	RebuildPending   RebuildStatus = "pending"
+	RebuildRunning   RebuildStatus = "running"
+	RebuildCompleted RebuildStatus = "completed"
+	RebuildFailed    RebuildStatus = "failed"
+)
+
+type RebuildJob struct {
+	ID            int64         `json:"id"`
+	From          time.Time     `json:"from"`
+	To            time.Time     `json:"to"`
+	Status        RebuildStatus `json:"status"`
+	ProcessedRows int64         `json:"processed_rows"`
+	Error         string        `json:"error,omitempty"`
+	RequestedBy   int64         `json:"requested_by"`
+	CreatedAt     time.Time     `json:"created_at"`
+	StartedAt     *time.Time    `json:"started_at,omitempty"`
+	CompletedAt   *time.Time    `json:"completed_at,omitempty"`
+}

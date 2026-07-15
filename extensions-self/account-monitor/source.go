@@ -133,12 +133,20 @@ func NewPostgresSource(db *sql.DB, queryTimeout time.Duration, batchSize int) *P
 }
 
 func (s *PostgresSource) ReadUsage(ctx context.Context, after Cursor, from time.Time, limit int) ([]UsageSourceRow, error) {
+	return s.readUsage(ctx, usageSourceQuery, from, after.Time, after.ID, s.pageSize(limit))
+}
+
+func (s *PostgresSource) ReadUsageRange(ctx context.Context, after Cursor, from, to time.Time, limit int) ([]UsageSourceRow, error) {
+	return s.readUsage(ctx, usageRangeSourceQuery, from, to, after.Time, after.ID, s.pageSize(limit))
+}
+
+func (s *PostgresSource) readUsage(ctx context.Context, query string, args ...any) ([]UsageSourceRow, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("account monitor source database is nil")
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, usageSourceQuery, from, after.Time, after.ID, s.pageSize(limit))
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -176,12 +184,20 @@ func (s *PostgresSource) ReadUsage(ctx context.Context, after Cursor, from time.
 }
 
 func (s *PostgresSource) ReadErrors(ctx context.Context, after Cursor, from time.Time, limit int) ([]ErrorSourceRow, error) {
+	return s.readErrors(ctx, errorSourceQuery, from, after.Time, after.ID, s.pageSize(limit))
+}
+
+func (s *PostgresSource) ReadErrorsRange(ctx context.Context, after Cursor, from, to time.Time, limit int) ([]ErrorSourceRow, error) {
+	return s.readErrors(ctx, errorRangeSourceQuery, from, to, after.Time, after.ID, s.pageSize(limit))
+}
+
+func (s *PostgresSource) readErrors(ctx context.Context, query string, args ...any) ([]ErrorSourceRow, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("account monitor source database is nil")
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, errorSourceQuery, from, after.Time, after.ID, s.pageSize(limit))
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +355,20 @@ WHERE created_at >= $1
 ORDER BY created_at, id
 LIMIT $4`
 
+const usageRangeSourceQuery = `
+SELECT id, created_at, user_id, api_key_id, account_id, parent_account_id,
+       request_id, platform, model, requested_model, upstream_model,
+       input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+       total_cost, actual_cost, account_rate_multiplier, duration_ms,
+       request_type, stream, image_count, image_size, image_input_size,
+       image_output_size, image_size_breakdown, video_count,
+       video_resolution, video_duration_seconds
+FROM extensions_self_ro.usage_source
+WHERE created_at >= $1 AND created_at < $2
+  AND (created_at, id) > ($3, $4)
+ORDER BY created_at, id
+LIMIT $5`
+
 const errorSourceQuery = `
 SELECT id, created_at, request_id, client_request_id, user_id, api_key_id,
        account_id, platform, model, requested_model, upstream_model,
@@ -351,6 +381,19 @@ WHERE created_at >= $1
   AND (created_at, id) > ($2, $3)
 ORDER BY created_at, id
 LIMIT $4`
+
+const errorRangeSourceQuery = `
+SELECT id, created_at, request_id, client_request_id, user_id, api_key_id,
+       account_id, platform, model, requested_model, upstream_model,
+       request_type, stream, error_phase, error_type, error_source,
+       error_owner, status_code, upstream_status_code, provider_error_code,
+       provider_error_type, network_error_type, duration_ms,
+       error_message, upstream_error_message, upstream_errors
+FROM extensions_self_ro.error_source
+WHERE created_at >= $1 AND created_at < $2
+  AND (created_at, id) > ($3, $4)
+ORDER BY created_at, id
+LIMIT $5`
 
 const accountDimensionQuery = `
 SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at

@@ -59,6 +59,22 @@ func TestPostgresSourceReadsErrorsAndDimensionsFromSafeViews(t *testing.T) {
 	}
 }
 
+func TestPostgresSourceRangeUsesExclusiveUpperBound(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(usageRangeSourceQuery)).
+		WithArgs(from, to, time.Time{}, int64(0), 50).
+		WillReturnRows(sqlmock.NewRows(usageSourceColumns()))
+
+	if _, err := NewPostgresSource(db, time.Second, 100).ReadUsageRange(context.Background(), Cursor{}, from, to, 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newSourceMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New()

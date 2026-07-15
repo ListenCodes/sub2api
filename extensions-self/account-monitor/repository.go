@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var ErrRebuildOverlap = errors.New("an active rebuild job overlaps the requested range")
+
 //go:embed schema.sql
 var schemaSQL string
 
@@ -81,6 +83,51 @@ VALUES ($1,$2,$3,$4,'',NOW())
 ON CONFLICT (source) DO UPDATE SET cursor_time=EXCLUDED.cursor_time,
 cursor_id=EXCLUDED.cursor_id,last_success_at=EXCLUDED.last_success_at,last_error='',updated_at=NOW()`
 
+const rebuildLockSQL = `SELECT pg_advisory_xact_lock(87921345)`
+
+const rebuildOverlapSQL = `
+SELECT EXISTS(
+    SELECT 1 FROM account_monitor_rebuild_jobs
+    WHERE status IN ('pending','running')
+      AND tstzrange(from_time,to_time,'[)') && tstzrange($1,$2,'[)')
+)`
+
+const insertRebuildJobSQL = `
+INSERT INTO account_monitor_rebuild_jobs(from_time,to_time,status,requested_by)
+VALUES ($1,$2,'pending',$3)
+RETURNING id,created_at`
+
+const claimRebuildJobSQL = `
+WITH candidate AS (
+    SELECT id FROM account_monitor_rebuild_jobs
+    WHERE status='pending' ORDER BY created_at,id
+    FOR UPDATE SKIP LOCKED LIMIT 1
+)
+UPDATE account_monitor_rebuild_jobs AS jobs
+SET status='running',started_at=NOW(),error=''
+FROM candidate WHERE jobs.id=candidate.id
+RETURNING jobs.id,jobs.from_time,jobs.to_time,jobs.status,jobs.processed_rows,
+          jobs.error,jobs.requested_by,jobs.created_at,jobs.started_at,jobs.completed_at`
+
+const finishRebuildJobSQL = `
+UPDATE account_monitor_rebuild_jobs
+SET status=$2,processed_rows=$3,error=$4,completed_at=NOW()
+WHERE id=$1`
+
+var cleanupDetailSQL = []string{
+	`DELETE FROM account_monitor_attempt_facts WHERE attempted_at < $1`,
+	`DELETE FROM account_monitor_request_facts WHERE occurred_at < $1`,
+	`DELETE FROM account_monitor_account_minute WHERE bucket_at < $1`,
+	`DELETE FROM account_monitor_account_model_minute WHERE bucket_at < $1`,
+}
+
+var cleanupDailySQL = []string{
+	`DELETE FROM account_monitor_account_daily WHERE bucket_date < $1::date`,
+	`DELETE FROM account_monitor_account_model_daily WHERE bucket_date < $1::date`,
+	`DELETE FROM account_monitor_account_user_daily WHERE bucket_date < $1::date`,
+	`DELETE FROM account_monitor_account_error_daily WHERE bucket_date < $1::date`,
+}
+
 type Repository struct {
 	db  *sql.DB
 	now func() time.Time
@@ -148,6 +195,161 @@ func (r *Repository) CommitBatch(ctx context.Context, batch Batch) error {
 	}
 	if !batch.ErrorCursor.Time.IsZero() || batch.ErrorCursor.ID > 0 {
 		if _, err := tx.ExecContext(ctx, upsertSyncStateSQL, "errors", batch.ErrorCursor.Time, batch.ErrorCursor.ID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) CommitRebuildBatch(ctx context.Context, batch Batch) error {
+	if r == nil || r.db == nil {
+		return errors.New("account monitor repository database is nil")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, fact := range batch.Attempts {
+		if _, err := tx.ExecContext(ctx, insertAttemptSQL,
+			fact.EventKey, fact.RequestKey, fact.AttemptedAt, fact.AccountID, fact.ParentAccountID,
+			fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.UserID, fact.APIKeyID,
+			fact.RequestType, fact.Result, fact.Recovered, fact.ErrorCategory, fact.StatusCode,
+			fact.UpstreamStatusCode, fact.ProviderErrorCode, fact.InputTokens, fact.OutputTokens,
+			fact.CacheCreationTokens, fact.CacheReadTokens, fact.UserCost, fact.AccountCost,
+			fact.DurationMS, fact.ImageCount, fact.ImageSize, fact.VideoCount, fact.VideoResolution,
+			fact.VideoDurationSeconds, fact.IdentityQuality, fact.SourceKind, fact.SourceID,
+		); err != nil {
+			return err
+		}
+	}
+	for _, fact := range batch.Requests {
+		if _, err := tx.ExecContext(ctx, insertRequestSQL,
+			fact.RequestKey, fact.OccurredAt, fact.UserID, fact.APIKeyID, fact.AccountID,
+			fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.RequestType,
+			fact.Result, fact.ErrorCategory, fact.StatusCode, fact.InputTokens,
+			fact.OutputTokens, fact.CacheCreationTokens, fact.CacheReadTokens,
+			fact.UserCost, fact.AccountCost, fact.DurationMS, fact.ImageCount,
+			fact.VideoCount, fact.VideoResolution, fact.VideoDurationSeconds,
+			fact.IdentityQuality, fact.SourceKind, fact.SourceID,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) CreateRebuildJob(ctx context.Context, from, to time.Time, actorID int64) (RebuildJob, error) {
+	if err := ValidateRebuildRange(from, to); err != nil {
+		return RebuildJob{}, err
+	}
+	if r == nil || r.db == nil {
+		return RebuildJob{}, errors.New("account monitor repository database is nil")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RebuildJob{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, rebuildLockSQL); err != nil {
+		return RebuildJob{}, err
+	}
+	var overlaps bool
+	if err := tx.QueryRowContext(ctx, rebuildOverlapSQL, from, to).Scan(&overlaps); err != nil {
+		return RebuildJob{}, err
+	}
+	if overlaps {
+		return RebuildJob{}, ErrRebuildOverlap
+	}
+	job := RebuildJob{From: from, To: to, Status: RebuildPending, RequestedBy: actorID}
+	if err := tx.QueryRowContext(ctx, insertRebuildJobSQL, from, to, actorID).Scan(&job.ID, &job.CreatedAt); err != nil {
+		return RebuildJob{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RebuildJob{}, err
+	}
+	return job, nil
+}
+
+func (r *Repository) ClaimNextRebuildJob(ctx context.Context) (RebuildJob, bool, error) {
+	if r == nil || r.db == nil {
+		return RebuildJob{}, false, errors.New("account monitor repository database is nil")
+	}
+	var job RebuildJob
+	var startedAt, completedAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, claimRebuildJobSQL).Scan(
+		&job.ID, &job.From, &job.To, &job.Status, &job.ProcessedRows,
+		&job.Error, &job.RequestedBy, &job.CreatedAt, &startedAt, &completedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RebuildJob{}, false, nil
+	}
+	if err != nil {
+		return RebuildJob{}, false, err
+	}
+	if startedAt.Valid {
+		job.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		job.CompletedAt = &completedAt.Time
+	}
+	return job, true, nil
+}
+
+func (r *Repository) FinishRebuildJob(ctx context.Context, id, processedRows int64, rebuildErr error) error {
+	status := RebuildCompleted
+	errorText := ""
+	if rebuildErr != nil {
+		status = RebuildFailed
+		errorText = rebuildErr.Error()
+	}
+	_, err := r.db.ExecContext(ctx, finishRebuildJobSQL, id, status, processedRows, errorText)
+	return err
+}
+
+func (r *Repository) LoadCursors(ctx context.Context) (Cursor, Cursor, error) {
+	if r == nil || r.db == nil {
+		return Cursor{}, Cursor{}, errors.New("account monitor repository database is nil")
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT source,cursor_time,cursor_id FROM account_monitor_sync_state WHERE source IN ('usage','errors')`)
+	if err != nil {
+		return Cursor{}, Cursor{}, err
+	}
+	defer rows.Close()
+	var usage, errorCursor Cursor
+	for rows.Next() {
+		var source string
+		var cursor Cursor
+		if err := rows.Scan(&source, &cursor.Time, &cursor.ID); err != nil {
+			return Cursor{}, Cursor{}, err
+		}
+		if source == "usage" {
+			usage = cursor
+		} else if source == "errors" {
+			errorCursor = cursor
+		}
+	}
+	return usage, errorCursor, rows.Err()
+}
+
+func (r *Repository) Cleanup(ctx context.Context, now time.Time, detailRetention, dailyRetention time.Duration) error {
+	if r == nil || r.db == nil {
+		return errors.New("account monitor repository database is nil")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	detailCutoff := now.Add(-detailRetention)
+	for _, query := range cleanupDetailSQL {
+		if _, err := tx.ExecContext(ctx, query, detailCutoff); err != nil {
+			return err
+		}
+	}
+	dailyCutoff := now.Add(-dailyRetention)
+	for _, query := range cleanupDailySQL {
+		if _, err := tx.ExecContext(ctx, query, dailyCutoff); err != nil {
 			return err
 		}
 	}
