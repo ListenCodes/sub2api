@@ -690,6 +690,59 @@ func TestAdminServiceAttemptsPassesDetailFilters(t *testing.T) {
 	}
 }
 
+func TestUsersDetailResponseFields(t *testing.T) {
+	repoDB, repoMock := newSourceMock(t)
+	sourceDB, sourceMock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	lastAttemptedAt := to.Add(-time.Minute)
+	repoMock.ExpectQuery(regexp.QuoteMeta(usersSQL)).WithArgs(
+		from, to, int64(9), 20, 0, "", "", "", "", int64(0), int64(0), 0, 0,
+	).WillReturnRows(sqlmock.NewRows([]string{
+		"user_id", "api_key_id", "attempts", "successes", "failures", "tokens", "user_cost", "last_attempted_at", "total",
+	}).AddRow(int64(7), int64(13), int64(4), int64(3), int64(1), int64(120), 1.25, lastAttemptedAt, int64(1)))
+	sourceMock.ExpectQuery(regexp.QuoteMeta(userDimensionQuery)).WithArgs(sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "email", "username", "status", "deleted_at"}).
+			AddRow(int64(7), "alice@example.test", "alice", "active", nil),
+	)
+	sourceMock.ExpectQuery(regexp.QuoteMeta(apiKeyDimensionQuery)).WithArgs(sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "user_id", "name", "masked_prefix", "status", "deleted_at"}).
+			AddRow(int64(13), int64(7), "Production Key", "sk-old***", "active", nil),
+	)
+
+	result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
+		ExecuteAdmin(context.Background(), AdminRequest{
+			Resource: ResourceUsers, AccountID: 9, From: from, To: to, Page: 1, PageSize: 20, Query: map[string]string{},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := result.(PageResponse).Items.([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("users = %+v", items)
+	}
+	item := items[0]
+	for _, key := range []string{"email", "api_key_name", "attempts", "successes", "failures", "success_rate", "tokens", "user_cost", "last_attempted_at"} {
+		if _, ok := item[key]; !ok {
+			t.Errorf("user detail missing %q: %+v", key, item)
+		}
+	}
+	for _, key := range []string{"username", "masked_prefix"} {
+		if _, ok := item[key]; ok {
+			t.Errorf("user detail unexpectedly exposes %q: %+v", key, item)
+		}
+	}
+	if item["email"] != "alice@example.test" || item["api_key_name"] != "Production Key" || item["success_rate"] != 0.75 || item["last_attempted_at"] != lastAttemptedAt {
+		t.Fatalf("user detail = %+v", item)
+	}
+	if err := repoMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdminServiceUpdatesGlobalThreshold(t *testing.T) {
 	db, mock := newSourceMock(t)
 	body, _ := json.Marshal(map[string]any{"scope": "global", "scope_id": 0, "success_rate": 0.87})

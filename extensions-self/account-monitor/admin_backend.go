@@ -93,7 +93,7 @@ const usersSQL = `
 SELECT COALESCE(user_id,0),COALESCE(api_key_id,0),COUNT(*),
        COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
        COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
-       COALESCE(SUM(user_cost),0),COUNT(*) OVER()
+       COALESCE(SUM(user_cost),0),MAX(attempted_at),COUNT(*) OVER()
 FROM account_monitor_attempt_facts
 WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + pagedDetailFiltersSQL + `
 GROUP BY user_id,api_key_id ORDER BY COUNT(*) DESC,user_id,api_key_id LIMIT $4 OFFSET $5`
@@ -1421,10 +1421,19 @@ func (s *AdminService) users(ctx context.Context, request AdminRequest) (PageRes
 	for rows.Next() {
 		var userID, keyID, attempts, successes, failures, tokens int64
 		var cost float64
-		if err := rows.Scan(&userID, &keyID, &attempts, &successes, &failures, &tokens, &cost, &total); err != nil {
+		var lastAttemptedAt time.Time
+		if err := rows.Scan(&userID, &keyID, &attempts, &successes, &failures, &tokens, &cost, &lastAttemptedAt, &total); err != nil {
 			return PageResponse{}, err
 		}
-		items = append(items, map[string]any{"user_id": userID, "api_key_id": keyID, "attempts": attempts, "successes": successes, "failures": failures, "tokens": tokens, "user_cost": cost})
+		successRate := 0.0
+		if attempts > 0 {
+			successRate = float64(successes) / float64(attempts)
+		}
+		items = append(items, map[string]any{
+			"user_id": userID, "api_key_id": keyID, "attempts": attempts,
+			"successes": successes, "failures": failures, "success_rate": successRate,
+			"tokens": tokens, "user_cost": cost, "last_attempted_at": lastAttemptedAt,
+		})
 		userIDs = append(userIDs, userID)
 		keyIDs = append(keyIDs, keyID)
 	}
@@ -1434,10 +1443,10 @@ func (s *AdminService) users(ctx context.Context, request AdminRequest) (PageRes
 				uid := item["user_id"].(int64)
 				kid := item["api_key_id"].(int64)
 				if d, ok := dims.Users[uid]; ok {
-					item["email"], item["username"] = d.Email, d.Username
+					item["email"] = d.Email
 				}
 				if d, ok := dims.APIKeys[kid]; ok {
-					item["api_key_name"], item["masked_prefix"] = d.Name, d.MaskedPrefix
+					item["api_key_name"] = d.Name
 				}
 			}
 		}
