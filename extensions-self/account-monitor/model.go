@@ -66,6 +66,7 @@ type RequestFact struct {
 	UserID               int64
 	APIKeyID             int64
 	AccountID            int64
+	GroupID              *int64
 	Platform             string
 	ActualModel          string
 	ModelAttribution     AttributionQuality
@@ -90,10 +91,11 @@ type RequestFact struct {
 }
 
 type Batch struct {
-	Attempts    []AttemptFact
-	Requests    []RequestFact
-	UsageCursor Cursor
-	ErrorCursor Cursor
+	Attempts        []AttemptFact
+	Requests        []RequestFact
+	GroupDimensions []GroupDimension
+	UsageCursor     Cursor
+	ErrorCursor     Cursor
 }
 
 type RebuildStatus string

@@ -17,6 +17,7 @@ SELECT
     u.user_id,
     u.api_key_id,
     u.account_id,
+    u.group_id,
     a.parent_account_id,
     u.request_id,
     a.platform,
@@ -54,6 +55,7 @@ SELECT
     o.user_id,
     o.api_key_id,
     o.account_id,
+    o.group_id,
     o.platform,
     o.model,
     o.requested_model,
@@ -105,6 +107,11 @@ SELECT id, user_id, name,
        CASE WHEN LENGTH(key) <= 8 THEN LEFT(key, 3) || '***' ELSE LEFT(key, 8) || '***' END AS masked_prefix,
        status, deleted_at
 FROM public.api_keys;
+
+CREATE OR REPLACE VIEW extensions_self_ro.group_dimension
+WITH (security_barrier = true) AS
+SELECT id, name, platform, status, deleted_at
+FROM public.groups;
 
 GRANT USAGE ON SCHEMA extensions_self_ro TO extensions_self_monitor_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA extensions_self_ro TO extensions_self_monitor_ro;

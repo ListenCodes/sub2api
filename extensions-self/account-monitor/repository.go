@@ -49,20 +49,21 @@ ON CONFLICT (event_key) DO UPDATE SET
 
 const insertRequestSQL = `
 INSERT INTO account_monitor_request_facts (
-    request_key, occurred_at, user_id, api_key_id, account_id, platform,
+    request_key, occurred_at, user_id, api_key_id, account_id, group_id, platform,
     actual_model, model_attribution, request_type, result, error_category,
     status_code, input_tokens, output_tokens, cache_creation_tokens,
     cache_read_tokens, user_cost, account_cost, duration_ms, image_count,
     video_count, video_resolution, video_duration_seconds, identity_quality,
     source_kind, source_id, updated_at
 ) VALUES (
-    $1,$2,NULLIF($3,0),NULLIF($4,0),NULLIF($5,0),$6,$7,$8,$9,$10,$11,
-    NULLIF($12,0),$13,$14,$15,$16,$17,$18,NULLIF($19,0),$20,$21,$22,$23,
-    $24,$25,$26,NOW()
+    $1,$2,NULLIF($3,0),NULLIF($4,0),NULLIF($5,0),$6,$7,$8,$9,$10,$11,$12,
+    NULLIF($13,0),$14,$15,$16,$17,$18,$19,NULLIF($20,0),$21,$22,$23,$24,
+    $25,$26,$27,NOW()
 )
 ON CONFLICT (request_key) DO UPDATE SET
     occurred_at=EXCLUDED.occurred_at, user_id=EXCLUDED.user_id,
     api_key_id=EXCLUDED.api_key_id, account_id=EXCLUDED.account_id,
+    group_id=EXCLUDED.group_id,
     platform=EXCLUDED.platform, actual_model=EXCLUDED.actual_model,
     model_attribution=EXCLUDED.model_attribution, request_type=EXCLUDED.request_type,
     result=EXCLUDED.result, error_category=EXCLUDED.error_category,
@@ -76,6 +77,14 @@ ON CONFLICT (request_key) DO UPDATE SET
     video_duration_seconds=EXCLUDED.video_duration_seconds,
     identity_quality=EXCLUDED.identity_quality, source_kind=EXCLUDED.source_kind,
     source_id=EXCLUDED.source_id, updated_at=NOW()`
+
+const upsertGroupDimensionSQL = `
+INSERT INTO account_monitor_group_dimensions (
+    group_id, name, platform, status, deleted_at, synced_at
+) VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (group_id) DO UPDATE SET
+    name=EXCLUDED.name, platform=EXCLUDED.platform, status=EXCLUDED.status,
+    deleted_at=EXCLUDED.deleted_at, synced_at=EXCLUDED.synced_at`
 
 const upsertSyncStateSQL = `
 INSERT INTO account_monitor_sync_state(source, cursor_time, cursor_id, last_success_at, last_error, updated_at)
@@ -119,6 +128,7 @@ var cleanupDetailSQL = []string{
 	`DELETE FROM account_monitor_request_facts WHERE occurred_at < $1`,
 	`DELETE FROM account_monitor_account_minute WHERE bucket_at < $1`,
 	`DELETE FROM account_monitor_account_model_minute WHERE bucket_at < $1`,
+	`DELETE FROM account_monitor_group_model_10m WHERE bucket_at < $1`,
 }
 
 var cleanupDailySQL = []string{
@@ -161,6 +171,14 @@ func (r *Repository) CommitBatch(ctx context.Context, batch Batch) error {
 		return err
 	}
 	defer tx.Rollback()
+	for _, dimension := range batch.GroupDimensions {
+		if _, err := tx.ExecContext(ctx, upsertGroupDimensionSQL,
+			dimension.ID, dimension.Name, dimension.Platform, dimension.Status,
+			dimension.DeletedAt, dimension.SyncedAt,
+		); err != nil {
+			return err
+		}
+	}
 	for _, fact := range batch.Attempts {
 		if _, err := tx.ExecContext(ctx, insertAttemptSQL,
 			fact.EventKey, fact.RequestKey, fact.AttemptedAt, fact.AccountID, fact.ParentAccountID,
@@ -177,7 +195,7 @@ func (r *Repository) CommitBatch(ctx context.Context, batch Batch) error {
 	for _, fact := range batch.Requests {
 		if _, err := tx.ExecContext(ctx, insertRequestSQL,
 			fact.RequestKey, fact.OccurredAt, fact.UserID, fact.APIKeyID, fact.AccountID,
-			fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.RequestType,
+			fact.GroupID, fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.RequestType,
 			fact.Result, fact.ErrorCategory, fact.StatusCode, fact.InputTokens,
 			fact.OutputTokens, fact.CacheCreationTokens, fact.CacheReadTokens,
 			fact.UserCost, fact.AccountCost, fact.DurationMS, fact.ImageCount,
@@ -213,6 +231,14 @@ func (r *Repository) CommitRebuildBatch(ctx context.Context, batch Batch) error 
 		return err
 	}
 	defer tx.Rollback()
+	for _, dimension := range batch.GroupDimensions {
+		if _, err := tx.ExecContext(ctx, upsertGroupDimensionSQL,
+			dimension.ID, dimension.Name, dimension.Platform, dimension.Status,
+			dimension.DeletedAt, dimension.SyncedAt,
+		); err != nil {
+			return err
+		}
+	}
 	for _, fact := range batch.Attempts {
 		if _, err := tx.ExecContext(ctx, insertAttemptSQL,
 			fact.EventKey, fact.RequestKey, fact.AttemptedAt, fact.AccountID, fact.ParentAccountID,
@@ -229,7 +255,7 @@ func (r *Repository) CommitRebuildBatch(ctx context.Context, batch Batch) error 
 	for _, fact := range batch.Requests {
 		if _, err := tx.ExecContext(ctx, insertRequestSQL,
 			fact.RequestKey, fact.OccurredAt, fact.UserID, fact.APIKeyID, fact.AccountID,
-			fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.RequestType,
+			fact.GroupID, fact.Platform, fact.ActualModel, fact.ModelAttribution, fact.RequestType,
 			fact.Result, fact.ErrorCategory, fact.StatusCode, fact.InputTokens,
 			fact.OutputTokens, fact.CacheCreationTokens, fact.CacheReadTokens,
 			fact.UserCost, fact.AccountCost, fact.DurationMS, fact.ImageCount,

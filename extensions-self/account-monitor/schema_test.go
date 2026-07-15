@@ -19,6 +19,8 @@ func TestSchemaContainsFactsAggregatesAndControls(t *testing.T) {
 		"account_monitor_sync_state",
 		"account_monitor_rebuild_jobs",
 		"account_monitor_thresholds",
+		"account_monitor_group_dimensions",
+		"account_monitor_group_model_10m",
 	} {
 		if !strings.Contains(lower, "create table if not exists "+table) {
 			t.Fatalf("schema missing table %s", table)
@@ -30,9 +32,37 @@ func TestSchemaContainsFactsAggregatesAndControls(t *testing.T) {
 		"model_attribution",
 		"identity_quality",
 		"recovered boolean",
+		"group_id bigint",
+		"idx_account_monitor_request_group_time",
+		"insert into account_monitor_schema_migrations(version) values (2)",
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("schema missing %q", required)
+		}
+	}
+}
+
+func TestSchemaDefinesGroupModelTenMinutePrimaryKey(t *testing.T) {
+	lower := strings.ToLower(schemaSQL)
+	for _, required := range []string{
+		"primary key (bucket_at, group_id, actual_model)",
+		"exact_model_requests bigint",
+		"estimated_model_requests bigint",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("group aggregate schema missing %q", required)
+		}
+	}
+}
+
+func TestRequestFactUpsertUpdatesGroupIdentity(t *testing.T) {
+	lower := strings.ToLower(insertRequestSQL)
+	for _, required := range []string{
+		"account_id, group_id, platform",
+		"group_id=excluded.group_id",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("request fact upsert missing %q", required)
 		}
 	}
 }

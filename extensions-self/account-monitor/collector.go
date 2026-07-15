@@ -22,6 +22,10 @@ type CollectorStore interface {
 	Cleanup(ctx context.Context, now time.Time, detailRetention, dailyRetention time.Duration) error
 }
 
+type GroupDimensionSource interface {
+	ReadGroupDimensions(ctx context.Context) ([]GroupDimension, error)
+}
+
 type RangeCollectorSource interface {
 	ReadUsageRange(ctx context.Context, after Cursor, from, to time.Time, limit int) ([]UsageSourceRow, error)
 	ReadErrorsRange(ctx context.Context, after Cursor, from, to time.Time, limit int) ([]ErrorSourceRow, error)
@@ -107,7 +111,17 @@ func (c *Collector) SyncOnce(ctx context.Context) error {
 	}
 	batch.UsageCursor = laterCursor(usageCursor, laterCursor(batch.UsageCursor, latestUsage))
 	batch.ErrorCursor = laterCursor(errorCursor, laterCursor(batch.ErrorCursor, latestError))
-	if len(usageRows) > 0 || len(errorRows) > 0 {
+	if groupSource, ok := c.source.(GroupDimensionSource); ok {
+		groupDimensions, err := groupSource.ReadGroupDimensions(ctx)
+		if err != nil {
+			return err
+		}
+		for i := range groupDimensions {
+			groupDimensions[i].SyncedAt = c.now()
+		}
+		batch.GroupDimensions = groupDimensions
+	}
+	if len(usageRows) > 0 || len(errorRows) > 0 || len(batch.GroupDimensions) > 0 {
 		if err := c.store.CommitBatch(ctx, batch); err != nil {
 			return err
 		}

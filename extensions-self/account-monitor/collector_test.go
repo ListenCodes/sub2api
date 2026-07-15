@@ -3,6 +3,7 @@ package accountmonitor
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -16,6 +17,14 @@ type fakeCollectorSource struct {
 	errorCalls []Cursor
 	usage      []UsageSourceRow
 	errors     []ErrorSourceRow
+	groups     []GroupDimension
+	groupCalls int
+	groupErr   error
+}
+
+func (f *fakeCollectorSource) ReadGroupDimensions(context.Context) ([]GroupDimension, error) {
+	f.groupCalls++
+	return f.groups, f.groupErr
 }
 
 func (f *fakeCollectorSource) ReadUsage(_ context.Context, after Cursor, from time.Time, _ int) ([]UsageSourceRow, error) {
@@ -117,6 +126,43 @@ func TestCollectorReturnsCommitFailure(t *testing.T) {
 
 	if err := collector.SyncOnce(context.Background()); err == nil {
 		t.Fatal("SyncOnce() error = nil")
+	}
+}
+
+func TestCollectorSyncsGroupDimensionsWithFacts(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	source := &fakeCollectorSource{
+		usage:  []UsageSourceRow{{ID: 1, CreatedAt: now, AccountID: 1, ActualCost: 1}},
+		groups: []GroupDimension{{ID: 7, Name: "Primary", Platform: "openai", Status: "active"}},
+	}
+	store := &fakeCollectorStore{}
+	collector := NewCollector(source, store, Config{BatchSize: 100}, func() time.Time { return now })
+
+	if err := collector.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.groupCalls != 1 {
+		t.Fatalf("group dimension reads = %d, want 1", source.groupCalls)
+	}
+	field := reflect.ValueOf(store.batch).FieldByName("GroupDimensions")
+	if !field.IsValid() {
+		t.Fatal("Batch is missing GroupDimensions")
+	}
+	if field.Len() != 1 {
+		t.Fatalf("committed group dimensions = %d, want 1", field.Len())
+	}
+}
+
+func TestCollectorPreservesGroupMirrorWhenDimensionReadFails(t *testing.T) {
+	source := &fakeCollectorSource{groupErr: errors.New("group source unavailable")}
+	store := &fakeCollectorStore{}
+	collector := NewCollector(source, store, Config{BatchSize: 100}, time.Now)
+
+	if err := collector.SyncOnce(context.Background()); err == nil {
+		t.Fatal("SyncOnce() error = nil")
+	}
+	if !reflect.ValueOf(store.batch).IsZero() {
+		t.Fatalf("collector committed after group source failure: %+v", store.batch)
 	}
 }
 

@@ -110,6 +110,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 				UserID:           row.UserID,
 				APIKeyID:         row.APIKeyID,
 				AccountID:        row.AccountID,
+				GroupID:          row.GroupID,
 				Platform:         row.Platform,
 				ActualModel:      model,
 				ModelAttribution: attribution,
@@ -176,6 +177,7 @@ func Normalize(usageRows []UsageSourceRow, errorRows []ErrorSourceRow) (Batch, e
 			UserID:               row.UserID,
 			APIKeyID:             row.APIKeyID,
 			AccountID:            row.AccountID,
+			GroupID:              row.GroupID,
 			Platform:             row.Platform,
 			ActualModel:          model,
 			ModelAttribution:     attribution,
@@ -236,13 +238,25 @@ func classifyErrorRow(row ErrorSourceRow) ErrorCategory {
 
 func upsertRequest(items *[]RequestFact, indexes map[string]int, fact RequestFact) {
 	if index, ok := indexes[fact.RequestKey]; ok {
-		if (*items)[index].Result != ResultSucceeded || fact.Result == ResultSucceeded {
+		existing := (*items)[index]
+		if shouldReplaceRequest(existing, fact) {
 			(*items)[index] = fact
 		}
 		return
 	}
 	indexes[fact.RequestKey] = len(*items)
 	*items = append(*items, fact)
+}
+
+func shouldReplaceRequest(existing, candidate RequestFact) bool {
+	if existing.Result == ResultSucceeded && candidate.Result != ResultSucceeded {
+		return false
+	}
+	if existing.Result != ResultSucceeded && candidate.Result == ResultSucceeded {
+		return true
+	}
+	return candidate.OccurredAt.After(existing.OccurredAt) ||
+		(candidate.OccurredAt.Equal(existing.OccurredAt) && candidate.SourceID > existing.SourceID)
 }
 
 func laterCursor(current, candidate Cursor) Cursor {

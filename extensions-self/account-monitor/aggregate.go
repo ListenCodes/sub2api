@@ -93,17 +93,63 @@ WHERE result='failed'
 GROUP BY 1,2,3,4,5`,
 }
 
+var refreshGroupAggregateSQL = []string{
+	`DELETE FROM account_monitor_group_model_10m
+    WHERE bucket_at >= date_bin('10 minutes',$1::timestamptz,TIMESTAMPTZ '1970-01-01 00:00:00+00')
+      AND bucket_at < LEAST(
+        date_bin('10 minutes',$2::timestamptz,TIMESTAMPTZ '1970-01-01 00:00:00+00') + interval '10 minutes',
+        date_bin('10 minutes',CURRENT_TIMESTAMP,TIMESTAMPTZ '1970-01-01 00:00:00+00')
+      )`,
+	`INSERT INTO account_monitor_group_model_10m
+(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
+SELECT date_bin('10 minutes',occurred_at,TIMESTAMPTZ '1970-01-01 00:00:00+00'),
+       group_id,COALESCE(NULLIF(actual_model,''),'未知实际模型'),COUNT(*),
+       COUNT(*) FILTER (WHERE result='succeeded'),
+       COUNT(*) FILTER (WHERE result='failed'),
+       COUNT(*) FILTER (WHERE model_attribution='exact'),
+       COUNT(*) FILTER (WHERE model_attribution<>'exact')
+FROM account_monitor_request_facts
+WHERE group_id IS NOT NULL
+  AND occurred_at >= date_bin('10 minutes',$1::timestamptz,TIMESTAMPTZ '1970-01-01 00:00:00+00')
+  AND occurred_at < LEAST(
+    date_bin('10 minutes',$2::timestamptz,TIMESTAMPTZ '1970-01-01 00:00:00+00') + interval '10 minutes',
+    date_bin('10 minutes',CURRENT_TIMESTAMP,TIMESTAMPTZ '1970-01-01 00:00:00+00')
+  )
+GROUP BY 1,2,3`,
+}
+
 func refreshAggregatesTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
-	from, to, ok := attemptRange(batch.Attempts)
-	if !ok {
-		return nil
+	if from, to, ok := attemptRange(batch.Attempts); ok {
+		for _, query := range refreshAggregateSQL {
+			if _, err := tx.ExecContext(ctx, query, from, to); err != nil {
+				return err
+			}
+		}
 	}
-	for _, query := range refreshAggregateSQL {
-		if _, err := tx.ExecContext(ctx, query, from, to); err != nil {
-			return err
+	if from, to, ok := requestRange(batch.Requests); ok {
+		for _, query := range refreshGroupAggregateSQL {
+			if _, err := tx.ExecContext(ctx, query, from, to); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func requestRange(facts []RequestFact) (time.Time, time.Time, bool) {
+	var from, to time.Time
+	for _, fact := range facts {
+		if fact.OccurredAt.IsZero() {
+			continue
+		}
+		if from.IsZero() || fact.OccurredAt.Before(from) {
+			from = fact.OccurredAt
+		}
+		if to.IsZero() || fact.OccurredAt.After(to) {
+			to = fact.OccurredAt
+		}
+	}
+	return from, to, !from.IsZero()
 }
 
 func attemptRange(facts []AttemptFact) (time.Time, time.Time, bool) {

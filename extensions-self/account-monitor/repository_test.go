@@ -19,6 +19,9 @@ func TestRepositoryCommitBatchAdvancesCursorsAfterFacts(t *testing.T) {
 	for _, query := range refreshAggregateSQL {
 		mock.ExpectExec(regexp.QuoteMeta(query)).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+	for _, query := range refreshGroupAggregateSQL {
+		mock.ExpectExec(regexp.QuoteMeta(query)).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
 	mock.ExpectExec(regexp.QuoteMeta(upsertSyncStateSQL)).WithArgs("usage", now, int64(10), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(regexp.QuoteMeta(upsertSyncStateSQL)).WithArgs("errors", now, int64(11), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
