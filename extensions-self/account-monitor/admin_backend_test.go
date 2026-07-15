@@ -274,6 +274,14 @@ func TestAdminQueriesDoNotReadMainTables(t *testing.T) {
 	}
 }
 
+func TestHealthMetricsSQLPinsTimestampParameterTypes(t *testing.T) {
+	for _, fragment := range []string{"$1::timestamptz", "$2::timestamptz"} {
+		if !strings.Contains(healthMetricsSQL, fragment) {
+			t.Fatalf("health metrics SQL must contain %q so PostgreSQL does not infer an interval parameter", fragment)
+		}
+	}
+}
+
 func overviewAttemptColumns() []string {
 	return []string{"attempts", "successes", "failures", "active_accounts", "users", "tokens", "user_cost", "account_cost", "average", "p95"}
 }

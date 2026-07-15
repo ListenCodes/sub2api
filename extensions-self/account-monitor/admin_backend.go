@@ -139,7 +139,7 @@ WITH scoped AS (
   SELECT id,CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END AS rollup_account_id,
          parent_account_id,platform,attempted_at,result,error_category,actual_model,user_id,duration_ms
   FROM account_monitor_attempt_facts
-  WHERE attempted_at >= $2-INTERVAL '7 days' AND attempted_at < $2
+  WHERE attempted_at >= $2::timestamptz-INTERVAL '7 days' AND attempted_at < $2::timestamptz
     AND (cardinality($4::bigint[])=0 OR (CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END)=ANY($4))
 ), account_dims AS (
   SELECT rollup_account_id,COALESCE(MAX(parent_account_id),0) AS parent_account_id,COALESCE(MAX(platform),'') AS platform
@@ -148,18 +148,18 @@ WITH scoped AS (
   SELECT rollup_account_id,COUNT(*) AS attempts,COUNT(*) FILTER (WHERE result='succeeded') AS successes,
          COUNT(*) FILTER (WHERE result='failed') AS failures,MAX(attempted_at) FILTER (WHERE result='succeeded') AS last_success_at,
          COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0) AS p95_duration_ms
-  FROM scoped WHERE attempted_at >= $1 GROUP BY rollup_account_id
+  FROM scoped WHERE attempted_at >= $1::timestamptz GROUP BY rollup_account_id
 ), fifteen_minutes AS (
   SELECT rollup_account_id,
          COUNT(*) FILTER (WHERE result='failed' AND error_category IN ('账号认证失效','账号额度不足')) AS auth_quota_failures,
          COUNT(*) FILTER (WHERE result='failed' AND error_category IN ('限流','上游过载'))::float/NULLIF(COUNT(*),0) AS rate_overload_ratio
-  FROM scoped WHERE attempted_at >= $2-INTERVAL '15 minutes' GROUP BY rollup_account_id
+  FROM scoped WHERE attempted_at >= $2::timestamptz-INTERVAL '15 minutes' GROUP BY rollup_account_id
 ), daily AS (
   SELECT rollup_account_id,COUNT(*) AS attempts FROM scoped
-  WHERE attempted_at >= $2-INTERVAL '24 hours' GROUP BY rollup_account_id
+  WHERE attempted_at >= $2::timestamptz-INTERVAL '24 hours' GROUP BY rollup_account_id
 ), user_counts AS (
   SELECT rollup_account_id,user_id,COUNT(*) AS attempts FROM scoped
-  WHERE attempted_at >= $2-INTERVAL '24 hours' AND user_id IS NOT NULL GROUP BY rollup_account_id,user_id
+  WHERE attempted_at >= $2::timestamptz-INTERVAL '24 hours' AND user_id IS NOT NULL GROUP BY rollup_account_id,user_id
 ), top_users AS (
   SELECT rollup_account_id,MAX(attempts) AS attempts FROM user_counts GROUP BY rollup_account_id
 ), model_ordered AS (
@@ -168,7 +168,7 @@ WITH scoped AS (
            PARTITION BY rollup_account_id,actual_model ORDER BY attempted_at DESC,id DESC
            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
          ) AS successes_seen
-  FROM scoped WHERE attempted_at >= $2-INTERVAL '24 hours'
+  FROM scoped WHERE attempted_at >= $2::timestamptz-INTERVAL '24 hours'
 ), model_streaks AS (
   SELECT rollup_account_id,actual_model,COUNT(*) AS failures FROM model_ordered
   WHERE result='failed' AND successes_seen=0 GROUP BY rollup_account_id,actual_model
@@ -176,7 +176,7 @@ WITH scoped AS (
   SELECT rollup_account_id,MAX(failures) AS failures FROM model_streaks GROUP BY rollup_account_id
 ), error_counts AS (
   SELECT rollup_account_id,error_category,COUNT(*) AS failures FROM scoped
-  WHERE attempted_at >= $1 AND result='failed' GROUP BY rollup_account_id,error_category
+  WHERE attempted_at >= $1::timestamptz AND result='failed' GROUP BY rollup_account_id,error_category
 ), ranked_errors AS (
   SELECT rollup_account_id,error_category,failures,
          ROW_NUMBER() OVER (PARTITION BY rollup_account_id ORDER BY failures DESC,error_category) AS rank
@@ -187,8 +187,8 @@ WITH scoped AS (
          percentile_disc(0.95) WITHIN GROUP (ORDER BY sample.duration_ms) FILTER (WHERE sample.duration_ms IS NOT NULL) AS p95_duration_ms
   FROM account_dims dimensions CROSS JOIN generate_series(1,7) AS days(day_offset)
   LEFT JOIN scoped sample ON sample.rollup_account_id=dimensions.rollup_account_id
-    AND sample.attempted_at >= $2-(day_offset*INTERVAL '1 day')-INTERVAL '1 hour'
-    AND sample.attempted_at < $2-(day_offset*INTERVAL '1 day')
+    AND sample.attempted_at >= $2::timestamptz-(day_offset*INTERVAL '1 day')-INTERVAL '1 hour'
+    AND sample.attempted_at < $2::timestamptz-(day_offset*INTERVAL '1 day')
   GROUP BY dimensions.rollup_account_id,day_offset
 ), baselines AS (
   SELECT rollup_account_id,AVG(attempts) AS attempts,COALESCE(AVG(p95_duration_ms),0) AS p95_duration_ms
