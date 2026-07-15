@@ -2,6 +2,7 @@ package accountmonitor
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -118,5 +119,62 @@ func TestNormalizeMultipleUpstreamEventsDoNotAddSyntheticFailure(t *testing.T) {
 	}
 	if batch.Attempts[0].EventKey != "ops:8:event:0" || batch.Attempts[1].EventKey != "ops:8:event:1" {
 		t.Fatalf("event keys = %q %q", batch.Attempts[0].EventKey, batch.Attempts[1].EventKey)
+	}
+}
+
+func TestNormalizeFinalSuccessOwnsGroupIdentity(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	failedGroupID := int64(7)
+	successGroupID := int64(9)
+	batch, err := Normalize(
+		[]UsageSourceRow{{
+			ID: 20, CreatedAt: now.Add(time.Second), APIKeyID: 3, RequestID: "r-group",
+			AccountID: 11, GroupID: &successGroupID, UpstreamModel: "gpt-success", ActualCost: 1,
+		}},
+		[]ErrorSourceRow{{
+			ID: 19, CreatedAt: now, APIKeyID: 3, RequestID: "r-group", AccountID: 10,
+			GroupID: &failedGroupID, UpstreamModel: "gpt-failed", StatusCode: 502,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Requests) != 1 || batch.Requests[0].Result != ResultSucceeded {
+		t.Fatalf("request facts = %+v", batch.Requests)
+	}
+	assertRequestGroupID(t, batch.Requests[0], successGroupID)
+	if batch.Requests[0].ActualModel != "gpt-success" {
+		t.Fatalf("actual model = %q", batch.Requests[0].ActualModel)
+	}
+}
+
+func TestNormalizeFinalFailureUsesLatestSourceOrder(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	latestGroupID := int64(12)
+	staleGroupID := int64(8)
+	batch, err := Normalize(nil, []ErrorSourceRow{
+		{ID: 22, CreatedAt: now.Add(time.Minute), APIKeyID: 4, RequestID: "r-fail", GroupID: &latestGroupID, UpstreamModel: "latest", StatusCode: 503},
+		{ID: 21, CreatedAt: now, APIKeyID: 4, RequestID: "r-fail", GroupID: &staleGroupID, UpstreamModel: "stale", StatusCode: 500},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Requests) != 1 {
+		t.Fatalf("request facts = %+v", batch.Requests)
+	}
+	assertRequestGroupID(t, batch.Requests[0], latestGroupID)
+	if batch.Requests[0].ActualModel != "latest" || batch.Requests[0].SourceID != 22 {
+		t.Fatalf("latest failure was replaced: %+v", batch.Requests[0])
+	}
+}
+
+func assertRequestGroupID(t *testing.T, fact RequestFact, want int64) {
+	t.Helper()
+	field := reflect.ValueOf(fact).FieldByName("GroupID")
+	if !field.IsValid() {
+		t.Fatal("RequestFact is missing GroupID")
+	}
+	if field.IsNil() || field.Elem().Int() != want {
+		t.Fatalf("GroupID = %v, want %d", field.Interface(), want)
 	}
 }

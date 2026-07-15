@@ -15,6 +15,18 @@
 - `model_attribution=exact` 表示错误事件记录了实际上游模型；
   `model_attribution=estimated` 表示兼容旧记录时只能回退到请求模型。
 - `identity_quality=fallback` 表示缺少稳定请求 ID，只能用来源行 ID 构造幂等键。
+- 最终请求事实同时保存 `group_id`。最终成功覆盖前序失败的分组和实际模型；始终失败使用
+  最后一次失败尝试。缺失分组的请求不进入分组卡片，只计入数据质量。
+
+## 账号风险分
+
+风险分是所有命中项之和并截断到 100：认证/额度 `min(90,70+5*(次数-阈值))`；低成功率
+`min(60,40+round(20*(阈值-实际率)/阈值))`；连续模型失败
+`min(60,40+4*(次数-阈值))`；限流/过载最高 35；30 分钟无成功 25；延迟异常 20；
+单用户集中 20；流量异常 15。`0–19/20–39/40–69/70–100` 分别对应正常、关注、异常、严重。
+没有任何有效样本时 `risk_score_available=false`，页面显示不可用而不是伪造 0 分。
+普通账号列表在数据库内分页；风险分筛选或排序会先对业务过滤后的候选账号完整评分。单次最多
+允许 5000 个候选账号，超过时 API 返回 `422` 并要求收窄条件，不做近似排序或静默截断。
 
 ## 数据和权限边界
 
@@ -36,6 +48,8 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 - 默认每 60 秒采集，成功日志和错误日志使用独立 `(created_at, id)` 游标。
 - 每次从游标前回看 5 分钟；事实按 `event_key` / `request_key` upsert，重复读取不重复计数。
 - 事实和分钟聚合保留 90 天，日聚合保留 365 天（1 年）。
+- 分组维度镜像保留软删除状态；`account_monitor_group_model_10m` 按
+  `bucket_at + group_id + actual_model` 幂等聚合，只读取已完整结束的 10 分钟桶并保留 90 天。
 - 主库错误明细通常只保留 30 天，首次回填超过现存范围时会产生真实数据缺口，不能外推。
 - 单个重建任务最长 31 天；重叠任务由 PostgreSQL advisory lock 拒绝。
 - 采集失败保留旧结果并指数退避，最长 15 分钟；主请求链路不等待采集器。
@@ -52,6 +66,7 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 - `GET /data-quality`
 - `GET|PUT /thresholds`
 - `POST /rebuild-jobs`、`GET /rebuild-jobs/:id`
+- `GET /group-monitor/groups`、`GET /group-monitor/groups/:id`
 
 查询区间不得超过 90 天，`page_size` 只接受 20、50、100，请求体最大 256 KiB。API 只接受主应用
 代理生成的 HMAC 时间戳、nonce、签名和管理员 actor ID。
@@ -60,27 +75,31 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 `scope_id` 使用 `PlatformScopeID`：对去空格、转小写后的平台名计算 FNV-1a 64 位哈希，
 再清除符号位；该映射稳定且不依赖主库内部枚举。
 
-静态页面由扩展 `/account-monitor/` 提供，通过主应用鉴权后的
-`/api/v1/extensions-self/account-monitor/` 加载。Vue 路由 `/admin/account-monitor` 只是
-同源 iframe 薄壳，不包含统计业务逻辑。
+页面由主应用原生 Vue 组件提供，入口为 `/admin/extensions/account-monitor`；分组监控入口为
+`/admin/extensions/group-monitor`。浏览器只调用主应用管理员代理，扩展不提供 iframe、静态页面
+或公开代理路由。兼容路由 `/admin/account-monitor` 只负责保留查询参数并重定向到原生页面。
 
 ## Configuration
 
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
-| `ACCOUNT_MONITOR_ENABLED` | `false` | 采集器和页面总开关 |
+| `ACCOUNT_MONITOR_ENABLED` | `false` | 采集器和管理 API 总开关 |
 | `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | 空 | 启用时必填的专用只读 DSN |
 | `ACCOUNT_MONITOR_POLL_SECONDS` | `60` | 采集周期 |
 | `ACCOUNT_MONITOR_LOOKBACK_SECONDS` | `300` | 晚到事件回看窗口 |
 | `ACCOUNT_MONITOR_BATCH_SIZE` | `1000` | 每页最大来源行数 |
 | `ACCOUNT_MONITOR_QUERY_TIMEOUT_MS` | `3000` | 主库查询超时 |
-| `EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR` | `/app/account-monitor` | 静态页面目录 |
 
 ## 数据质量和排障
 
-页面的 `data-quality` 必须和业务指标一起检查：最近同步时间、同步延迟、源库连接、
-未归属错误、重试恢复失败、`exact/estimated` 模型比例和 fallback 请求标识。旧错误记录、
+页面的共享数据质量快照包含 `data_as_of`、`collection_lag_seconds`、usage/error 游标、
+`recent_source_error`、`available_from/to`、缺失 `group_id` 数和 `exact/estimated` 最终模型数。
+账号页还显示源库连接、未归属错误、重试恢复失败和 fallback 请求标识。旧错误记录、
 主库保留期和采集停机都可能造成不完整区间；“没有数据”不等于“没有调用”。
+
+大于 31 天的历史范围必须使用 `deploy/ops/backfill-account-monitor.sh` 分段。脚本串行提交、
+轮询并记录每个 job；任一 job 失败立即停止。回填只覆盖 `available_from/to` 的实际源范围，
+不生成零桶或外推已清理历史。
 
 ```bash
 docker logs --tail=200 extensions-self

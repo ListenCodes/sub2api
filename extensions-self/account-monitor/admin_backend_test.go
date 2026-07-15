@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,116 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestGroupMonitorQueriesUseOnlyDimensionsAndTenMinuteAggregates(t *testing.T) {
+	raw, err := os.ReadFile("admin_backend.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.ToLower(string(raw))
+	for _, required := range []string{
+		"account_monitor_group_dimensions",
+		"account_monitor_group_model_10m",
+		"lower(platform),lower(name),group_id",
+		"group_id=any",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("group monitor query missing %q", required)
+		}
+	}
+}
+
+func TestGroupMonitorCardDistinguishesBucketAndIdleStates(t *testing.T) {
+	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	to := from.Add(30 * time.Minute)
+	dimension := GroupDimension{ID: 7, Name: "Primary", Platform: "openai", Status: "active"}
+	tests := []struct {
+		name    string
+		buckets map[time.Time]GroupMonitorBucket
+		status  string
+	}{
+		{name: "no data", buckets: nil, status: "no_data"},
+		{name: "recently idle", buckets: map[time.Time]GroupMonitorBucket{from: {Total: 1, Successes: 1}}, status: "recently_idle"},
+		{name: "normal", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Successes: 2}}, status: "normal"},
+		{name: "partial failure", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Successes: 1, Failures: 1}}, status: "partial_failure"},
+		{name: "all failed", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Failures: 2}}, status: "all_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			card := buildGroupCard(dimension, from, to, test.buckets)
+			if len(card.Timeline) != 3 || card.CallStatus != test.status {
+				t.Fatalf("card = %+v", card)
+			}
+		})
+	}
+}
+
+func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionsSQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).
+			AddRow(int64(1), "Alpha", "openai", "active", nil).
+			AddRow(int64(2), "Beta", "openai", "inactive", nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
+			AddRow(int64(1), to.Add(-10*time.Minute), int64(4), int64(3), int64(1)),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(syncQualitySQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"source", "cursor_time", "cursor_id", "last_success_at", "last_error", "updated_at"}),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(sharedQualityFactsSQL)).WithArgs(from, to).WillReturnRows(
+		sqlmock.NewRows([]string{"available_from", "available_to", "missing_group", "exact", "estimated"}).
+			AddRow(from, to.Add(-time.Minute), int64(2), int64(8), int64(1)),
+	)
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceGroupMonitorGroups, From: from, To: to, Page: 1, PageSize: 12, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := result.(GroupMonitorGroupsResponse)
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].GroupID != 1 || page.Items[0].CallStatus != "partial_failure" {
+		t.Fatalf("group page = %+v", page)
+	}
+	if page.Quality.MissingGroupRequests != 2 || page.Quality.ExactModelRequests != 8 {
+		t.Fatalf("quality = %+v", page.Quality)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceGroupDetailBuildsModelTimelines(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	to := from.Add(20 * time.Minute)
+	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionByIDSQL)).WithArgs(int64(7)).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).AddRow(int64(7), "Primary", "openai", "active", nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to).WillReturnRows(
+		sqlmock.NewRows([]string{"model", "bucket", "total", "successes", "failures", "exact", "estimated"}).
+			AddRow("gpt-5", from, int64(2), int64(2), int64(0), int64(2), int64(0)).
+			AddRow("gpt-5", from.Add(10*time.Minute), int64(1), int64(0), int64(1), int64(0), int64(1)),
+	)
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceGroupMonitorGroup, GroupID: 7, From: from, To: to, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := result.(GroupMonitorDetailResponse)
+	if detail.Group.TotalRequests != 3 || len(detail.Models) != 1 || len(detail.Models[0].Timeline) != 2 || detail.Models[0].EstimatedModelRequests != 1 {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 	db, mock := newSourceMock(t)
@@ -24,7 +135,7 @@ func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).WillReturnRows(sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}))
 	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).WithArgs(to.Add(-time.Hour), to, "physical", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(healthMetricColumns()).
-			AddRow(int64(1), int64(0), "openai", int64(20), int64(10), int64(10), to.Add(-time.Minute), 0, 0, 0.0, int64(20), 0.0, int64(20), 20.0, int64(100), 100.0, "限流", int64(10)).
+			AddRow(int64(1), int64(0), "openai", int64(20), int64(10), int64(10), to.Add(-time.Minute), 0, 3, 0.0, int64(20), 0.0, int64(20), 20.0, int64(100), 100.0, "限流", int64(10)).
 			AddRow(int64(2), int64(0), "anthropic", int64(30), int64(30), int64(0), to.Add(-time.Minute), 0, 0, 0.0, int64(30), 0.0, int64(30), 30.0, int64(100), 100.0, "", int64(0)))
 
 	service := NewAdminService(NewRepository(db), nil, time.Second)
@@ -37,8 +148,41 @@ func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 	if overview.Attempts != 10 || overview.Requests != 9 || overview.RequestSuccesses != 8 || overview.AverageDurationMS != 210 || overview.P95DurationMS != 450 || overview.AbnormalAccounts != 1 {
 		t.Fatalf("overview = %+v", overview)
 	}
+	raw, err := json.Marshal(overview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["average_risk_score"] != 50.0 || payload["high_risk_accounts"] != float64(1) {
+		t.Fatalf("overview risk payload = %s", raw)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRiskFilterAndSortKeepUnavailableAccountsLast(t *testing.T) {
+	items := []AccountSummary{
+		{AccountID: 3, Health: Health{RiskScore: 0, RiskScoreAvailable: false}},
+		{AccountID: 2, Health: Health{RiskScore: 20, RiskScoreAvailable: true}},
+		{AccountID: 1, Health: Health{RiskScore: 20, RiskScoreAvailable: true}},
+		{AccountID: 4, Health: Health{RiskScore: 70, RiskScoreAvailable: true}},
+	}
+	sortAccountsByRisk(items, "asc")
+	got := []int64{items[0].AccountID, items[1].AccountID, items[2].AccountID, items[3].AccountID}
+	want := []int64{1, 2, 4, 3}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("ascending account IDs = %v, want %v", got, want)
+		}
+	}
+
+	filtered := filterAccountsByRisk(items, map[string]string{"min_risk_score": "20", "max_risk_score": "20"})
+	if len(filtered) != 2 || filtered[0].AccountID != 1 || filtered[1].AccountID != 2 {
+		t.Fatalf("filtered accounts = %+v", filtered)
 	}
 }
 
@@ -95,6 +239,67 @@ func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 	}
 }
 
+func TestAdminServiceRiskSortScoresAllCandidatesBeforePaging(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	now := from.Add(12 * time.Hour)
+	mock.ExpectQuery(`SELECT stats\.\*`).
+		WithArgs(from, now, "physical", 5001, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
+			AddRow(int64(1), nil, "openai", int64(20), int64(10), int64(10), int64(0), 0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(3), 0.5).
+			AddRow(int64(2), nil, "openai", int64(20), int64(20), int64(0), int64(0), 0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(3), 1.0).
+			AddRow(int64(3), nil, "openai", int64(20), int64(20), int64(0), int64(0), 0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(3), 1.0))
+	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).
+		WillReturnRows(sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}))
+	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).
+		WithArgs(now.Add(-time.Hour), now, "physical", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(healthMetricColumns()).
+			AddRow(int64(1), int64(0), "openai", int64(0), int64(0), int64(0), nil, 0, 3, 0.0, int64(0), 0.0, int64(0), 0.0, int64(0), 0.0, "", int64(0)).
+			AddRow(int64(2), int64(0), "openai", int64(20), int64(20), int64(0), now, 0, 0, 0.0, int64(20), 0.0, int64(31), 10.0, int64(0), 0.0, "", int64(0)))
+
+	service := NewAdminService(NewRepository(db), nil, time.Second)
+	service.now = func() time.Time { return now }
+	result, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: now, Page: 1, PageSize: 1,
+		SortBy: "risk_score", SortOrder: "desc", Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := result.(PageResponse)
+	items := page.Items.([]AccountSummary)
+	if page.Total != 3 || len(items) != 1 || items[0].AccountID != 1 || items[0].Health.RiskScore != 70 {
+		t.Fatalf("risk page = %+v items=%+v", page, items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceRiskSortRejectsTooManyCandidates(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	now := from.Add(12 * time.Hour)
+	mock.ExpectQuery(`SELECT stats\.\*`).
+		WithArgs(from, now, "physical", 5001, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).AddRow(
+			int64(1), nil, "openai", int64(20), int64(20), int64(0), int64(0),
+			0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(5001), 1.0,
+		))
+
+	service := NewAdminService(NewRepository(db), nil, time.Second)
+	_, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: now, Page: 1, PageSize: 20,
+		SortBy: "risk_score", SortOrder: "desc", Query: map[string]string{},
+	})
+	if !errors.Is(err, ErrAccountCandidateLimit) {
+		t.Fatalf("error = %v, want %v", err, ErrAccountCandidateLimit)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdminServiceAccountsAcceptsNullParentAccount(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
@@ -133,6 +338,14 @@ func TestAccountSortClauseUsesWhitelist(t *testing.T) {
 	}
 	if got := accountSortClause("attempts; DROP TABLE x", "asc"); got != "attempts DESC, rollup_account_id ASC" {
 		t.Fatalf("unsafe sort = %q", got)
+	}
+}
+
+func TestParseOptionalRiskScoreRejectsInvalidOrOutOfRangeValues(t *testing.T) {
+	for _, raw := range []string{"-1", "101", "not-a-number"} {
+		if value, ok := parseOptionalRiskScore(raw); ok {
+			t.Fatalf("parseOptionalRiskScore(%q) = (%d,true), want unavailable", raw, value)
+		}
 	}
 }
 
@@ -270,19 +483,53 @@ func TestAdminServiceDataQualityChecksSourceConnectivity(t *testing.T) {
 
 			from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
 			to := from.Add(time.Hour)
+			now := to.Add(5 * time.Minute)
+			usageCursor := from.Add(45 * time.Minute)
+			errorCursor := from.Add(40 * time.Minute)
+			availableFrom := from.Add(-24 * time.Hour)
+			availableTo := from.Add(50 * time.Minute)
 			repoMock.ExpectQuery(regexp.QuoteMeta(dataQualitySQL)).WithArgs(from, to).
 				WillReturnRows(sqlmock.NewRows([]string{"exact", "estimated", "fallback", "recovered"}).AddRow(int64(8), int64(2), int64(1), int64(3)))
 			repoMock.ExpectQuery(regexp.QuoteMeta(requestQualitySQL)).WithArgs(from, to).
 				WillReturnRows(sqlmock.NewRows([]string{"unattributed", "failed"}).AddRow(int64(1), int64(4)))
+			repoMock.ExpectQuery(regexp.QuoteMeta(syncQualitySQL)).WillReturnRows(
+				sqlmock.NewRows([]string{"source", "cursor_time", "cursor_id", "last_success_at", "last_error", "updated_at"}).
+					AddRow("errors", errorCursor, int64(22), errorCursor, "error source timeout", now).
+					AddRow("usage", usageCursor, int64(11), usageCursor, "", now.Add(-time.Minute)),
+			)
+			repoMock.ExpectQuery(regexp.QuoteMeta(sharedQualityFactsSQL)).WithArgs(from, to).WillReturnRows(
+				sqlmock.NewRows([]string{"available_from", "available_to", "missing_group", "exact", "estimated"}).
+					AddRow(availableFrom, availableTo, int64(2), int64(7), int64(3)),
+			)
 
-			result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
-				ExecuteAdmin(context.Background(), AdminRequest{Resource: ResourceDataQuality, From: from, To: to})
+			service := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second)
+			service.now = func() time.Time { return now }
+			result, err := service.ExecuteAdmin(context.Background(), AdminRequest{Resource: ResourceDataQuality, From: from, To: to})
 			if err != nil {
 				t.Fatal(err)
 			}
 			quality := result.(DataQualityResponse)
 			if quality.SourceConnected != test.connected || quality.ExactModels != 8 || quality.UnattributedErrors != 1 {
 				t.Fatalf("quality = %+v", quality)
+			}
+			if quality.DataAsOf == nil || !quality.DataAsOf.Equal(errorCursor) || quality.CollectionLagSeconds == nil || *quality.CollectionLagSeconds != 25*60 {
+				t.Fatalf("quality collection snapshot = %+v", quality.DataQualitySnapshot)
+			}
+			if quality.UsageCursor.CursorID != 11 || quality.ErrorCursor.CursorID != 22 || quality.RecentSourceError != "error source timeout" {
+				t.Fatalf("quality cursors = %+v", quality.DataQualitySnapshot)
+			}
+			if quality.AvailableFrom == nil || !quality.AvailableFrom.Equal(availableFrom) || quality.AvailableTo == nil || !quality.AvailableTo.Equal(availableTo) {
+				t.Fatalf("quality history = %+v", quality.DataQualitySnapshot)
+			}
+			if quality.MissingGroupRequests != 2 || quality.ExactModelRequests != 7 || quality.EstimatedModelRequests != 3 || quality.StaleDataWarning == "" {
+				t.Fatalf("quality attribution/stale state = %+v", quality.DataQualitySnapshot)
+			}
+			raw, err := json.Marshal(quality)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), `"missing_group_requests":2`) {
+				t.Fatalf("quality JSON = %s", raw)
 			}
 			if err := repoMock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)

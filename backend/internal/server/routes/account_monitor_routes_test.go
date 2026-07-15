@@ -13,13 +13,15 @@ func TestAccountMonitorRoutesUseAdminAuthentication(t *testing.T) {
 	}
 	content := string(raw)
 	for _, required := range []string{
-		`v1.Group("/extensions-self/account-monitor")`,
-		`monitorPage.Use(gin.HandlerFunc(adminAuth))`,
-		`monitorPage.GET("/*path", h.Auth.ProxyExtensionsAccountMonitor)`,
 		`admin.Group("/extensions-self/account-monitor").Any("/*path", h.Admin.User.ProxyAccountMonitor)`,
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("admin routes missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{`v1.Group("/extensions-self/account-monitor")`, `ProxyExtensionsAccountMonitor`} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("admin routes still contain obsolete public monitor route %q", forbidden)
 		}
 	}
 }

@@ -1,5 +1,5 @@
 <template>
-  <AppLayout>
+  <div class="min-w-0">
     <TablePageLayout :title="t('admin.userRiskControl.rulesTitle')" :description="t('admin.userRiskControl.rulesDescription')">
       <template #actions>
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -142,13 +142,12 @@
         <button v-if="editDraft" type="button" class="btn btn-primary" data-testid="save-rule" :disabled="saving" @click="save(editDraft)">{{ saving ? t('common.saving') : t('common.save') }}</button>
       </template>
     </BaseDialog>
-  </AppLayout>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'

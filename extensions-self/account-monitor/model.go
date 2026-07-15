@@ -66,6 +66,7 @@ type RequestFact struct {
 	UserID               int64
 	APIKeyID             int64
 	AccountID            int64
+	GroupID              *int64
 	Platform             string
 	ActualModel          string
 	ModelAttribution     AttributionQuality
@@ -90,10 +91,11 @@ type RequestFact struct {
 }
 
 type Batch struct {
-	Attempts    []AttemptFact
-	Requests    []RequestFact
-	UsageCursor Cursor
-	ErrorCursor Cursor
+	Attempts        []AttemptFact
+	Requests        []RequestFact
+	GroupDimensions []GroupDimension
+	UsageCursor     Cursor
+	ErrorCursor     Cursor
 }
 
 type RebuildStatus string
@@ -116,4 +118,25 @@ type RebuildJob struct {
 	CreatedAt     time.Time     `json:"created_at"`
 	StartedAt     *time.Time    `json:"started_at,omitempty"`
 	CompletedAt   *time.Time    `json:"completed_at,omitempty"`
+}
+
+type CursorQuality struct {
+	CursorTime    *time.Time `json:"cursor_time"`
+	CursorID      int64      `json:"cursor_id"`
+	LastSuccessAt *time.Time `json:"last_success_at"`
+	LastError     string     `json:"last_error,omitempty"`
+}
+
+type DataQualitySnapshot struct {
+	DataAsOf               *time.Time    `json:"data_as_of"`
+	CollectionLagSeconds   *float64      `json:"collection_lag_seconds"`
+	StaleDataWarning       string        `json:"stale_data_warning,omitempty"`
+	UsageCursor            CursorQuality `json:"usage_cursor"`
+	ErrorCursor            CursorQuality `json:"error_cursor"`
+	RecentSourceError      string        `json:"recent_source_error,omitempty"`
+	AvailableFrom          *time.Time    `json:"available_from"`
+	AvailableTo            *time.Time    `json:"available_to"`
+	MissingGroupRequests   int64         `json:"missing_group_requests"`
+	ExactModelRequests     int64         `json:"exact_model_requests"`
+	EstimatedModelRequests int64         `json:"estimated_model_requests"`
 }

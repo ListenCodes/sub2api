@@ -3,6 +3,7 @@ package accountmonitor
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -16,6 +17,16 @@ type fakeCollectorSource struct {
 	errorCalls []Cursor
 	usage      []UsageSourceRow
 	errors     []ErrorSourceRow
+	groups     []GroupDimension
+	groupCalls int
+	groupErr   error
+	usageErr   error
+	errorErr   error
+}
+
+func (f *fakeCollectorSource) ReadGroupDimensions(context.Context) ([]GroupDimension, error) {
+	f.groupCalls++
+	return f.groups, f.groupErr
 }
 
 func (f *fakeCollectorSource) ReadUsage(_ context.Context, after Cursor, from time.Time, _ int) ([]UsageSourceRow, error) {
@@ -23,7 +34,7 @@ func (f *fakeCollectorSource) ReadUsage(_ context.Context, after Cursor, from ti
 	f.usageCalls = append(f.usageCalls, after)
 	rows := f.usage
 	f.usage = nil
-	return rows, nil
+	return rows, f.usageErr
 }
 
 func (f *fakeCollectorSource) ReadErrors(_ context.Context, after Cursor, from time.Time, _ int) ([]ErrorSourceRow, error) {
@@ -31,7 +42,7 @@ func (f *fakeCollectorSource) ReadErrors(_ context.Context, after Cursor, from t
 	f.errorCalls = append(f.errorCalls, after)
 	rows := f.errors
 	f.errors = nil
-	return rows, nil
+	return rows, f.errorErr
 }
 
 type fakeCollectorStore struct {
@@ -40,6 +51,20 @@ type fakeCollectorStore struct {
 	batch       Batch
 	commitErr   error
 	cleanedAt   time.Time
+	errorSource string
+	syncError   string
+	successes   []string
+}
+
+func (f *fakeCollectorStore) RecordSyncError(_ context.Context, source string, syncErr error) error {
+	f.errorSource = source
+	f.syncError = syncErr.Error()
+	return nil
+}
+
+func (f *fakeCollectorStore) RecordSyncSuccess(_ context.Context, source string, _ time.Time) error {
+	f.successes = append(f.successes, source)
+	return nil
 }
 
 func (f *fakeCollectorStore) LoadCursors(context.Context) (Cursor, Cursor, error) {
@@ -117,6 +142,71 @@ func TestCollectorReturnsCommitFailure(t *testing.T) {
 
 	if err := collector.SyncOnce(context.Background()); err == nil {
 		t.Fatal("SyncOnce() error = nil")
+	}
+}
+
+func TestCollectorRecordsTheFailingSourceWithoutAdvancingCursors(t *testing.T) {
+	source := &fakeCollectorSource{errorErr: errors.New("error source timeout")}
+	store := &fakeCollectorStore{usageCursor: Cursor{Time: time.Now(), ID: 10}, errorCursor: Cursor{Time: time.Now(), ID: 20}}
+	collector := NewCollector(source, store, Config{BatchSize: 100}, time.Now)
+
+	if err := collector.SyncOnce(context.Background()); err == nil {
+		t.Fatal("SyncOnce() error = nil")
+	}
+	if store.errorSource != "errors" || store.syncError != "error source timeout" {
+		t.Fatalf("recorded error = source %q error %q", store.errorSource, store.syncError)
+	}
+	if !reflect.ValueOf(store.batch).IsZero() {
+		t.Fatalf("collector committed after source failure: %+v", store.batch)
+	}
+}
+
+func TestCollectorRecordsSuccessfulEmptySourceScans(t *testing.T) {
+	store := &fakeCollectorStore{}
+	collector := NewCollector(&fakeCollectorSource{}, store, Config{BatchSize: 100}, time.Now)
+
+	if err := collector.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.successes, []string{"usage", "errors", "groups"}) {
+		t.Fatalf("recorded successes = %v", store.successes)
+	}
+}
+
+func TestCollectorSyncsGroupDimensionsWithFacts(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	source := &fakeCollectorSource{
+		usage:  []UsageSourceRow{{ID: 1, CreatedAt: now, AccountID: 1, ActualCost: 1}},
+		groups: []GroupDimension{{ID: 7, Name: "Primary", Platform: "openai", Status: "active"}},
+	}
+	store := &fakeCollectorStore{}
+	collector := NewCollector(source, store, Config{BatchSize: 100}, func() time.Time { return now })
+
+	if err := collector.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.groupCalls != 1 {
+		t.Fatalf("group dimension reads = %d, want 1", source.groupCalls)
+	}
+	field := reflect.ValueOf(store.batch).FieldByName("GroupDimensions")
+	if !field.IsValid() {
+		t.Fatal("Batch is missing GroupDimensions")
+	}
+	if field.Len() != 1 {
+		t.Fatalf("committed group dimensions = %d, want 1", field.Len())
+	}
+}
+
+func TestCollectorPreservesGroupMirrorWhenDimensionReadFails(t *testing.T) {
+	source := &fakeCollectorSource{groupErr: errors.New("group source unavailable")}
+	store := &fakeCollectorStore{}
+	collector := NewCollector(source, store, Config{BatchSize: 100}, time.Now)
+
+	if err := collector.SyncOnce(context.Background()); err == nil {
+		t.Fatal("SyncOnce() error = nil")
+	}
+	if !reflect.ValueOf(store.batch).IsZero() {
+		t.Fatalf("collector committed after group source failure: %+v", store.batch)
 	}
 }
 

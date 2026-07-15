@@ -21,6 +21,7 @@ type UsageSourceRow struct {
 	UserID                int64
 	APIKeyID              int64
 	AccountID             int64
+	GroupID               *int64
 	ParentAccountID       int64
 	RequestID             string
 	Platform              string
@@ -56,6 +57,7 @@ type ErrorSourceRow struct {
 	UserID               int64
 	APIKeyID             int64
 	AccountID            int64
+	GroupID              *int64
 	Platform             string
 	Model                string
 	RequestedModel       string
@@ -81,6 +83,7 @@ type DimensionIDs struct {
 	AccountIDs []int64
 	UserIDs    []int64
 	APIKeyIDs  []int64
+	GroupIDs   []int64
 }
 
 type AccountDimension struct {
@@ -110,10 +113,20 @@ type APIKeyDimension struct {
 	DeletedAt    *time.Time
 }
 
+type GroupDimension struct {
+	ID        int64
+	Name      string
+	Platform  string
+	Status    string
+	DeletedAt *time.Time
+	SyncedAt  time.Time
+}
+
 type Dimensions struct {
 	Accounts map[int64]AccountDimension
 	Users    map[int64]UserDimension
 	APIKeys  map[int64]APIKeyDimension
+	Groups   map[int64]GroupDimension
 }
 
 type PostgresSource struct {
@@ -163,12 +176,12 @@ func (s *PostgresSource) readUsage(ctx context.Context, query string, args ...an
 	result := make([]UsageSourceRow, 0)
 	for rows.Next() {
 		var item UsageSourceRow
-		var parentID, duration, videoDuration sql.NullInt64
+		var groupID, parentID, duration, videoDuration sql.NullInt64
 		var requestedModel, upstreamModel, imageSize, imageInputSize, imageOutputSize, videoResolution sql.NullString
 		var accountMultiplier sql.NullFloat64
 		var imageSizeBreakdown []byte
 		if err := rows.Scan(
-			&item.ID, &item.CreatedAt, &item.UserID, &item.APIKeyID, &item.AccountID, &parentID,
+			&item.ID, &item.CreatedAt, &item.UserID, &item.APIKeyID, &item.AccountID, &groupID, &parentID,
 			&item.RequestID, &item.Platform, &item.Model, &requestedModel, &upstreamModel,
 			&item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens,
 			&item.TotalCost, &item.ActualCost, &accountMultiplier, &duration,
@@ -178,6 +191,7 @@ func (s *PostgresSource) readUsage(ctx context.Context, query string, args ...an
 			return nil, err
 		}
 		item.ParentAccountID = parentID.Int64
+		item.GroupID = nullableInt64Ptr(groupID)
 		item.RequestedModel = requestedModel.String
 		item.UpstreamModel = upstreamModel.String
 		item.AccountRateMultiplier = accountMultiplier.Float64
@@ -219,10 +233,10 @@ func (s *PostgresSource) readErrors(ctx context.Context, query string, args ...a
 		var requestID, clientRequestID, platform, model, requestedModel, upstreamModel sql.NullString
 		var errorSource, errorOwner, providerCode, providerType, networkType sql.NullString
 		var upstreamMessage sql.NullString
-		var userID, apiKeyID, accountID, requestType, statusCode, upstreamStatus, duration sql.NullInt64
+		var userID, apiKeyID, accountID, groupID, requestType, statusCode, upstreamStatus, duration sql.NullInt64
 		if err := rows.Scan(
 			&item.ID, &item.CreatedAt, &requestID, &clientRequestID, &userID, &apiKeyID,
-			&accountID, &platform, &model, &requestedModel, &upstreamModel,
+			&accountID, &groupID, &platform, &model, &requestedModel, &upstreamModel,
 			&requestType, &item.Stream, &item.ErrorPhase, &item.ErrorType, &errorSource,
 			&errorOwner, &statusCode, &upstreamStatus, &providerCode, &providerType,
 			&networkType, &duration, &item.ErrorMessage, &upstreamMessage, &item.UpstreamErrors,
@@ -234,6 +248,7 @@ func (s *PostgresSource) readErrors(ctx context.Context, query string, args ...a
 		item.UserID = userID.Int64
 		item.APIKeyID = apiKeyID.Int64
 		item.AccountID = accountID.Int64
+		item.GroupID = nullableInt64Ptr(groupID)
 		item.Platform = platform.String
 		item.Model = model.String
 		item.RequestedModel = requestedModel.String
@@ -258,6 +273,7 @@ func (s *PostgresSource) ReadDimensions(ctx context.Context, ids DimensionIDs) (
 		Accounts: make(map[int64]AccountDimension),
 		Users:    make(map[int64]UserDimension),
 		APIKeys:  make(map[int64]APIKeyDimension),
+		Groups:   make(map[int64]GroupDimension),
 	}
 	if s == nil || s.db == nil {
 		return result, errors.New("account monitor source database is nil")
@@ -271,6 +287,9 @@ func (s *PostgresSource) ReadDimensions(ctx context.Context, ids DimensionIDs) (
 		return result, err
 	}
 	if err := s.readAPIKeyDimensions(ctx, ids.APIKeyIDs, result.APIKeys); err != nil {
+		return result, err
+	}
+	if err := s.readGroupDimensions(ctx, ids.GroupIDs, result.Groups); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -296,6 +315,32 @@ func (s *PostgresSource) AccountIDsByStatus(ctx context.Context, status string) 
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (s *PostgresSource) ReadGroupDimensions(ctx context.Context) ([]GroupDimension, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("account monitor source database is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, allGroupDimensionsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]GroupDimension, 0)
+	for rows.Next() {
+		var item GroupDimension
+		var deleted sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.Platform, &item.Status, &deleted); err != nil {
+			return nil, err
+		}
+		if deleted.Valid {
+			item.DeletedAt = &deleted.Time
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
 }
 
 func (s *PostgresSource) pageSize(limit int) int {
@@ -376,8 +421,39 @@ func (s *PostgresSource) readAPIKeyDimensions(ctx context.Context, ids []int64, 
 	return rows.Err()
 }
 
+func (s *PostgresSource) readGroupDimensions(ctx context.Context, ids []int64, target map[int64]GroupDimension) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, groupDimensionQuery, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item GroupDimension
+		var deleted sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.Platform, &item.Status, &deleted); err != nil {
+			return err
+		}
+		if deleted.Valid {
+			item.DeletedAt = &deleted.Time
+		}
+		target[item.ID] = item
+	}
+	return rows.Err()
+}
+
+func nullableInt64Ptr(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
+}
+
 const usageSourceQuery = `
-SELECT id, created_at, user_id, api_key_id, account_id, parent_account_id,
+SELECT id, created_at, user_id, api_key_id, account_id, group_id, parent_account_id,
        request_id, platform, model, requested_model, upstream_model,
        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
        total_cost, actual_cost, account_rate_multiplier, duration_ms,
@@ -391,7 +467,7 @@ ORDER BY created_at, id
 LIMIT $4`
 
 const usageRangeSourceQuery = `
-SELECT id, created_at, user_id, api_key_id, account_id, parent_account_id,
+SELECT id, created_at, user_id, api_key_id, account_id, group_id, parent_account_id,
        request_id, platform, model, requested_model, upstream_model,
        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
        total_cost, actual_cost, account_rate_multiplier, duration_ms,
@@ -406,7 +482,7 @@ LIMIT $5`
 
 const errorSourceQuery = `
 SELECT id, created_at, request_id, client_request_id, user_id, api_key_id,
-       account_id, platform, model, requested_model, upstream_model,
+       account_id, group_id, platform, model, requested_model, upstream_model,
        request_type, stream, error_phase, error_type, error_source,
        error_owner, status_code, upstream_status_code, provider_error_code,
        provider_error_type, network_error_type, duration_ms,
@@ -419,7 +495,7 @@ LIMIT $4`
 
 const errorRangeSourceQuery = `
 SELECT id, created_at, request_id, client_request_id, user_id, api_key_id,
-       account_id, platform, model, requested_model, upstream_model,
+       account_id, group_id, platform, model, requested_model, upstream_model,
        request_type, stream, error_phase, error_type, error_source,
        error_owner, status_code, upstream_status_code, provider_error_code,
        provider_error_type, network_error_type, duration_ms,
@@ -448,3 +524,13 @@ const apiKeyDimensionQuery = `
 SELECT id, user_id, name, masked_prefix, status, deleted_at
 FROM extensions_self_ro.api_key_dimension
 WHERE id = ANY($1)`
+
+const groupDimensionQuery = `
+SELECT id, name, platform, status, deleted_at
+FROM extensions_self_ro.group_dimension
+WHERE id = ANY($1)`
+
+const allGroupDimensionsQuery = `
+SELECT id, name, platform, status, deleted_at
+FROM extensions_self_ro.group_dimension
+ORDER BY id`

@@ -1,4 +1,5 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlAuditView from '@/views/admin/UserRiskControlAuditView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
@@ -8,7 +9,7 @@ import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 
 vi.mock('@/api/admin/userRiskControlV2', () => ({ userRiskControlV2API: { listAudit: vi.fn() } }))
-vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key, locale: ref('zh') }) }))
 enableAutoUnmount(afterEach)
 beforeEach(() => window.localStorage.clear())
 afterEach(() => vi.clearAllMocks())

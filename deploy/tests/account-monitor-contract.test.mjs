@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +22,7 @@ test('compose wires the account monitor into the existing extensions-self servic
     assert.match(compose, /ACCOUNT_MONITOR_LOOKBACK_SECONDS=\$\{ACCOUNT_MONITOR_LOOKBACK_SECONDS:-300\}/)
     assert.match(compose, /ACCOUNT_MONITOR_BATCH_SIZE=\$\{ACCOUNT_MONITOR_BATCH_SIZE:-1000\}/)
     assert.match(compose, /ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=\$\{ACCOUNT_MONITOR_QUERY_TIMEOUT_MS:-3000\}/)
-    assert.match(compose, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR=\/app\/account-monitor/)
+    assert.doesNotMatch(compose, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
     assert.match(compose, /extensions-self:[\s\S]*depends_on:[\s\S]*postgres:[\s\S]*condition: service_healthy/)
     assert.match(compose, /^  risk-control-postgres:\s*$/m)
   }
@@ -37,10 +37,10 @@ test('the example environment is disabled by default and documents every monitor
     'ACCOUNT_MONITOR_LOOKBACK_SECONDS=300',
     'ACCOUNT_MONITOR_BATCH_SIZE=1000',
     'ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000',
-    'EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR=/app/account-monitor',
   ]) {
     assert.match(env, new RegExp(`^${setting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))
   }
+  assert.doesNotMatch(env, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
   assert.match(env, /extensions_self_monitor/)
   assert.match(env, /dedicated read-only login|专用只读登录角色/)
 })
@@ -56,12 +56,12 @@ test('the source installer keeps group privileges separate from the login role',
   assert.doesNotMatch(installer, /GRANT[^\n]*(sub2api|risk_control_app)/)
 })
 
-test('the extensions image contains both modules and the monitor web assets', () => {
+test('the extensions image contains both modules without monitor web assets', () => {
   const dockerfile = read('extensions-self/Dockerfile')
   assert.match(dockerfile, /COPY account-monitor\/go\.mod account-monitor\/go\.sum/)
   assert.match(dockerfile, /COPY risk-control\/go\.mod risk-control\/go\.sum/)
   assert.match(dockerfile, /go build[^\n]*-o \/out\/extensions-self/)
-  assert.match(dockerfile, /COPY account-monitor\/web\/ \/app\/account-monitor\//)
+  assert.doesNotMatch(dockerfile, /account-monitor\/web|EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
 })
 
 test('the publisher gates enabled monitoring on source privileges and readiness', () => {
@@ -74,18 +74,39 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
   assert.match(publisher, /ACCOUNT_MONITOR_ENABLED/)
   assert.match(publisher, /docker exec risk-control-postgres pg_dump/)
   assert.match(publisher, /risk_control_db\.dump/)
-  assert.match(publisher, /extensions_self_monitor/)
-  assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
-  assert.match(publisher, /extensions_self_ro\.usage_source/)
+  assert.match(publisher, /pg_restore[^\n]*--list/)
+  assert.match(publisher, /ssl_certificate/)
+  assert.match(publisher, /certificate-metadata|certificates/)
+  assert.match(publisher, /rollback-main-image|ROLLBACK_MAIN_IMAGE/)
+  assert.match(publisher, /rollback-extension-image|ROLLBACK_EXTENSION_IMAGE/)
+  assert.match(publisher, /backfill.*pending|BACKFILL_STATUS.*pending/i)
+	assert.match(publisher, /extensions_self_monitor/)
+	assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
+	assert.match(publisher, /extensions_self_ro\.usage_source/)
+	assert.match(publisher, /extensions_self_ro\.group_dimension/)
   assert.match(publisher, /public\.api_keys/)
   assert.match(publisher, /public\.accounts/)
   assert.match(publisher, /SELECT credentials/)
-  assert.match(publisher, /account-monitor\//)
   assert.match(publisher, /api\/v1\/admin\/account-monitor\/data-quality/)
-  assert.match(publisher, /api\/v1\/extensions-self\/account-monitor\//)
+  assert.doesNotMatch(publisher, /account monitor static health check|api\/v1\/extensions-self\/account-monitor\//)
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
+})
+
+test('the segmented backfill command bounds, polls, stops, and records every job', () => {
+  const relative = 'deploy/ops/backfill-account-monitor.sh'
+  assert.equal(existsSync(resolve(repoRoot, relative)), true)
+  const script = read(relative)
+  assert.match(script, /31\s*\*\s*24|31 days|31-day/i)
+  assert.match(script, /rebuild-jobs/)
+  assert.match(script, /pending|running/)
+  assert.match(script, /completed/)
+  assert.match(script, /failed/)
+  assert.match(script, /processed_rows/)
+  assert.match(script, /data-quality/)
+  assert.match(script, /backfill-jobs|BACKFILL_RANGE|backfill_range/i)
+  assert.doesNotMatch(script, /continue[^\n]*failed/i)
 })
 
 test('account monitor documentation covers ownership, formulas, operations, and handoff', () => {
@@ -110,7 +131,7 @@ test('account monitor documentation covers ownership, formulas, operations, and 
     'extensions_self_ro',
     'risk-control-postgres',
     '/api/v1/admin/account-monitor',
-    '/api/v1/extensions-self/account-monitor/',
+    '/admin/extensions/account-monitor',
     'ACCOUNT_MONITOR_SOURCE_DATABASE_URL',
   ]) {
     assert.match(moduleReadme, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
@@ -149,7 +170,7 @@ test('account monitor documentation covers ownership, formulas, operations, and 
     read('deploy/RELEASE-RUNBOOK.md'),
   ].join('\n')
   for (const marker of [
-    '/admin/account-monitor',
+    '/admin/extensions/account-monitor',
     'extensions_self_monitor',
     'ACCOUNT_MONITOR_ENABLED',
     'data-quality',

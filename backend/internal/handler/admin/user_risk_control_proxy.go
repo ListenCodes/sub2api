@@ -77,6 +77,8 @@ func allowedAccountMonitorPath(method, path string) bool {
 		return true
 	case method == http.MethodGet && isAccountMonitorRebuildPath(path):
 		return true
+	case method == http.MethodGet && isAccountMonitorGroupPath(path):
+		return true
 	case method == http.MethodPut && path == "/thresholds":
 		return true
 	case method == http.MethodPost && path == "/rebuild-jobs":
@@ -84,6 +86,18 @@ func allowedAccountMonitorPath(method, path string) bool {
 	default:
 		return false
 	}
+}
+
+func isAccountMonitorGroupPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] != "group-monitor" || parts[1] != "groups" {
+		return false
+	}
+	if len(parts) == 2 {
+		return true
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	return err == nil && id > 0
 }
 
 func isAccountMonitorAccountPath(path string) bool {

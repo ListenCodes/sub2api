@@ -95,10 +95,6 @@ func (c *RiskControlClient) ProxyHomepage(ctx context.Context, method, assetPath
 	return c.proxyExtensionAsset(ctx, method, "/homepage", assetPath)
 }
 
-func (c *RiskControlClient) ProxyAccountMonitorAsset(ctx context.Context, method, assetPath string) (*HomepageAsset, error) {
-	return c.proxyExtensionAsset(ctx, method, "/account-monitor", assetPath)
-}
-
 func (c *RiskControlClient) proxyExtensionAsset(ctx context.Context, method, prefix, assetPath string) (*HomepageAsset, error) {
 	if c == nil || c.http == nil {
 		return nil, fmt.Errorf("risk control client is not configured")

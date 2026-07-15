@@ -10,6 +10,15 @@ import (
 )
 
 func TestRepositoryCleanupAppliesDetailAndDailyRetention(t *testing.T) {
+	foundGroupAggregate := false
+	for _, query := range cleanupDetailSQL {
+		if regexp.MustCompile(`(?i)account_monitor_group_model_10m`).MatchString(query) {
+			foundGroupAggregate = true
+		}
+	}
+	if !foundGroupAggregate {
+		t.Fatal("detail retention does not clean account_monitor_group_model_10m")
+	}
 	db, mock := newSourceMock(t)
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	mock.ExpectBegin()

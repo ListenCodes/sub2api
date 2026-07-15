@@ -3,6 +3,7 @@ package accountmonitor
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,7 @@ func TestSourceQueriesUseOnlySafeViews(t *testing.T) {
 		"account_status": accountIDsByStatusQuery,
 		"users":          userDimensionQuery,
 		"api_keys":       apiKeyDimensionQuery,
+		"groups":         groupDimensionQuery,
 	}
 
 	for name, query := range queries {
@@ -57,10 +59,40 @@ func TestSourceViewSQLDoesNotExposeSensitiveColumns(t *testing.T) {
 		"create or replace view extensions_self_ro.account_dimension",
 		"create or replace view extensions_self_ro.user_dimension",
 		"create or replace view extensions_self_ro.api_key_dimension",
+		"create or replace view extensions_self_ro.group_dimension",
 		"revoke all on schema extensions_self_ro from public",
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("safe view SQL missing %q", required)
 		}
+	}
+}
+
+func TestSourceContractsIncludeGroupIdentity(t *testing.T) {
+	for name, query := range map[string]string{
+		"usage":  usageSourceQuery,
+		"errors": errorSourceQuery,
+	} {
+		if !strings.Contains(strings.ToLower(query), "group_id") {
+			t.Errorf("%s source query does not select group_id", name)
+		}
+	}
+
+	for _, tc := range []struct {
+		typeName string
+		typeOf   reflect.Type
+		field    string
+	}{
+		{typeName: "UsageSourceRow", typeOf: reflect.TypeOf(UsageSourceRow{}), field: "GroupID"},
+		{typeName: "ErrorSourceRow", typeOf: reflect.TypeOf(ErrorSourceRow{}), field: "GroupID"},
+		{typeName: "DimensionIDs", typeOf: reflect.TypeOf(DimensionIDs{}), field: "GroupIDs"},
+		{typeName: "Dimensions", typeOf: reflect.TypeOf(Dimensions{}), field: "Groups"},
+	} {
+		if _, ok := tc.typeOf.FieldByName(tc.field); !ok {
+			t.Errorf("%s is missing %s", tc.typeName, tc.field)
+		}
+	}
+	if _, ok := reflect.TypeOf(&PostgresSource{}).MethodByName("ReadGroupDimensions"); !ok {
+		t.Error("PostgresSource is missing ReadGroupDimensions")
 	}
 }

@@ -1,5 +1,5 @@
 <template>
-  <AppLayout>
+  <div class="min-w-0">
     <TablePageLayout :title="t('admin.userRiskControl.usersTitle')" :description="t('admin.userRiskControl.usersDescription')">
       <template #actions>
         <div class="space-y-3">
@@ -85,7 +85,7 @@
             <template #cell-id="{ row: user }">#{{ user.id }}</template>
             <template #cell-status="{ row: user }"><span class="rounded-full px-2 py-1 text-xs font-medium" :class="statusClass(user.status)">{{ formatAccountStatus(user.status) }}</span></template>
             <template #cell-riskType="{ row: user }">{{ formatRiskType(user.risk_type) }}</template>
-            <template #cell-riskScore="{ row: user }"><span class="font-semibold">{{ user.risk_score ?? 0 }}</span></template>
+            <template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /></template>
             <template #cell-riskLevel="{ row: user }">{{ formatRiskLevel(user.risk_level) }}</template>
             <template #cell-eventCount="{ row: user }"><span>{{ user.event_count ?? 0 }}</span><span class="block text-xs text-gray-400">IP {{ user.ip_count ?? 0 }} / 设备 {{ user.device_count ?? 0 }}</span></template>
             <template #cell-lastEvent="{ row: user }">{{ formatDate(user.last_event_at) }}</template>
@@ -105,13 +105,14 @@
       <TextArea v-model="batchReason" class="mt-4" data-testid="batch-reason" label="操作原因" required placeholder="填写操作原因（必填）" :error="batchValidationError" @update:model-value="batchValidationError = ''" />
       <template #footer><button type="button" class="btn btn-secondary" @click="closeBatchAction">{{ t('common.cancel') }}</button><button type="button" class="btn" :class="batchAction === 'disabled' ? 'btn-danger' : 'btn-primary'" data-testid="batch-confirm" :disabled="batchSaving" @click="confirmBatchAction">{{ batchSaving ? t('common.saving') : t('common.confirm') }}</button></template>
     </BaseDialog>
-  </AppLayout>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AppLayout from '@/components/layout/AppLayout.vue'
+import { routeLocationKey, routerKey, type LocationQueryRaw } from 'vue-router'
+import RiskScoreBadge from '@/components/admin/RiskScoreBadge.vue'
 import UserRiskControlUserDrawer from '@/components/admin/UserRiskControlUserDrawer.vue'
 import Icon from '@/components/icons/Icon.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -129,6 +130,8 @@ import { userRiskControlV2API, type AccountStatus, type RiskSortBy, type RiskUse
 import { accountStatusOptions, formatAccountStatus, formatAuditResult, formatProcessingStatus, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType, processingStatusOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
+const route = inject(routeLocationKey, null)
+const router = inject(routerKey, null)
 const users = ref<RiskUserRow[]>([])
 const selectedUser = ref<RiskUserRow | null>(null)
 const selectedIds = ref(new Set<number>())
@@ -160,6 +163,7 @@ const columns: Column[] = [
 const draft = reactive<UserRiskFilters>({ search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false })
 const activeFilters = reactive<UserRiskFilters>({ ...draft })
 let loadRequestID = 0
+let writingQuery = false
 
 const accountStatusFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allStatuses') }, ...accountStatusOptions])
 const riskTypeFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allRiskTypes') }, ...riskTypeOptions])
@@ -194,6 +198,63 @@ function errorMessage(err: unknown) {
   return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed')
 }
 
+function queryText(key: string): string {
+  const value = route?.query[key]
+  return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
+}
+
+function positiveInteger(value: string, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function restoreRouteState() {
+  if (!route) return
+  const nextSort = queryText('sort_by')
+  const allowedSorts: RiskSortBy[] = ['risk_score', 'risk_level', 'event_count', 'last_event_at', 'created_at']
+  Object.assign(draft, {
+    search: queryText('search'),
+    status: queryText('status'),
+    riskType: queryText('risk_type'),
+    riskLevel: queryText('risk_level'),
+    processingStatus: queryText('processing_status'),
+    riskOnly: queryText('risk_only') === 'true',
+    minScore: normalizeScore(queryText('min_score')),
+    maxScore: normalizeScore(queryText('max_score')),
+  })
+  Object.assign(activeFilters, draft)
+  page.value = positiveInteger(queryText('page'), 1)
+  pageSize.value = positiveInteger(queryText('page_size'), getPersistedPageSize(20))
+  sortBy.value = allowedSorts.includes(nextSort as RiskSortBy) ? nextSort as RiskSortBy : undefined
+  sortOrder.value = queryText('sort_order') === 'asc' ? 'asc' : 'desc'
+}
+
+async function syncRouteState() {
+  if (!route || !router) return
+  const query: LocationQueryRaw = { ...route.query }
+  const values: Record<string, string | undefined> = {
+    search: String(activeFilters.search || '') || undefined,
+    status: String(activeFilters.status || '') || undefined,
+    risk_type: String(activeFilters.riskType || '') || undefined,
+    risk_level: String(activeFilters.riskLevel || '') || undefined,
+    processing_status: String(activeFilters.processingStatus || '') || undefined,
+    risk_only: activeFilters.riskOnly ? 'true' : undefined,
+    min_score: normalizeScore(activeFilters.minScore)?.toString(),
+    max_score: normalizeScore(activeFilters.maxScore)?.toString(),
+    sort_by: sortBy.value,
+    sort_order: sortBy.value ? sortOrder.value : undefined,
+    page: page.value > 1 ? String(page.value) : undefined,
+    page_size: String(pageSize.value),
+  }
+  Object.entries(values).forEach(([key, value]) => value === undefined ? delete query[key] : query[key] = value)
+  writingQuery = true
+  try {
+    await router.replace({ path: route.path, query })
+  } finally {
+    writingQuery = false
+  }
+}
+
 async function loadUsers() {
   const requestID = ++loadRequestID
   loading.value = true
@@ -214,6 +275,7 @@ async function applyFilters() {
   Object.assign(activeFilters, draft, { minScore: normalizeScore(draft.minScore), maxScore: normalizeScore(draft.maxScore) })
   page.value = 1
   clearSelection()
+  await syncRouteState()
   await loadUsers()
 }
 
@@ -233,7 +295,7 @@ function setRiskOnly(value: boolean) {
   void applyFilters()
 }
 
-function setMobileSort(value: string | number | boolean | null) {
+async function setMobileSort(value: string | number | boolean | null) {
   if (!value || typeof value === 'boolean') { sortBy.value = undefined; sortOrder.value = 'desc' }
   else {
     const [field, order] = String(value).split(':')
@@ -243,7 +305,8 @@ function setMobileSort(value: string | number | boolean | null) {
   activeFilters.sortBy = sortBy.value
   activeFilters.sortOrder = sortOrder.value
   page.value = 1
-  void loadUsers()
+  await syncRouteState()
+  await loadUsers()
 }
 
 async function resetFilters() {
@@ -254,6 +317,7 @@ async function resetFilters() {
 async function changePage(next: number) {
   page.value = next
   clearSelection()
+  await syncRouteState()
   await loadUsers()
 }
 
@@ -261,10 +325,11 @@ async function changePageSize(next: number) {
   pageSize.value = next
   page.value = 1
   clearSelection()
+  await syncRouteState()
   await loadUsers()
 }
 
-function toggleSort(next: RiskSortBy) {
+async function toggleSort(next: RiskSortBy) {
   if (sortBy.value === next) sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
   else {
     sortBy.value = next
@@ -273,7 +338,8 @@ function toggleSort(next: RiskSortBy) {
   activeFilters.sortBy = sortBy.value
   activeFilters.sortOrder = sortOrder.value
   page.value = 1
-  void loadUsers()
+  await syncRouteState()
+  await loadUsers()
 }
 
 function sortIndicator(value: RiskSortBy) { return sortBy.value === value ? sortOrder.value === 'desc' ? '↓' : '↑' : '↕' }
@@ -324,5 +390,12 @@ async function confirmBatchAction() {
   }
 }
 
+restoreRouteState()
+watch(() => route?.fullPath, () => {
+  if (writingQuery) return
+  restoreRouteState()
+  clearSelection()
+  void loadUsers()
+})
 onMounted(loadUsers)
 </script>

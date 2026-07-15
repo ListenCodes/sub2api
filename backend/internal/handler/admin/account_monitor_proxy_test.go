@@ -20,13 +20,22 @@ func TestAllowedAccountMonitorPathIsNarrow(t *testing.T) {
 		{http.MethodGet, "/attempts"}, {http.MethodGet, "/data-quality"},
 		{http.MethodGet, "/thresholds"}, {http.MethodPut, "/thresholds"},
 		{http.MethodPost, "/rebuild-jobs"}, {http.MethodGet, "/rebuild-jobs/7"},
+		{http.MethodGet, "/group-monitor/groups"}, {http.MethodGet, "/group-monitor/groups/42"},
 	}
 	for _, item := range allowed {
 		if !allowedAccountMonitorPath(item[0], item[1]) {
 			t.Fatalf("%s %s must be allowed", item[0], item[1])
 		}
 	}
-	for _, item := range [][2]string{{http.MethodPost, "/accounts"}, {http.MethodGet, "/accounts/no"}, {http.MethodDelete, "/thresholds"}, {http.MethodGet, "/secret"}, {http.MethodGet, "/accounts/42/credentials"}} {
+	for _, item := range [][2]string{
+		{http.MethodPost, "/accounts"}, {http.MethodGet, "/accounts/no"},
+		{http.MethodDelete, "/thresholds"}, {http.MethodGet, "/secret"},
+		{http.MethodGet, "/accounts/42/credentials"},
+		{http.MethodPost, "/group-monitor/groups"},
+		{http.MethodGet, "/group-monitor/groups/no"},
+		{http.MethodGet, "/group-monitor/groups/42/requests"},
+		{http.MethodGet, "/group-monitor/../secret"},
+	} {
 		if allowedAccountMonitorPath(item[0], item[1]) {
 			t.Fatalf("%s %s must be rejected", item[0], item[1])
 		}

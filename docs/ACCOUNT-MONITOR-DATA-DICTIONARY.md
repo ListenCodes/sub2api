@@ -20,7 +20,8 @@
 ### `account_monitor_request_facts`
 
 每个用户最终请求一行，`request_key` 唯一。最终成功不会被前序失败重试改成失败；最终失败
-也只计一次。字段与尝试事实相似，但口径是用户结果，不是上游账号尝试。
+也只计一次。`group_id`、`actual_model` 与 `model_attribution` 来自最终请求事实：成功覆盖失败，
+始终失败使用最后一次失败尝试。缺失 `group_id` 的行不进入分组卡片。
 
 事实表与分钟聚合保留 90 天。它们不含账号凭据、完整 API Key、请求体或请求头。
 
@@ -34,6 +35,7 @@
 | `account_monitor_account_model_daily` | 账号/模型/日 | 模型调用和成本 | 365 天（1 年） |
 | `account_monitor_account_user_daily` | 账号/用户/API Key/日 | 使用分布，API Key 只关联 ID/掩码 | 365 天（1 年） |
 | `account_monitor_account_error_daily` | 账号/错误/日 | 失败分类、状态码、provider code | 365 天（1 年） |
+| `account_monitor_group_model_10m` | 分组/实际模型/完整 10 分钟桶 | `bucket_at + group_id + actual_model`；总数、成功、失败及 exact/estimated | 90 天 |
 
 ## Control Tables
 
@@ -41,6 +43,8 @@
 - `account_monitor_sync_state`：`usage` 与 `error` 独立游标、最后成功时间和错误。
 - `account_monitor_rebuild_jobs`：31 天以内重建任务、请求管理员、状态和处理行数。
 - `account_monitor_thresholds`：global/platform/parent/account 分层阈值 JSON 与修改人。platform 的 `scope_id` 是规范化平台名的稳定 FNV-1a 64 位正整数映射（`PlatformScopeID`）。
+- `account_monitor_group_dimensions`：分组 ID、名称、平台、状态、软删除时间和同步时间镜像；
+  维度同步失败保留上一版，不删除既有分组。
 
 ## Safe Source Views
 
@@ -51,6 +55,7 @@
 | `extensions_self_ro.account_dimension` | 账号 ID、母账号、名称、平台和状态 |
 | `extensions_self_ro.user_dimension` | 用户 ID、展示身份和状态 |
 | `extensions_self_ro.api_key_dimension` | API Key ID、名称和固定掩码前缀 |
+| `extensions_self_ro.group_dimension` | 分组 ID、名称、平台、状态和软删除时间；不含账号凭据 |
 
 ## Data Quality
 
@@ -59,3 +64,6 @@
 - `identity_quality=fallback` 表示缺少请求标识，跨来源关联能力较弱。
 - 未归属错误、采集停机、同步延迟和源连接失败都必须作为数据缺口显示。
 - 历史范围不完整时只能报告实际可用区间，不能把缺口解释为零调用或零失败。
+- 共享快照字段为 `data_as_of`、`collection_lag_seconds`、`stale_data_warning`、
+  `usage_cursor`、`error_cursor`、`recent_source_error`、`available_from/to`、
+  `missing_group_requests`、`exact_model_requests` 和 `estimated_model_requests`。

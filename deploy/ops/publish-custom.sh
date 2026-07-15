@@ -101,15 +101,35 @@ fi
 log "Backing up approved release $APPROVED_COMMIT"
 docker exec sub2api-postgres pg_dump -U "$postgres_owner" -d "$postgres_database" -Fc > "$BACKUP_DIR/sub2api_db.dump" || fail 'main database backup failed'
 docker exec risk-control-postgres pg_dump -U "$risk_postgres_owner" -d "$risk_postgres_database" -Fc > "$BACKUP_DIR/risk_control_db.dump" || fail 'extensions database backup failed'
+docker exec -i sub2api-postgres pg_restore --list < "$BACKUP_DIR/sub2api_db.dump" > "$BACKUP_DIR/sub2api_db.list" || fail 'main database backup verification failed'
+docker exec -i risk-control-postgres pg_restore --list < "$BACKUP_DIR/risk_control_db.dump" > "$BACKUP_DIR/risk_control_db.list" || fail 'extensions database backup verification failed'
 cp -p "$ENV_FILE" "$BACKUP_DIR/main.env"
 cp -p "$COMPOSE" "$BACKUP_DIR/main-docker-compose.yml"
-cp -p /etc/nginx/sites-available/sub.ailisten.top "$BACKUP_DIR/nginx-sub.ailisten.top.conf" 2>/dev/null || true
-docker inspect sub2api extensions-self risk-control risk-control-postgres sub2api-postgres sub2api-redis > "$BACKUP_DIR/container-metadata.json" 2>/dev/null || true
-docker image inspect sub2api:custom deploy-extensions-self deploy-risk-control > "$BACKUP_DIR/image-metadata.json" 2>/dev/null || true
+nginx_vhost=/etc/nginx/sites-available/sub.ailisten.top
+[[ -f "$nginx_vhost" ]] || fail 'nginx vhost is missing'
+cp -p "$nginx_vhost" "$BACKUP_DIR/nginx-sub.ailisten.top.conf" || fail 'nginx vhost backup failed'
+mkdir -p "$BACKUP_DIR/certificates"
+while IFS=$'\t' read -r directive certificate_path; do
+  [[ -f "$certificate_path" ]] || fail "nginx $directive file is missing: $certificate_path"
+  certificate_name="$(basename "$certificate_path")"
+  cp -p "$certificate_path" "$BACKUP_DIR/certificates/$certificate_name" || fail "could not back up $certificate_path"
+  printf '%s\t%s\t%s\n' "$directive" "$certificate_path" "$certificate_name" >> "$BACKUP_DIR/certificate-metadata.tsv"
+done < <(awk '$1 == "ssl_certificate" || $1 == "ssl_certificate_key" { gsub(/;/, "", $2); print $1 "\t" $2 }' "$nginx_vhost")
+[[ -s "$BACKUP_DIR/certificate-metadata.tsv" ]] || fail 'nginx vhost did not expose certificate paths'
+required_containers=(sub2api extensions-self risk-control-postgres sub2api-postgres sub2api-redis)
+for container_name in "${required_containers[@]}"; do
+  docker container inspect "$container_name" >/dev/null 2>&1 || fail "required container is missing: $container_name"
+done
+docker inspect "${required_containers[@]}" > "$BACKUP_DIR/container-metadata.json" || fail 'container metadata backup failed'
+docker ps -a --no-trunc > "$BACKUP_DIR/docker-containers.txt" || fail 'container inventory backup failed'
+docker images --digests --no-trunc > "$BACKUP_DIR/docker-images.txt" || fail 'image inventory backup failed'
 
 old_main_image="$(docker inspect sub2api --format '{{.Image}}' 2>/dev/null || true)"
 if [[ -n "$old_main_image" ]]; then
-  docker tag "$old_main_image" "sub2api:rollback-$STAMP"
+  ROLLBACK_MAIN_IMAGE="sub2api:rollback-$STAMP"
+  docker tag "$old_main_image" "$ROLLBACK_MAIN_IMAGE"
+else
+  ROLLBACK_MAIN_IMAGE=''
 fi
 old_extension_image=""
 if docker container inspect extensions-self >/dev/null 2>&1; then
@@ -118,9 +138,27 @@ elif docker container inspect risk-control >/dev/null 2>&1; then
   old_extension_image="$(docker inspect risk-control --format '{{.Image}}')"
 fi
 if [[ -n "$old_extension_image" ]]; then
-  docker tag "$old_extension_image" "deploy-extensions-self:rollback-$STAMP"
+  ROLLBACK_EXTENSION_IMAGE="deploy-extensions-self:rollback-$STAMP"
+  docker tag "$old_extension_image" "$ROLLBACK_EXTENSION_IMAGE"
+else
+  ROLLBACK_EXTENSION_IMAGE=''
 fi
-sha256sum "$BACKUP_DIR/sub2api_db.dump" "$BACKUP_DIR/risk_control_db.dump" > "$BACKUP_DIR/SHA256SUMS"
+rollback_image_ids=()
+[[ -n "$old_main_image" ]] && rollback_image_ids+=("$old_main_image")
+[[ -n "$old_extension_image" ]] && rollback_image_ids+=("$old_extension_image")
+[[ "${#rollback_image_ids[@]}" -gt 0 ]] || fail 'no rollback images were found'
+docker image inspect "${rollback_image_ids[@]}" > "$BACKUP_DIR/image-metadata.json" || fail 'image metadata backup failed'
+cat > "$BACKUP_DIR/release-metadata.env" <<EOF
+APPROVED_COMMIT=$APPROVED_COMMIT
+BACKUP_DIR=$BACKUP_DIR
+PREVIOUS_MAIN_IMAGE_ID=$old_main_image
+PREVIOUS_EXTENSION_IMAGE_ID=$old_extension_image
+ROLLBACK_MAIN_IMAGE=$ROLLBACK_MAIN_IMAGE
+ROLLBACK_EXTENSION_IMAGE=$ROLLBACK_EXTENSION_IMAGE
+BACKFILL_STATUS=pending
+BACKFILL_RANGE=pending
+EOF
+find "$BACKUP_DIR" -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > "$BACKUP_DIR/SHA256SUMS"
 
 if [[ "$monitor_enabled" == true ]]; then
   log 'Installing account monitor source views and dedicated login role'
@@ -147,14 +185,14 @@ if [[ "$monitor_enabled" == true ]]; then
     -U "$postgres_owner" \
     -d "$postgres_database" \
     -v ON_ERROR_STOP=1 \
-    -c 'BEGIN; SET ROLE extensions_self_monitor_ro; SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; ROLLBACK;' \
+    -c 'BEGIN; SET ROLE extensions_self_monitor_ro; SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1; ROLLBACK;' \
     >> "$LOG" 2>&1 || fail 'source privilege role probe failed'
   docker exec -e PGPASSWORD="$monitor_password" sub2api-postgres psql \
     -h 127.0.0.1 \
     -U extensions_self_monitor \
     -d "$postgres_database" \
     -v ON_ERROR_STOP=1 \
-    -c 'SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1;' \
+    -c 'SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1; SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1;' \
     >> "$LOG" 2>&1 || fail 'source login read probe failed'
   if docker exec -e PGPASSWORD="$monitor_password" sub2api-postgres psql \
     -h 127.0.0.1 \
@@ -192,7 +230,6 @@ for attempt in $(seq 1 60); do
     docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null || fail 'extensions-self health check failed'
     curl -fsS http://127.0.0.1:8081/api/v1/extensions-self/homepage/ >/dev/null || fail 'public homepage proxy health check failed'
     if [[ "$monitor_enabled" == true ]]; then
-      docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/account-monitor/ >/dev/null || fail 'account monitor static health check failed'
       monitor_timestamp="$(date +%s)"
       monitor_nonce="publish-$STAMP-$attempt"
       monitor_signature="$(
@@ -209,8 +246,6 @@ print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).h
         --header='X-Risk-Actor-ID: 1' \
         http://extensions-self:8090/api/v1/admin/account-monitor/data-quality \
         >/dev/null || fail 'account monitor API readiness check failed'
-      monitor_proxy_status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/api/v1/extensions-self/account-monitor/)" || fail 'account monitor proxy route check failed'
-      [[ "$monitor_proxy_status" == 401 || "$monitor_proxy_status" == 423 ]] || fail "account monitor proxy returned unexpected HTTP $monitor_proxy_status"
     fi
     if docker container inspect risk-control >/dev/null 2>&1; then
       docker rm -f risk-control >> "$LOG" 2>&1 || fail 'retired risk-control container removal failed'

@@ -1,6 +1,7 @@
 package accountmonitor
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,27 @@ func TestAggregateRefreshCoversAllTablesAndMetrics(t *testing.T) {
 	} {
 		if !strings.Contains(joined, metric) {
 			t.Fatalf("aggregate SQL missing metric %s", metric)
+		}
+	}
+}
+
+func TestGroupAggregateUsesFinalRequestsAndCompleteTenMinuteBuckets(t *testing.T) {
+	raw, err := os.ReadFile("aggregate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(raw))
+	for _, required := range []string{
+		"account_monitor_group_model_10m",
+		"account_monitor_request_facts",
+		"date_bin('10 minutes'",
+		"current_timestamp",
+		"exact_model_requests",
+		"estimated_model_requests",
+		"group_id is not null",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("group aggregate SQL missing %q", required)
 		}
 	}
 }

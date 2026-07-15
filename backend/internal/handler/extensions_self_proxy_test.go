@@ -50,25 +50,3 @@ func TestProxyExtensionsHomepageReturnsUnavailableWithoutClient(t *testing.T) {
 		t.Fatalf("proxy response status = %d, want 503", recorder.Code)
 	}
 }
-
-func TestProxyExtensionsAccountMonitorReturnsStaticAsset(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/account-monitor/styles.css" {
-			t.Fatalf("upstream path = %q", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "text/css")
-		_, _ = w.Write([]byte("body{color:black}"))
-	}))
-	defer upstream.Close()
-	t.Setenv("RISK_CONTROL_URL", upstream.URL)
-	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "01234567890123456789012345678901")
-	handler := &AuthHandler{riskControlClient: service.NewRiskControlClientFromEnv()}
-	engine := gin.New()
-	engine.GET("/api/v1/extensions-self/account-monitor/*path", handler.ProxyExtensionsAccountMonitor)
-
-	recorder := httptest.NewRecorder()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/extensions-self/account-monitor/styles.css", nil))
-	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/css" {
-		t.Fatalf("status=%d type=%q", recorder.Code, recorder.Header().Get("Content-Type"))
-	}
-}

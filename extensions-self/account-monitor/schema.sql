@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS account_monitor_request_facts (
     user_id BIGINT,
     api_key_id BIGINT,
     account_id BIGINT,
+    group_id BIGINT,
     platform VARCHAR(50) NOT NULL DEFAULT '',
     actual_model VARCHAR(160) NOT NULL DEFAULT '',
     model_attribution VARCHAR(16) NOT NULL DEFAULT 'estimated',
@@ -82,6 +83,35 @@ CREATE TABLE IF NOT EXISTS account_monitor_request_facts (
 
 CREATE INDEX IF NOT EXISTS idx_account_monitor_request_time ON account_monitor_request_facts (occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_account_monitor_request_user_time ON account_monitor_request_facts (user_id, occurred_at DESC);
+ALTER TABLE account_monitor_request_facts ADD COLUMN IF NOT EXISTS group_id BIGINT;
+CREATE INDEX IF NOT EXISTS idx_account_monitor_request_group_time ON account_monitor_request_facts (group_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_monitor_request_time_group ON account_monitor_request_facts (occurred_at DESC, group_id);
+
+CREATE TABLE IF NOT EXISTS account_monitor_group_dimensions (
+    group_id BIGINT PRIMARY KEY,
+    name TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    status TEXT NOT NULL,
+    deleted_at TIMESTAMPTZ,
+    synced_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_monitor_group_model_10m (
+    bucket_at TIMESTAMPTZ NOT NULL,
+    group_id BIGINT NOT NULL,
+    actual_model VARCHAR(160) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    successes BIGINT NOT NULL DEFAULT 0,
+    failures BIGINT NOT NULL DEFAULT 0,
+    exact_model_requests BIGINT NOT NULL DEFAULT 0,
+    estimated_model_requests BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (bucket_at, group_id, actual_model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_monitor_group_10m_group_time
+    ON account_monitor_group_model_10m (group_id, bucket_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_monitor_group_10m_time
+    ON account_monitor_group_model_10m (bucket_at DESC);
 
 CREATE TABLE IF NOT EXISTS account_monitor_account_minute (
     bucket_at TIMESTAMPTZ NOT NULL,
@@ -208,4 +238,7 @@ CREATE TABLE IF NOT EXISTS account_monitor_thresholds (
 );
 
 INSERT INTO account_monitor_schema_migrations(version) VALUES (1)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO account_monitor_schema_migrations(version) VALUES (2)
 ON CONFLICT (version) DO NOTHING;

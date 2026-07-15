@@ -7,12 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
 )
+
+var ErrAccountCandidateLimit = errors.New("account candidate limit exceeded; narrow account filters")
+
+const maxRiskCandidateAccounts = 5000
 
 const overviewAttemptsSQL = `
 SELECT COUNT(*),COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
@@ -28,9 +33,9 @@ SELECT COUNT(*),COUNT(*) FILTER (WHERE result='succeeded')
 FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
 
 const syncOverviewSQL = `
-SELECT COALESCE(MAX(last_success_at),to_timestamp(0)),
-       EXTRACT(EPOCH FROM (NOW()-COALESCE(MAX(last_success_at),NOW())))
-FROM account_monitor_sync_state`
+SELECT COALESCE(MIN(last_success_at),to_timestamp(0)),
+       EXTRACT(EPOCH FROM (NOW()-COALESCE(MIN(last_success_at),NOW())))
+FROM account_monitor_sync_state WHERE source IN ('usage','errors')`
 
 const accountBaseSQL = `
 SELECT CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END AS rollup_account_id,
@@ -129,8 +134,23 @@ SELECT COUNT(*) FILTER (WHERE model_attribution='exact'),COUNT(*) FILTER (WHERE 
 FROM account_monitor_attempt_facts WHERE attempted_at >= $1 AND attempted_at < $2`
 
 const requestQualitySQL = `
-SELECT COUNT(*) FILTER (WHERE result='failed' AND account_id IS NULL),COUNT(*) FILTER (WHERE result='failed')
+SELECT COUNT(*) FILTER (WHERE result='failed' AND account_id IS NULL),
+       COUNT(*) FILTER (WHERE result='failed')
 FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
+
+const syncQualitySQL = `
+SELECT source,cursor_time,cursor_id,last_success_at,last_error,updated_at
+FROM account_monitor_sync_state
+WHERE source IN ('usage','errors','groups')
+ORDER BY updated_at DESC,source`
+
+const sharedQualityFactsSQL = `
+SELECT MIN(occurred_at),MAX(occurred_at),
+       COUNT(*) FILTER (WHERE group_id IS NULL),
+       COUNT(*) FILTER (WHERE model_attribution='exact'),
+       COUNT(*) FILTER (WHERE model_attribution<>'exact')
+FROM account_monitor_request_facts
+WHERE occurred_at >= $1 AND occurred_at < $2`
 
 const selectThresholdSQL = `SELECT config FROM account_monitor_thresholds WHERE scope_type='global' AND scope_id=0`
 const selectThresholdOverridesSQL = `SELECT scope_type,scope_id,config FROM account_monitor_thresholds ORDER BY scope_type,scope_id`
@@ -218,18 +238,48 @@ const getRebuildJobSQL = `
 SELECT id,from_time,to_time,status,processed_rows,error,requested_by,created_at,started_at,completed_at
 FROM account_monitor_rebuild_jobs WHERE id=$1`
 
+const groupDimensionsSQL = `
+SELECT group_id,name,platform,status,deleted_at
+FROM account_monitor_group_dimensions
+WHERE deleted_at IS NULL
+ORDER BY LOWER(platform),LOWER(name),group_id`
+
+const groupDimensionByIDSQL = `
+SELECT group_id,name,platform,status,deleted_at
+FROM account_monitor_group_dimensions
+WHERE group_id=$1 AND deleted_at IS NULL`
+
+const groupTimelineSQL = `
+SELECT group_id,bucket_at,SUM(total_requests),SUM(successes),SUM(failures)
+FROM account_monitor_group_model_10m
+WHERE bucket_at >= $1 AND bucket_at < $2 AND group_id=ANY($3)
+GROUP BY group_id,bucket_at
+ORDER BY group_id,bucket_at`
+
+const groupModelTimelineSQL = `
+SELECT actual_model,bucket_at,total_requests,successes,failures,
+       exact_model_requests,estimated_model_requests
+FROM account_monitor_group_model_10m
+WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
+ORDER BY LOWER(actual_model),actual_model,bucket_at`
+
 type AdminService struct {
 	repo         *Repository
 	source       *PostgresSource
 	queryTimeout time.Duration
 	now          func() time.Time
+	staleAfter   time.Duration
 }
 
-func NewAdminService(repo *Repository, source *PostgresSource, queryTimeout time.Duration) *AdminService {
+func NewAdminService(repo *Repository, source *PostgresSource, queryTimeout time.Duration, staleAfter ...time.Duration) *AdminService {
 	if queryTimeout <= 0 {
 		queryTimeout = 3 * time.Second
 	}
-	return &AdminService{repo: repo, source: source, queryTimeout: queryTimeout, now: func() time.Time { return time.Now().UTC() }}
+	staleThreshold := 2 * time.Minute
+	if len(staleAfter) > 0 && staleAfter[0] > 0 {
+		staleThreshold = staleAfter[0]
+	}
+	return &AdminService{repo: repo, source: source, queryTimeout: queryTimeout, staleAfter: staleThreshold, now: func() time.Time { return time.Now().UTC() }}
 }
 
 type OverviewResponse struct {
@@ -240,6 +290,8 @@ type OverviewResponse struct {
 	RequestSuccesses  int64     `json:"request_successes"`
 	ActiveAccounts    int64     `json:"active_accounts"`
 	AbnormalAccounts  int64     `json:"abnormal_accounts"`
+	AverageRiskScore  float64   `json:"average_risk_score"`
+	HighRiskAccounts  int64     `json:"high_risk_accounts"`
 	Users             int64     `json:"users"`
 	Tokens            int64     `json:"tokens"`
 	UserCost          float64   `json:"user_cost"`
@@ -288,6 +340,7 @@ type ThresholdResponse struct {
 }
 
 type DataQualityResponse struct {
+	DataQualitySnapshot
 	SourceConnected      bool     `json:"source_connected"`
 	ErrorAttributionRate *float64 `json:"error_attribution_rate,omitempty"`
 	UnattributedErrors   int64    `json:"unattributed_errors"`
@@ -296,6 +349,56 @@ type DataQualityResponse struct {
 	EstimatedModels      int64    `json:"estimated_models"`
 	FallbackIdentities   int64    `json:"fallback_identities"`
 	DataSource           string   `json:"data_source"`
+}
+
+type GroupMonitorBucket struct {
+	BucketAt  time.Time `json:"bucket_at"`
+	Total     int64     `json:"total"`
+	Successes int64     `json:"successes"`
+	Failures  int64     `json:"failures"`
+	Status    string    `json:"status"`
+}
+
+type GroupMonitorQuality = DataQualitySnapshot
+
+type GroupMonitorCard struct {
+	GroupID       int64                `json:"group_id"`
+	Name          string               `json:"name"`
+	Platform      string               `json:"platform"`
+	GroupStatus   string               `json:"group_status"`
+	CallStatus    string               `json:"call_status"`
+	TotalRequests int64                `json:"total_requests"`
+	Successes     int64                `json:"successes"`
+	Failures      int64                `json:"failures"`
+	SuccessRate   *float64             `json:"success_rate"`
+	Timeline      []GroupMonitorBucket `json:"timeline"`
+}
+
+type GroupMonitorGroupsResponse struct {
+	Items     []GroupMonitorCard  `json:"items"`
+	Total     int64               `json:"total"`
+	Page      int                 `json:"page"`
+	PageSize  int                 `json:"page_size"`
+	Platforms []string            `json:"platforms"`
+	DataAsOf  *time.Time          `json:"data_as_of"`
+	Quality   GroupMonitorQuality `json:"data_quality"`
+}
+
+type GroupMonitorModel struct {
+	ActualModel            string               `json:"actual_model"`
+	TotalRequests          int64                `json:"total_requests"`
+	Successes              int64                `json:"successes"`
+	Failures               int64                `json:"failures"`
+	ExactModelRequests     int64                `json:"exact_model_requests"`
+	EstimatedModelRequests int64                `json:"estimated_model_requests"`
+	SuccessRate            *float64             `json:"success_rate"`
+	Timeline               []GroupMonitorBucket `json:"timeline"`
+}
+
+type GroupMonitorDetailResponse struct {
+	Group    GroupMonitorCard    `json:"group"`
+	Models   []GroupMonitorModel `json:"models"`
+	DataAsOf time.Time           `json:"data_as_of"`
 }
 
 func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (any, error) {
@@ -332,9 +435,241 @@ func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (
 		return s.repo.CreateRebuildJob(ctx, request.From, request.To, request.ActorID)
 	case ResourceRebuildJob:
 		return s.rebuildJob(ctx, request.JobID)
+	case ResourceGroupMonitorGroups:
+		return s.groupMonitorGroups(ctx, request)
+	case ResourceGroupMonitorGroup:
+		return s.groupMonitorGroup(ctx, request)
 	default:
 		return nil, errors.New("unsupported account monitor resource")
 	}
+}
+
+func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequest) (GroupMonitorGroupsResponse, error) {
+	result := GroupMonitorGroupsResponse{
+		Items: make([]GroupMonitorCard, 0), Page: request.Page, PageSize: request.PageSize,
+		Platforms: make([]string, 0),
+	}
+	dimensions, err := s.loadVisibleGroupDimensions(ctx)
+	if err != nil {
+		return result, err
+	}
+	platformSet := make(map[string]struct{})
+	filteredDimensions := make([]GroupDimension, 0, len(dimensions))
+	statusFilter := strings.ToLower(strings.TrimSpace(request.Query["group_status"]))
+	if statusFilter == "" {
+		statusFilter = "active"
+	}
+	platformFilter := strings.ToLower(strings.TrimSpace(request.Query["platform"]))
+	nameFilter := strings.ToLower(strings.TrimSpace(request.Query["query"]))
+	for _, dimension := range dimensions {
+		if _, seen := platformSet[dimension.Platform]; !seen {
+			platformSet[dimension.Platform] = struct{}{}
+			result.Platforms = append(result.Platforms, dimension.Platform)
+		}
+		if statusFilter != "all" && !strings.EqualFold(dimension.Status, statusFilter) {
+			continue
+		}
+		if platformFilter != "" && !strings.EqualFold(dimension.Platform, platformFilter) {
+			continue
+		}
+		if nameFilter != "" && !strings.Contains(strings.ToLower(dimension.Name), nameFilter) {
+			continue
+		}
+		filteredDimensions = append(filteredDimensions, dimension)
+	}
+	groupIDs := make([]int64, 0, len(filteredDimensions))
+	for _, dimension := range filteredDimensions {
+		groupIDs = append(groupIDs, dimension.ID)
+	}
+	buckets, err := s.loadGroupBuckets(ctx, request.From, request.To, groupIDs)
+	if err != nil {
+		return result, err
+	}
+	callStatus := strings.TrimSpace(request.Query["call_status"])
+	for _, dimension := range filteredDimensions {
+		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID])
+		if callStatus != "" && card.CallStatus != callStatus {
+			continue
+		}
+		result.Items = append(result.Items, card)
+	}
+	result.Total = int64(len(result.Items))
+	result.Items = pageGroupCards(result.Items, request.Page, request.PageSize)
+	quality, err := s.qualitySnapshot(ctx, request.From, request.To)
+	if err != nil {
+		return result, err
+	}
+	result.Quality = quality
+	result.DataAsOf = quality.DataAsOf
+	return result, nil
+}
+
+func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminRequest) (GroupMonitorDetailResponse, error) {
+	var result GroupMonitorDetailResponse
+	result.DataAsOf = request.To
+	var dimension GroupDimension
+	var deleted sql.NullTime
+	if err := s.repo.db.QueryRowContext(ctx, groupDimensionByIDSQL, request.GroupID).Scan(
+		&dimension.ID, &dimension.Name, &dimension.Platform, &dimension.Status, &deleted,
+	); err != nil {
+		return result, err
+	}
+	rows, err := s.repo.db.QueryContext(ctx, groupModelTimelineSQL, request.GroupID, request.From, request.To)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	models := make([]GroupMonitorModel, 0)
+	modelIndexes := make(map[string]int)
+	modelBuckets := make(map[string]map[time.Time]GroupMonitorBucket)
+	groupBuckets := make(map[time.Time]GroupMonitorBucket)
+	for rows.Next() {
+		var model string
+		var bucket GroupMonitorBucket
+		var exact, estimated int64
+		if err := rows.Scan(&model, &bucket.BucketAt, &bucket.Total, &bucket.Successes, &bucket.Failures, &exact, &estimated); err != nil {
+			return result, err
+		}
+		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
+		index, ok := modelIndexes[model]
+		if !ok {
+			index = len(models)
+			modelIndexes[model] = index
+			models = append(models, GroupMonitorModel{ActualModel: model})
+			modelBuckets[model] = make(map[time.Time]GroupMonitorBucket)
+		}
+		modelBuckets[model][bucket.BucketAt] = bucket
+		models[index].TotalRequests += bucket.Total
+		models[index].Successes += bucket.Successes
+		models[index].Failures += bucket.Failures
+		models[index].ExactModelRequests += exact
+		models[index].EstimatedModelRequests += estimated
+		combined := groupBuckets[bucket.BucketAt]
+		combined.BucketAt = bucket.BucketAt
+		combined.Total += bucket.Total
+		combined.Successes += bucket.Successes
+		combined.Failures += bucket.Failures
+		groupBuckets[bucket.BucketAt] = combined
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	for index := range models {
+		models[index].Timeline = completeGroupTimeline(request.From, request.To, modelBuckets[models[index].ActualModel])
+		models[index].SuccessRate = successRatePtr(models[index].Successes, models[index].TotalRequests)
+	}
+	result.Group = buildGroupCard(dimension, request.From, request.To, groupBuckets)
+	result.Models = models
+	return result, nil
+}
+
+func (s *AdminService) loadVisibleGroupDimensions(ctx context.Context) ([]GroupDimension, error) {
+	rows, err := s.repo.db.QueryContext(ctx, groupDimensionsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]GroupDimension, 0)
+	for rows.Next() {
+		var item GroupDimension
+		var deleted sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.Platform, &item.Status, &deleted); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time, groupIDs []int64) (map[int64]map[time.Time]GroupMonitorBucket, error) {
+	result := make(map[int64]map[time.Time]GroupMonitorBucket)
+	if len(groupIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.repo.db.QueryContext(ctx, groupTimelineSQL, from, to, pq.Array(groupIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var groupID int64
+		var bucket GroupMonitorBucket
+		if err := rows.Scan(&groupID, &bucket.BucketAt, &bucket.Total, &bucket.Successes, &bucket.Failures); err != nil {
+			return nil, err
+		}
+		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
+		if result[groupID] == nil {
+			result[groupID] = make(map[time.Time]GroupMonitorBucket)
+		}
+		result[groupID][bucket.BucketAt] = bucket
+	}
+	return result, rows.Err()
+}
+
+func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[time.Time]GroupMonitorBucket) GroupMonitorCard {
+	card := GroupMonitorCard{GroupID: dimension.ID, Name: dimension.Name, Platform: dimension.Platform, GroupStatus: dimension.Status}
+	card.Timeline = completeGroupTimeline(from, to, buckets)
+	for _, bucket := range card.Timeline {
+		card.TotalRequests += bucket.Total
+		card.Successes += bucket.Successes
+		card.Failures += bucket.Failures
+	}
+	card.SuccessRate = successRatePtr(card.Successes, card.TotalRequests)
+	if len(card.Timeline) == 0 || card.TotalRequests == 0 {
+		card.CallStatus = "no_data"
+	} else {
+		last := card.Timeline[len(card.Timeline)-1]
+		if last.Total == 0 {
+			card.CallStatus = "recently_idle"
+		} else {
+			card.CallStatus = last.Status
+		}
+	}
+	return card
+}
+
+func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket) []GroupMonitorBucket {
+	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/(10*time.Minute)))
+	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(10 * time.Minute) {
+		bucket := buckets[bucketAt]
+		bucket.BucketAt = bucketAt
+		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
+		result = append(result, bucket)
+	}
+	return result
+}
+
+func groupBucketStatus(total, successes int64) string {
+	switch {
+	case total == 0:
+		return "no_data"
+	case successes == total:
+		return "normal"
+	case successes == 0:
+		return "all_failed"
+	default:
+		return "partial_failure"
+	}
+}
+
+func successRatePtr(successes, total int64) *float64 {
+	if total == 0 {
+		return nil
+	}
+	result := float64(successes) / float64(total)
+	return &result
+}
+
+func pageGroupCards(items []GroupMonitorCard, page, pageSize int) []GroupMonitorCard {
+	start := (page - 1) * pageSize
+	if start < 0 || start >= len(items) {
+		return []GroupMonitorCard{}
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }
 
 func (s *AdminService) overview(ctx context.Context, request AdminRequest) (OverviewResponse, error) {
@@ -357,10 +692,22 @@ func (s *AdminService) overview(ctx context.Context, request AdminRequest) (Over
 	if err != nil {
 		return result, err
 	}
+	var riskScoreSum int64
+	var scoredAccounts int64
 	for _, health := range healthByAccount {
 		if health.Level != HealthNormal {
 			result.AbnormalAccounts++
 		}
+		if health.RiskScoreAvailable {
+			riskScoreSum += int64(health.RiskScore)
+			scoredAccounts++
+			if health.RiskScore >= 70 {
+				result.HighRiskAccounts++
+			}
+		}
+	}
+	if scoredAccounts > 0 {
+		result.AverageRiskScore = float64(riskScoreSum) / float64(scoredAccounts)
 	}
 	return result, nil
 }
@@ -407,9 +754,20 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 			return PageResponse{}, err
 		}
 	}
-	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY ` + accountSortClause(request.SortBy, request.SortOrder) + ` LIMIT $4 OFFSET $5`
+	needsRiskCandidates := request.SortBy == "risk_score" || strings.TrimSpace(request.Query["min_risk_score"]) != "" || strings.TrimSpace(request.Query["max_risk_score"]) != ""
+	candidateLimit := request.PageSize
+	candidateOffset := (request.Page - 1) * request.PageSize
+	if needsRiskCandidates {
+		candidateLimit = maxRiskCandidateAccounts + 1
+		candidateOffset = 0
+	}
+	sqlSortBy := request.SortBy
+	if sqlSortBy == "risk_score" {
+		sqlSortBy = ""
+	}
+	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY ` + accountSortClause(sqlSortBy, request.SortOrder) + ` LIMIT $4 OFFSET $5`
 	rows, err := s.repo.db.QueryContext(ctx, query,
-		request.From, request.To, rollup, request.PageSize, (request.Page-1)*request.PageSize,
+		request.From, request.To, rollup, candidateLimit, candidateOffset,
 		request.Query["platform"], request.Query["model"], request.Query["result"], request.Query["error_category"],
 		accountID, parentAccountID, userID, apiKeyID, requestType, statusCode, accountStatus, pq.Array(statusAccountIDs),
 	)
@@ -432,12 +790,15 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 		item.ParentAccountID = parentAccountID.Int64
 		item.AccountName = fmt.Sprintf("账号 %d", item.AccountID)
 		items = append(items, item)
+		if needsRiskCandidates && total > maxRiskCandidateAccounts {
+			return PageResponse{}, ErrAccountCandidateLimit
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return PageResponse{}, err
 	}
 	if len(items) == 0 {
-		return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+		return PageResponse{Items: items, Total: 0, Page: request.Page, PageSize: request.PageSize}, nil
 	}
 	healthByAccount, err := s.evaluateAccountHealth(ctx, rollup, items)
 	if err != nil {
@@ -463,7 +824,78 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 			}
 		}
 	}
+	if !needsRiskCandidates {
+		return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+	}
+	items = filterAccountsByRisk(items, request.Query)
+	if request.SortBy == "risk_score" {
+		sortAccountsByRisk(items, request.SortOrder)
+	}
+	total = int64(len(items))
+	start := (request.Page - 1) * request.PageSize
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(items) {
+		items = []AccountSummary{}
+	} else {
+		end := start + request.PageSize
+		if end > len(items) {
+			end = len(items)
+		}
+		items = items[start:end]
+	}
 	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+}
+
+func filterAccountsByRisk(items []AccountSummary, query map[string]string) []AccountSummary {
+	minScore, hasMin := parseOptionalRiskScore(query["min_risk_score"])
+	maxScore, hasMax := parseOptionalRiskScore(query["max_risk_score"])
+	if !hasMin && !hasMax {
+		return items
+	}
+	filtered := make([]AccountSummary, 0, len(items))
+	for _, item := range items {
+		if !item.Health.RiskScoreAvailable {
+			continue
+		}
+		if hasMin && item.Health.RiskScore < minScore {
+			continue
+		}
+		if hasMax && item.Health.RiskScore > maxScore {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func parseOptionalRiskScore(raw string) (int, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value > 100 {
+		return 0, false
+	}
+	return value, true
+}
+
+func sortAccountsByRisk(items []AccountSummary, order string) {
+	descending := !strings.EqualFold(order, "asc")
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		if left.Health.RiskScoreAvailable != right.Health.RiskScoreAvailable {
+			return left.Health.RiskScoreAvailable
+		}
+		if left.Health.RiskScoreAvailable && left.Health.RiskScore != right.Health.RiskScore {
+			if descending {
+				return left.Health.RiskScore > right.Health.RiskScore
+			}
+			return left.Health.RiskScore < right.Health.RiskScore
+		}
+		return left.AccountID < right.AccountID
+	})
 }
 
 func (s *AdminService) evaluateAccountHealth(ctx context.Context, rollup string, accounts []AccountSummary) (map[int64]Health, error) {
@@ -714,12 +1146,98 @@ func (s *AdminService) dataQuality(ctx context.Context, request AdminRequest) (D
 		return result, err
 	}
 	var failed int64
-	if err := s.repo.db.QueryRowContext(ctx, requestQualitySQL, request.From, request.To).Scan(&result.UnattributedErrors, &failed); err != nil {
+	if err := s.repo.db.QueryRowContext(ctx, requestQualitySQL, request.From, request.To).Scan(
+		&result.UnattributedErrors, &failed,
+	); err != nil {
 		return result, err
+	}
+	snapshot, err := s.qualitySnapshot(ctx, request.From, request.To)
+	if err != nil {
+		return result, err
+	}
+	result.DataQualitySnapshot = snapshot
+	if !result.SourceConnected && result.StaleDataWarning == "" {
+		result.StaleDataWarning = "主库只读连接不可用"
 	}
 	if failed > 0 {
 		rate := float64(failed-result.UnattributedErrors) / float64(failed)
 		result.ErrorAttributionRate = &rate
+	}
+	return result, nil
+}
+
+func (s *AdminService) qualitySnapshot(ctx context.Context, from, to time.Time) (DataQualitySnapshot, error) {
+	var result DataQualitySnapshot
+	rows, err := s.repo.db.QueryContext(ctx, syncQualitySQL)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	var usageSeen, errorsSeen bool
+	for rows.Next() {
+		var source, lastError string
+		var cursorTime, lastSuccessAt, updatedAt time.Time
+		var cursorID int64
+		if err := rows.Scan(&source, &cursorTime, &cursorID, &lastSuccessAt, &lastError, &updatedAt); err != nil {
+			return result, err
+		}
+		state := CursorQuality{CursorID: cursorID, LastError: lastError}
+		if cursorTime.Unix() > 0 {
+			cursor := cursorTime.UTC()
+			state.CursorTime = &cursor
+		}
+		if lastSuccessAt.Unix() > 0 {
+			success := lastSuccessAt.UTC()
+			state.LastSuccessAt = &success
+		}
+		if result.RecentSourceError == "" && lastError != "" {
+			result.RecentSourceError = lastError
+		}
+		switch source {
+		case "usage":
+			usageSeen = true
+			result.UsageCursor = state
+		case "errors":
+			errorsSeen = true
+			result.ErrorCursor = state
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	if usageSeen && errorsSeen && result.UsageCursor.LastSuccessAt != nil && result.ErrorCursor.LastSuccessAt != nil {
+		dataAsOf := *result.UsageCursor.LastSuccessAt
+		if result.ErrorCursor.LastSuccessAt.Before(dataAsOf) {
+			dataAsOf = *result.ErrorCursor.LastSuccessAt
+		}
+		result.DataAsOf = &dataAsOf
+		lag := s.now().Sub(dataAsOf).Seconds()
+		if lag < 0 {
+			lag = 0
+		}
+		result.CollectionLagSeconds = &lag
+	}
+	var availableFrom, availableTo sql.NullTime
+	if err := s.repo.db.QueryRowContext(ctx, sharedQualityFactsSQL, from, to).Scan(
+		&availableFrom, &availableTo, &result.MissingGroupRequests, &result.ExactModelRequests, &result.EstimatedModelRequests,
+	); err != nil {
+		return result, err
+	}
+	if availableFrom.Valid {
+		value := availableFrom.Time.UTC()
+		result.AvailableFrom = &value
+	}
+	if availableTo.Valid {
+		value := availableTo.Time.UTC()
+		result.AvailableTo = &value
+	}
+	switch {
+	case result.RecentSourceError != "":
+		result.StaleDataWarning = "最近采集错误：" + result.RecentSourceError
+	case result.DataAsOf == nil:
+		result.StaleDataWarning = "采集尚未成功"
+	case result.CollectionLagSeconds != nil && *result.CollectionLagSeconds > s.staleAfter.Seconds():
+		result.StaleDataWarning = fmt.Sprintf("采集已延迟 %.0f 秒", *result.CollectionLagSeconds)
 	}
 	return result, nil
 }

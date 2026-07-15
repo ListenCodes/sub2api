@@ -2,30 +2,32 @@ package accountmonitor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	ResourceOverview    = "overview"
-	ResourceAccounts    = "accounts"
-	ResourceAccount     = "account"
-	ResourceModels      = "models"
-	ResourceUsers       = "users"
-	ResourceErrors      = "errors"
-	ResourceTrends      = "trends"
-	ResourceAttempts    = "attempts"
-	ResourceDataQuality = "data-quality"
-	ResourceThresholds  = "thresholds"
-	ResourceRebuildJobs = "rebuild-jobs"
-	ResourceRebuildJob  = "rebuild-job"
+	ResourceOverview           = "overview"
+	ResourceAccounts           = "accounts"
+	ResourceAccount            = "account"
+	ResourceModels             = "models"
+	ResourceUsers              = "users"
+	ResourceErrors             = "errors"
+	ResourceTrends             = "trends"
+	ResourceAttempts           = "attempts"
+	ResourceDataQuality        = "data-quality"
+	ResourceThresholds         = "thresholds"
+	ResourceRebuildJobs        = "rebuild-jobs"
+	ResourceRebuildJob         = "rebuild-job"
+	ResourceGroupMonitorGroups = "group-monitor-groups"
+	ResourceGroupMonitorGroup  = "group-monitor-group"
 )
 
 type AdminRequest struct {
@@ -33,6 +35,7 @@ type AdminRequest struct {
 	Method    string
 	ActorID   int64
 	AccountID int64
+	GroupID   int64
 	JobID     int64
 	From      time.Time
 	To        time.Time
@@ -50,12 +53,11 @@ type AdminBackend interface {
 
 type Handler struct {
 	backend AdminBackend
-	webDir  string
 	now     func() time.Time
 }
 
-func NewHandler(backend AdminBackend, webDir string) *Handler {
-	return &Handler{backend: backend, webDir: strings.TrimSpace(webDir), now: func() time.Time { return time.Now().UTC() }}
+func NewHandler(backend AdminBackend) *Handler {
+	return &Handler{backend: backend, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (h *Handler) ServeAdmin(w http.ResponseWriter, r *http.Request, relativePath string, actorID int64) {
@@ -76,41 +78,22 @@ func (h *Handler) ServeAdmin(w http.ResponseWriter, r *http.Request, relativePat
 	}
 	result, err := h.backend.ExecuteAdmin(r.Context(), request)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMonitorError(w, http.StatusNotFound, "account monitor resource not found")
+			return
+		}
 		if errors.Is(err, ErrRebuildOverlap) {
 			writeMonitorError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, ErrAccountCandidateLimit) {
+			writeMonitorError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 		writeMonitorError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeMonitorJSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) ServeWeb(w http.ResponseWriter, r *http.Request, relativePath string) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeMonitorError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if h.webDir == "" {
-		writeMonitorError(w, http.StatusServiceUnavailable, "account monitor web assets are unavailable")
-		return
-	}
-	clean := filepath.Clean("/" + strings.TrimSpace(relativePath))
-	if strings.Contains(relativePath, "\\") || strings.Contains(clean, "..") {
-		writeMonitorError(w, http.StatusBadRequest, "invalid asset path")
-		return
-	}
-	if clean == "/" || clean == "/." {
-		clean = "/index.html"
-	}
-	fullPath := filepath.Join(h.webDir, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
-	if _, err := os.Stat(fullPath); err != nil {
-		writeMonitorError(w, http.StatusNotFound, "asset not found")
-		return
-	}
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFile(w, r, fullPath)
 }
 
 func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorID int64) (AdminRequest, int, error) {
@@ -154,8 +137,15 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[0] == "rebuild-jobs":
 		request.Resource, ok = ResourceRebuildJob, true
 		request.JobID, _ = strconv.ParseInt(parts[1], 10, 64)
+	case r.Method == http.MethodGet && path == "group-monitor/groups":
+		request.Resource, ok = ResourceGroupMonitorGroups, true
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "group-monitor" && parts[1] == "groups":
+		request.Resource, ok = ResourceGroupMonitorGroup, true
+		request.GroupID, _ = strconv.ParseInt(parts[2], 10, 64)
 	}
-	if !ok || (strings.HasPrefix(request.Resource, "account") && request.Resource != ResourceAccounts && request.AccountID <= 0) || (request.Resource == ResourceRebuildJob && request.JobID <= 0) {
+	if !ok || (strings.HasPrefix(request.Resource, "account") && request.Resource != ResourceAccounts && request.AccountID <= 0) ||
+		(request.Resource == ResourceRebuildJob && request.JobID <= 0) ||
+		(request.Resource == ResourceGroupMonitorGroup && request.GroupID <= 0) {
 		return AdminRequest{}, http.StatusNotFound, errors.New("account monitor endpoint not found")
 	}
 	if page, err := parsePositiveInt(r.URL.Query().Get("page"), 1); err != nil {
@@ -163,7 +153,17 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	} else {
 		request.Page = page
 	}
-	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), 20); err != nil || (pageSize != 20 && pageSize != 50 && pageSize != 100) {
+	groupMonitor := request.Resource == ResourceGroupMonitorGroups || request.Resource == ResourceGroupMonitorGroup
+	defaultPageSize := 20
+	if groupMonitor {
+		defaultPageSize = 12
+	}
+	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), defaultPageSize); err != nil ||
+		(!groupMonitor && pageSize != 20 && pageSize != 50 && pageSize != 100) ||
+		(groupMonitor && pageSize != 12 && pageSize != 24 && pageSize != 48) {
+		if groupMonitor {
+			return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 12, 24, or 48")
+		}
 		return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 20, 50, or 100")
 	} else {
 		request.PageSize = pageSize
@@ -173,8 +173,27 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	if request.SortOrder != "asc" {
 		request.SortOrder = "desc"
 	}
+	if request.Resource == ResourceAccounts {
+		minScore, hasMin, err := parseRiskScoreFilter(r.URL.Query().Get("min_risk_score"), "min_risk_score")
+		if err != nil {
+			return AdminRequest{}, http.StatusBadRequest, err
+		}
+		maxScore, hasMax, err := parseRiskScoreFilter(r.URL.Query().Get("max_risk_score"), "max_risk_score")
+		if err != nil {
+			return AdminRequest{}, http.StatusBadRequest, err
+		}
+		if hasMin && hasMax && minScore > maxScore {
+			return AdminRequest{}, http.StatusBadRequest, errors.New("min_risk_score must not exceed max_risk_score")
+		}
+	}
 	if request.Resource != ResourceThresholds && request.Resource != ResourceRebuildJobs && request.Resource != ResourceRebuildJob {
-		from, to, err := h.parseRange(r)
+		var from, to time.Time
+		var err error
+		if groupMonitor {
+			from, to, err = h.parseGroupRange(r)
+		} else {
+			from, to, err = h.parseRange(r)
+		}
 		if err != nil {
 			return AdminRequest{}, http.StatusBadRequest, err
 		}
@@ -198,6 +217,22 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 		}
 	}
 	return request, http.StatusOK, nil
+}
+
+func (h *Handler) parseGroupRange(r *http.Request) (time.Time, time.Time, error) {
+	durations := map[string]time.Duration{
+		"1h": time.Hour, "6h": 6 * time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour,
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("range"))
+	if raw == "" {
+		raw = "6h"
+	}
+	duration, ok := durations[raw]
+	if !ok {
+		return time.Time{}, time.Time{}, errors.New("range must be one of 1h, 6h, 12h, or 24h")
+	}
+	to := h.now().UTC().Truncate(10 * time.Minute)
+	return to.Add(-duration), to, nil
 }
 
 func (h *Handler) parseRange(r *http.Request) (time.Time, time.Time, error) {
@@ -231,6 +266,17 @@ func parsePositiveInt(raw string, fallback int) (int, error) {
 		return 0, errors.New("pagination values must be positive integers")
 	}
 	return value, nil
+}
+
+func parseRiskScoreFilter(raw, name string) (int, bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value > 100 {
+		return 0, false, fmt.Errorf("%s must be an integer from 0 to 100", name)
+	}
+	return value, true, nil
 }
 
 func writeMonitorJSON(w http.ResponseWriter, status int, value any) {

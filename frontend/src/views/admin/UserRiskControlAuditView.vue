@@ -1,5 +1,5 @@
 <template>
-  <AppLayout>
+  <div class="min-w-0">
     <TablePageLayout :title="t('admin.userRiskControl.auditPageTitle')" :description="t('admin.userRiskControl.auditPageDescription')">
       <template v-if="error" #actions><div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div></template>
       <template #filters>
@@ -46,13 +46,13 @@
       </template>
       <template v-if="total" #pagination><Pagination :page="page" :total="total" :page-size="pageSize" @update:page="changePage" @update:page-size="changePageSize" /></template>
     </TablePageLayout>
-  </AppLayout>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AppLayout from '@/components/layout/AppLayout.vue'
+import { routeLocationKey, routerKey, type LocationQueryRaw } from 'vue-router'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
@@ -67,6 +67,8 @@ import { userRiskControlV2API, type AuditFilters, type RiskAuditRecord } from '@
 import { auditResultOptions, formatAccountStatus, formatAuditResult, formatRiskAction, riskActionOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
+const route = inject(routeLocationKey, null)
+const router = inject(routerKey, null)
 const records = ref<RiskAuditRecord[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -87,6 +89,7 @@ const columns: Column[] = [
   { key: 'reason', label: t('admin.userRiskControl.table.reason'), class: 'min-w-80' },
 ]
 let loadRequestID = 0
+let writingQuery = false
 const auditActionOptions = riskActionOptions.filter((option) => ['ban', 'unban', 'auto_ban', 'create_rule', 'update_rule', 'rule_test', 'mark_processed'].includes(option.value))
 const auditActionFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allActions') }, ...auditActionOptions])
 const auditResultFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allResults') }, ...auditResultOptions])
@@ -101,6 +104,58 @@ const mobileSortOptions = [
 ]
 const mobileSortValue = computed(() => sortBy.value ? `${sortBy.value}:${sortOrder.value}` : '')
 const hasFilters = computed(() => Boolean(draft.actor?.trim() || draft.target?.trim() || draft.action || draft.result || draft.from || draft.to))
+
+function queryText(key: string): string {
+  const value = route?.query[key]
+  return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
+}
+
+function positiveInteger(value: string, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function restoreRouteState() {
+  if (!route) return
+  const nextSort = queryText('sort_by')
+  Object.assign(draft, {
+    actor: queryText('actor'),
+    target: queryText('target'),
+    action: queryText('action'),
+    result: queryText('result'),
+    from: queryText('from'),
+    to: queryText('to'),
+  })
+  Object.assign(activeFilters, draft)
+  page.value = positiveInteger(queryText('page'), 1)
+  pageSize.value = positiveInteger(queryText('page_size'), getPersistedPageSize(20))
+  sortBy.value = ['created_at', 'result', 'target'].includes(nextSort) ? nextSort as NonNullable<AuditFilters['sortBy']> : undefined
+  sortOrder.value = queryText('sort_order') === 'asc' ? 'asc' : 'desc'
+}
+
+async function syncRouteState() {
+  if (!route || !router) return
+  const query: LocationQueryRaw = { ...route.query }
+  const values: Record<string, string | undefined> = {
+    actor: String(activeFilters.actor || '').trim() || undefined,
+    target: String(activeFilters.target || '').trim() || undefined,
+    action: String(activeFilters.action || '') || undefined,
+    result: String(activeFilters.result || '') || undefined,
+    from: String(activeFilters.from || '') || undefined,
+    to: String(activeFilters.to || '') || undefined,
+    sort_by: sortBy.value,
+    sort_order: sortBy.value ? sortOrder.value : undefined,
+    page: page.value > 1 ? String(page.value) : undefined,
+    page_size: String(pageSize.value),
+  }
+  Object.entries(values).forEach(([key, value]) => value === undefined ? delete query[key] : query[key] = value)
+  writingQuery = true
+  try {
+    await router.replace({ path: route.path, query })
+  } finally {
+    writingQuery = false
+  }
+}
 
 function errorMessage(err: unknown) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed') }
 function requestFilters(): AuditFilters {
@@ -129,10 +184,10 @@ async function loadAudit() {
     if (requestID === loadRequestID) loading.value = false
   }
 }
-async function applyFilters() { Object.assign(activeFilters, draft); page.value = 1; await loadAudit() }
+async function applyFilters() { Object.assign(activeFilters, draft); page.value = 1; await syncRouteState(); await loadAudit() }
 function setFilter(key: 'action' | 'result', value: string | number | boolean | null) { Object.assign(draft, { [key]: String(value ?? '') }); void applyFilters() }
 function setDateRange(range: { startDate: string; endDate: string }) { draft.from = range.startDate; draft.to = range.endDate; void applyFilters() }
-function setMobileSort(value: string | number | boolean | null) {
+async function setMobileSort(value: string | number | boolean | null) {
   if (!value || typeof value === 'boolean') sortBy.value = undefined
   else {
     const [field, order] = String(value).split(':')
@@ -140,21 +195,29 @@ function setMobileSort(value: string | number | boolean | null) {
     sortOrder.value = order === 'asc' ? 'asc' : 'desc'
   }
   page.value = 1
-  void loadAudit()
+  await syncRouteState()
+  await loadAudit()
 }
 async function resetFilters() { Object.assign(draft, { action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' }); await applyFilters() }
-async function changePage(next: number) { page.value = next; await loadAudit() }
-async function changePageSize(next: number) { pageSize.value = next; page.value = 1; await loadAudit() }
-function toggleSort(next: NonNullable<AuditFilters['sortBy']>) {
+async function changePage(next: number) { page.value = next; await syncRouteState(); await loadAudit() }
+async function changePageSize(next: number) { pageSize.value = next; page.value = 1; await syncRouteState(); await loadAudit() }
+async function toggleSort(next: NonNullable<AuditFilters['sortBy']>) {
   if (sortBy.value === next) sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
   else { sortBy.value = next; sortOrder.value = 'desc' }
   page.value = 1
-  void loadAudit()
+  await syncRouteState()
+  await loadAudit()
 }
 function sortIndicator(value: NonNullable<AuditFilters['sortBy']>) { return sortBy.value === value ? sortOrder.value === 'desc' ? '↓' : '↑' : '↕' }
 function sortAria(value: NonNullable<AuditFilters['sortBy']>) { return sortBy.value === value ? sortOrder.value === 'desc' ? 'descending' : 'ascending' : 'none' }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
 function targetLabel(record: RiskAuditRecord) { return record.target_type === 'user' ? `用户 #${record.target_id || record.target_user_id}` : record.target_type === 'rule' ? `规则 ${record.target_id || '-'}` : `未知目标：${record.target_id || '-'}` }
 function statusChange(record: RiskAuditRecord) { return record.before_status && record.after_status ? `${formatAccountStatus(record.before_status)} → ${formatAccountStatus(record.after_status)}` : '-' }
+restoreRouteState()
+watch(() => route?.fullPath, () => {
+  if (writingQuery) return
+  restoreRouteState()
+  void loadAudit()
+})
 onMounted(loadAudit)
 </script>
