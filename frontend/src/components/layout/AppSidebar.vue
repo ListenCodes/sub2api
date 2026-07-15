@@ -755,26 +755,14 @@ const adminNavItems = computed((): NavItem[] => {
       children: [
         { path: '/admin/channels/pricing', label: t('nav.channelPricing'), icon: PriceTagIcon },
         { path: '/admin/channels/monitor', label: t('nav.channelMonitor'), icon: SignalIcon, featureFlag: flagChannelMonitor },
-        { path: '/admin/account-monitor', label: t('nav.accountMonitor'), icon: ChartIcon },
       ],
     },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
-    {
-      path: '/admin/user-risk-control',
-      label: t('nav.securityRiskControl'),
-      icon: ShieldIcon,
-      hideInSimpleMode: true,
-      expandOnly: true,
-      children: [
-        { path: '/admin/user-risk-control/users', label: t('nav.userRiskControl'), icon: UsersIcon },
-        { path: '/admin/user-risk-control/rules', label: t('nav.riskScenarios'), icon: FolderIcon },
-        { path: '/admin/user-risk-control/audit', label: t('nav.riskAudit'), icon: ChartIcon },
-        { path: '/admin/risk-control', label: t('nav.contentModeration'), icon: ShieldIcon, featureFlag: flagRiskControl },
-      ],
-    },
+    { path: '/admin/extensions', label: '扩展中心', icon: ShieldIcon, hideInSimpleMode: true },
+    { path: '/admin/risk-control', label: t('nav.contentModeration'), icon: ShieldIcon, featureFlag: flagRiskControl },
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
     { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
     {

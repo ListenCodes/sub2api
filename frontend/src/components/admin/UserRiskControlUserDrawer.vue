@@ -16,7 +16,7 @@
           <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>
           <template v-else-if="detail">
             <section class="grid grid-cols-2 gap-3">
-              <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskScore') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.summary?.score ?? user.risk_score ?? 0 }}</p></div>
+              <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskScore') }}</p><RiskScoreBadge class="mt-1" :score="detail.summary?.score ?? user.risk_score" :available="(detail.summary?.score ?? user.risk_score) !== null && (detail.summary?.score ?? user.risk_score) !== undefined && Boolean(detail.summary?.level || user.risk_level)" :explicit-level="detail.summary?.level || user.risk_level" /></div>
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskLevel') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatRiskLevel(detail.summary?.level ?? user.risk_level) }}</p></div>
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.ipAssociations') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.associations?.ip_count ?? 0 }}</p></div>
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.deviceAssociations') }}</p><p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ detail.associations?.device_count ?? 0 }}</p></div>
@@ -74,6 +74,7 @@ import Icon from '@/components/icons/Icon.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import { userRiskControlV2API, type RiskUserDetail, type RiskUserRow } from '@/api/admin/userRiskControlV2'
+import RiskScoreBadge from '@/components/admin/RiskScoreBadge.vue'
 import { formatAccountStatus, formatAuditResult, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType } from '@/utils/userRiskControlLabels'
 
 const props = defineProps<{ user: RiskUserRow }>()
