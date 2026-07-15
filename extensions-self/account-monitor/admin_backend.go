@@ -15,6 +15,10 @@ import (
 	"github.com/lib/pq"
 )
 
+var ErrAccountCandidateLimit = errors.New("account candidate limit exceeded; narrow account filters")
+
+const maxRiskCandidateAccounts = 5000
+
 const overviewAttemptsSQL = `
 SELECT COUNT(*),COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
        COUNT(DISTINCT account_id),COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL),
@@ -750,14 +754,20 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 			return PageResponse{}, err
 		}
 	}
-	const candidateLimit = 2147483647
+	needsRiskCandidates := request.SortBy == "risk_score" || strings.TrimSpace(request.Query["min_risk_score"]) != "" || strings.TrimSpace(request.Query["max_risk_score"]) != ""
+	candidateLimit := request.PageSize
+	candidateOffset := (request.Page - 1) * request.PageSize
+	if needsRiskCandidates {
+		candidateLimit = maxRiskCandidateAccounts + 1
+		candidateOffset = 0
+	}
 	sqlSortBy := request.SortBy
 	if sqlSortBy == "risk_score" {
 		sqlSortBy = ""
 	}
 	query := `SELECT stats.*,CASE WHEN attempts=0 THEN 0 ELSE successes::float/attempts END AS success_rate FROM (` + accountBaseSQL + `) stats ORDER BY ` + accountSortClause(sqlSortBy, request.SortOrder) + ` LIMIT $4 OFFSET $5`
 	rows, err := s.repo.db.QueryContext(ctx, query,
-		request.From, request.To, rollup, candidateLimit, 0,
+		request.From, request.To, rollup, candidateLimit, candidateOffset,
 		request.Query["platform"], request.Query["model"], request.Query["result"], request.Query["error_category"],
 		accountID, parentAccountID, userID, apiKeyID, requestType, statusCode, accountStatus, pq.Array(statusAccountIDs),
 	)
@@ -780,6 +790,9 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 		item.ParentAccountID = parentAccountID.Int64
 		item.AccountName = fmt.Sprintf("账号 %d", item.AccountID)
 		items = append(items, item)
+		if needsRiskCandidates && total > maxRiskCandidateAccounts {
+			return PageResponse{}, ErrAccountCandidateLimit
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return PageResponse{}, err
@@ -810,6 +823,9 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 				}
 			}
 		}
+	}
+	if !needsRiskCandidates {
+		return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
 	}
 	items = filterAccountsByRisk(items, request.Query)
 	if request.SortBy == "risk_score" {
@@ -859,7 +875,7 @@ func parseOptionalRiskScore(raw string) (int, bool) {
 		return 0, false
 	}
 	value, err := strconv.Atoi(raw)
-	if err != nil {
+	if err != nil || value < 0 || value > 100 {
 		return 0, false
 	}
 	return value, true

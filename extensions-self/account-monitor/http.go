@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -83,6 +84,10 @@ func (h *Handler) ServeAdmin(w http.ResponseWriter, r *http.Request, relativePat
 		}
 		if errors.Is(err, ErrRebuildOverlap) {
 			writeMonitorError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, ErrAccountCandidateLimit) {
+			writeMonitorError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 		writeMonitorError(w, http.StatusInternalServerError, err.Error())
@@ -168,6 +173,19 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	if request.SortOrder != "asc" {
 		request.SortOrder = "desc"
 	}
+	if request.Resource == ResourceAccounts {
+		minScore, hasMin, err := parseRiskScoreFilter(r.URL.Query().Get("min_risk_score"), "min_risk_score")
+		if err != nil {
+			return AdminRequest{}, http.StatusBadRequest, err
+		}
+		maxScore, hasMax, err := parseRiskScoreFilter(r.URL.Query().Get("max_risk_score"), "max_risk_score")
+		if err != nil {
+			return AdminRequest{}, http.StatusBadRequest, err
+		}
+		if hasMin && hasMax && minScore > maxScore {
+			return AdminRequest{}, http.StatusBadRequest, errors.New("min_risk_score must not exceed max_risk_score")
+		}
+	}
 	if request.Resource != ResourceThresholds && request.Resource != ResourceRebuildJobs && request.Resource != ResourceRebuildJob {
 		var from, to time.Time
 		var err error
@@ -248,6 +266,17 @@ func parsePositiveInt(raw string, fallback int) (int, error) {
 		return 0, errors.New("pagination values must be positive integers")
 	}
 	return value, nil
+}
+
+func parseRiskScoreFilter(raw, name string) (int, bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value > 100 {
+		return 0, false, fmt.Errorf("%s must be an integer from 0 to 100", name)
+	}
+	return value, true, nil
 }
 
 func writeMonitorJSON(w http.ResponseWriter, status int, value any) {

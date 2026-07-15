@@ -191,7 +191,7 @@ func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	now := from.Add(12 * time.Hour)
 	mock.ExpectQuery(`SELECT stats\.\*`).
-		WithArgs(from, now, "physical", 2147483647, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
+		WithArgs(from, now, "physical", 20, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
 			AddRow(
 				int64(9), int64(7), "anthropic", int64(1000), int64(950), int64(50), int64(4000),
@@ -244,7 +244,7 @@ func TestAdminServiceRiskSortScoresAllCandidatesBeforePaging(t *testing.T) {
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	now := from.Add(12 * time.Hour)
 	mock.ExpectQuery(`SELECT stats\.\*`).
-		WithArgs(from, now, "physical", 2147483647, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
+		WithArgs(from, now, "physical", 5001, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
 			AddRow(int64(1), nil, "openai", int64(20), int64(10), int64(10), int64(0), 0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(3), 0.5).
 			AddRow(int64(2), nil, "openai", int64(20), int64(20), int64(0), int64(0), 0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(3), 1.0).
@@ -270,6 +270,30 @@ func TestAdminServiceRiskSortScoresAllCandidatesBeforePaging(t *testing.T) {
 	items := page.Items.([]AccountSummary)
 	if page.Total != 3 || len(items) != 1 || items[0].AccountID != 1 || items[0].Health.RiskScore != 70 {
 		t.Fatalf("risk page = %+v items=%+v", page, items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceRiskSortRejectsTooManyCandidates(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	now := from.Add(12 * time.Hour)
+	mock.ExpectQuery(`SELECT stats\.\*`).
+		WithArgs(from, now, "physical", 5001, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).AddRow(
+			int64(1), nil, "openai", int64(20), int64(20), int64(0), int64(0),
+			0.0, 0.0, 0.0, int64(0), now, now, int64(1), int64(1), int64(0), int64(0), int64(0), int64(5001), 1.0,
+		))
+
+	service := NewAdminService(NewRepository(db), nil, time.Second)
+	_, err := service.ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceAccounts, From: from, To: now, Page: 1, PageSize: 20,
+		SortBy: "risk_score", SortOrder: "desc", Query: map[string]string{},
+	})
+	if !errors.Is(err, ErrAccountCandidateLimit) {
+		t.Fatalf("error = %v, want %v", err, ErrAccountCandidateLimit)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -317,12 +341,20 @@ func TestAccountSortClauseUsesWhitelist(t *testing.T) {
 	}
 }
 
+func TestParseOptionalRiskScoreRejectsInvalidOrOutOfRangeValues(t *testing.T) {
+	for _, raw := range []string{"-1", "101", "not-a-number"} {
+		if value, ok := parseOptionalRiskScore(raw); ok {
+			t.Fatalf("parseOptionalRiskScore(%q) = (%d,true), want unavailable", raw, value)
+		}
+	}
+}
+
 func TestAdminServiceAccountsPassesFactFiltersToServerQuery(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
 	mock.ExpectQuery(`SELECT stats\.\*`).WithArgs(
-		from, to, "physical", 2147483647, 0, "anthropic", "claude", "failed", "限流",
+		from, to, "physical", 20, 0, "anthropic", "claude", "failed", "限流",
 		int64(9), int64(7), int64(11), int64(13), 2, 429, "", sqlmock.AnyArg(),
 	).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()))
 
@@ -353,7 +385,7 @@ func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
 	sourceMock.ExpectQuery(regexp.QuoteMeta(accountIDsByStatusQuery)).WithArgs("active").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)).AddRow(int64(10)))
 	repoMock.ExpectQuery(`SELECT stats\.\*`).WithArgs(
-		from, to, "physical", 2147483647, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "active", sqlmock.AnyArg(),
+		from, to, "physical", 20, 0, "", "", "", "", int64(0), int64(0), int64(0), int64(0), 0, 0, "active", sqlmock.AnyArg(),
 	).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()))
 
 	result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).

@@ -80,6 +80,10 @@ func TestHandlerRejectsInvalidRangeAndPageSize(t *testing.T) {
 		"/accounts?from=2026-01-01T00:00:00Z&to=2026-07-01T00:00:00Z",
 		"/accounts?page_size=21",
 		"/accounts?page_size=101",
+		"/accounts?min_risk_score=-1",
+		"/accounts?max_risk_score=101",
+		"/accounts?min_risk_score=not-a-number",
+		"/accounts?min_risk_score=80&max_risk_score=20",
 	}
 	for _, path := range tests {
 		recorder := httptest.NewRecorder()
@@ -189,6 +193,18 @@ func TestHandlerReturnsNotFoundWhenGroupDetailWasDeleted(t *testing.T) {
 	handler.ServeAdmin(recorder, req, "/group-monitor/groups/42", 99)
 
 	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestHandlerReturnsUnprocessableEntityForTooManyAccountCandidates(t *testing.T) {
+	backend := &fakeAdminBackend{err: ErrAccountCandidateLimit}
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/accounts?sort_by=risk_score", nil)
+
+	NewHandler(backend).ServeAdmin(recorder, req, "/accounts", 99)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
