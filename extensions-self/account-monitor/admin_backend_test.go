@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,112 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestGroupMonitorQueriesUseOnlyDimensionsAndTenMinuteAggregates(t *testing.T) {
+	raw, err := os.ReadFile("admin_backend.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.ToLower(string(raw))
+	for _, required := range []string{
+		"account_monitor_group_dimensions",
+		"account_monitor_group_model_10m",
+		"lower(platform),lower(name),group_id",
+		"group_id=any",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("group monitor query missing %q", required)
+		}
+	}
+}
+
+func TestGroupMonitorCardDistinguishesBucketAndIdleStates(t *testing.T) {
+	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	to := from.Add(30 * time.Minute)
+	dimension := GroupDimension{ID: 7, Name: "Primary", Platform: "openai", Status: "active"}
+	tests := []struct {
+		name    string
+		buckets map[time.Time]GroupMonitorBucket
+		status  string
+	}{
+		{name: "no data", buckets: nil, status: "no_data"},
+		{name: "recently idle", buckets: map[time.Time]GroupMonitorBucket{from: {Total: 1, Successes: 1}}, status: "recently_idle"},
+		{name: "normal", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Successes: 2}}, status: "normal"},
+		{name: "partial failure", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Successes: 1, Failures: 1}}, status: "partial_failure"},
+		{name: "all failed", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Failures: 2}}, status: "all_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			card := buildGroupCard(dimension, from, to, test.buckets)
+			if len(card.Timeline) != 3 || card.CallStatus != test.status {
+				t.Fatalf("card = %+v", card)
+			}
+		})
+	}
+}
+
+func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionsSQL)).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).
+			AddRow(int64(1), "Alpha", "openai", "active", nil).
+			AddRow(int64(2), "Beta", "openai", "inactive", nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
+			AddRow(int64(1), to.Add(-10*time.Minute), int64(4), int64(3), int64(1)),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupMonitorQualitySQL)).WithArgs(from, to).WillReturnRows(
+		sqlmock.NewRows([]string{"missing_group", "exact", "estimated"}).AddRow(int64(2), int64(8), int64(1)),
+	)
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceGroupMonitorGroups, From: from, To: to, Page: 1, PageSize: 12, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := result.(GroupMonitorGroupsResponse)
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].GroupID != 1 || page.Items[0].CallStatus != "partial_failure" {
+		t.Fatalf("group page = %+v", page)
+	}
+	if page.Quality.MissingGroupRequests != 2 || page.Quality.ExactModelRequests != 8 {
+		t.Fatalf("quality = %+v", page.Quality)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminServiceGroupDetailBuildsModelTimelines(t *testing.T) {
+	db, mock := newSourceMock(t)
+	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	to := from.Add(20 * time.Minute)
+	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionByIDSQL)).WithArgs(int64(7)).WillReturnRows(
+		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).AddRow(int64(7), "Primary", "openai", "active", nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to).WillReturnRows(
+		sqlmock.NewRows([]string{"model", "bucket", "total", "successes", "failures", "exact", "estimated"}).
+			AddRow("gpt-5", from, int64(2), int64(2), int64(0), int64(2), int64(0)).
+			AddRow("gpt-5", from.Add(10*time.Minute), int64(1), int64(0), int64(1), int64(0), int64(1)),
+	)
+
+	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
+		Resource: ResourceGroupMonitorGroup, GroupID: 7, From: from, To: to, Query: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := result.(GroupMonitorDetailResponse)
+	if detail.Group.TotalRequests != 3 || len(detail.Models) != 1 || len(detail.Models[0].Timeline) != 2 || detail.Models[0].EstimatedModelRequests != 1 {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 	db, mock := newSourceMock(t)
@@ -343,7 +450,7 @@ func TestAdminServiceDataQualityChecksSourceConnectivity(t *testing.T) {
 			repoMock.ExpectQuery(regexp.QuoteMeta(dataQualitySQL)).WithArgs(from, to).
 				WillReturnRows(sqlmock.NewRows([]string{"exact", "estimated", "fallback", "recovered"}).AddRow(int64(8), int64(2), int64(1), int64(3)))
 			repoMock.ExpectQuery(regexp.QuoteMeta(requestQualitySQL)).WithArgs(from, to).
-				WillReturnRows(sqlmock.NewRows([]string{"unattributed", "failed"}).AddRow(int64(1), int64(4)))
+				WillReturnRows(sqlmock.NewRows([]string{"unattributed", "failed", "missing_group"}).AddRow(int64(1), int64(4), int64(2)))
 
 			result, err := NewAdminService(NewRepository(repoDB), NewPostgresSource(sourceDB, time.Second, 100), time.Second).
 				ExecuteAdmin(context.Background(), AdminRequest{Resource: ResourceDataQuality, From: from, To: to})
@@ -353,6 +460,13 @@ func TestAdminServiceDataQualityChecksSourceConnectivity(t *testing.T) {
 			quality := result.(DataQualityResponse)
 			if quality.SourceConnected != test.connected || quality.ExactModels != 8 || quality.UnattributedErrors != 1 {
 				t.Fatalf("quality = %+v", quality)
+			}
+			raw, err := json.Marshal(quality)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), `"missing_group_requests":2`) {
+				t.Fatalf("quality JSON = %s", raw)
 			}
 			if err := repoMock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)

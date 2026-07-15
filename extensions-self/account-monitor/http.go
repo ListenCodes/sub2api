@@ -14,18 +14,20 @@ import (
 )
 
 const (
-	ResourceOverview    = "overview"
-	ResourceAccounts    = "accounts"
-	ResourceAccount     = "account"
-	ResourceModels      = "models"
-	ResourceUsers       = "users"
-	ResourceErrors      = "errors"
-	ResourceTrends      = "trends"
-	ResourceAttempts    = "attempts"
-	ResourceDataQuality = "data-quality"
-	ResourceThresholds  = "thresholds"
-	ResourceRebuildJobs = "rebuild-jobs"
-	ResourceRebuildJob  = "rebuild-job"
+	ResourceOverview           = "overview"
+	ResourceAccounts           = "accounts"
+	ResourceAccount            = "account"
+	ResourceModels             = "models"
+	ResourceUsers              = "users"
+	ResourceErrors             = "errors"
+	ResourceTrends             = "trends"
+	ResourceAttempts           = "attempts"
+	ResourceDataQuality        = "data-quality"
+	ResourceThresholds         = "thresholds"
+	ResourceRebuildJobs        = "rebuild-jobs"
+	ResourceRebuildJob         = "rebuild-job"
+	ResourceGroupMonitorGroups = "group-monitor-groups"
+	ResourceGroupMonitorGroup  = "group-monitor-group"
 )
 
 type AdminRequest struct {
@@ -33,6 +35,7 @@ type AdminRequest struct {
 	Method    string
 	ActorID   int64
 	AccountID int64
+	GroupID   int64
 	JobID     int64
 	From      time.Time
 	To        time.Time
@@ -154,8 +157,15 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[0] == "rebuild-jobs":
 		request.Resource, ok = ResourceRebuildJob, true
 		request.JobID, _ = strconv.ParseInt(parts[1], 10, 64)
+	case r.Method == http.MethodGet && path == "group-monitor/groups":
+		request.Resource, ok = ResourceGroupMonitorGroups, true
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "group-monitor" && parts[1] == "groups":
+		request.Resource, ok = ResourceGroupMonitorGroup, true
+		request.GroupID, _ = strconv.ParseInt(parts[2], 10, 64)
 	}
-	if !ok || (strings.HasPrefix(request.Resource, "account") && request.Resource != ResourceAccounts && request.AccountID <= 0) || (request.Resource == ResourceRebuildJob && request.JobID <= 0) {
+	if !ok || (strings.HasPrefix(request.Resource, "account") && request.Resource != ResourceAccounts && request.AccountID <= 0) ||
+		(request.Resource == ResourceRebuildJob && request.JobID <= 0) ||
+		(request.Resource == ResourceGroupMonitorGroup && request.GroupID <= 0) {
 		return AdminRequest{}, http.StatusNotFound, errors.New("account monitor endpoint not found")
 	}
 	if page, err := parsePositiveInt(r.URL.Query().Get("page"), 1); err != nil {
@@ -163,7 +173,17 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	} else {
 		request.Page = page
 	}
-	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), 20); err != nil || (pageSize != 20 && pageSize != 50 && pageSize != 100) {
+	groupMonitor := request.Resource == ResourceGroupMonitorGroups || request.Resource == ResourceGroupMonitorGroup
+	defaultPageSize := 20
+	if groupMonitor {
+		defaultPageSize = 12
+	}
+	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), defaultPageSize); err != nil ||
+		(!groupMonitor && pageSize != 20 && pageSize != 50 && pageSize != 100) ||
+		(groupMonitor && pageSize != 12 && pageSize != 24 && pageSize != 48) {
+		if groupMonitor {
+			return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 12, 24, or 48")
+		}
 		return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 20, 50, or 100")
 	} else {
 		request.PageSize = pageSize
@@ -174,7 +194,13 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 		request.SortOrder = "desc"
 	}
 	if request.Resource != ResourceThresholds && request.Resource != ResourceRebuildJobs && request.Resource != ResourceRebuildJob {
-		from, to, err := h.parseRange(r)
+		var from, to time.Time
+		var err error
+		if groupMonitor {
+			from, to, err = h.parseGroupRange(r)
+		} else {
+			from, to, err = h.parseRange(r)
+		}
 		if err != nil {
 			return AdminRequest{}, http.StatusBadRequest, err
 		}
@@ -198,6 +224,22 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 		}
 	}
 	return request, http.StatusOK, nil
+}
+
+func (h *Handler) parseGroupRange(r *http.Request) (time.Time, time.Time, error) {
+	durations := map[string]time.Duration{
+		"1h": time.Hour, "6h": 6 * time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour,
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("range"))
+	if raw == "" {
+		raw = "6h"
+	}
+	duration, ok := durations[raw]
+	if !ok {
+		return time.Time{}, time.Time{}, errors.New("range must be one of 1h, 6h, 12h, or 24h")
+	}
+	to := h.now().UTC().Truncate(10 * time.Minute)
+	return to.Add(-duration), to, nil
 }
 
 func (h *Handler) parseRange(r *http.Request) (time.Time, time.Time, error) {

@@ -130,7 +130,9 @@ SELECT COUNT(*) FILTER (WHERE model_attribution='exact'),COUNT(*) FILTER (WHERE 
 FROM account_monitor_attempt_facts WHERE attempted_at >= $1 AND attempted_at < $2`
 
 const requestQualitySQL = `
-SELECT COUNT(*) FILTER (WHERE result='failed' AND account_id IS NULL),COUNT(*) FILTER (WHERE result='failed')
+SELECT COUNT(*) FILTER (WHERE result='failed' AND account_id IS NULL),
+       COUNT(*) FILTER (WHERE result='failed'),
+       COUNT(*) FILTER (WHERE group_id IS NULL)
 FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
 
 const selectThresholdSQL = `SELECT config FROM account_monitor_thresholds WHERE scope_type='global' AND scope_id=0`
@@ -219,6 +221,38 @@ const getRebuildJobSQL = `
 SELECT id,from_time,to_time,status,processed_rows,error,requested_by,created_at,started_at,completed_at
 FROM account_monitor_rebuild_jobs WHERE id=$1`
 
+const groupDimensionsSQL = `
+SELECT group_id,name,platform,status,deleted_at
+FROM account_monitor_group_dimensions
+WHERE deleted_at IS NULL
+ORDER BY LOWER(platform),LOWER(name),group_id`
+
+const groupDimensionByIDSQL = `
+SELECT group_id,name,platform,status,deleted_at
+FROM account_monitor_group_dimensions
+WHERE group_id=$1 AND deleted_at IS NULL`
+
+const groupTimelineSQL = `
+SELECT group_id,bucket_at,SUM(total_requests),SUM(successes),SUM(failures)
+FROM account_monitor_group_model_10m
+WHERE bucket_at >= $1 AND bucket_at < $2 AND group_id=ANY($3)
+GROUP BY group_id,bucket_at
+ORDER BY group_id,bucket_at`
+
+const groupModelTimelineSQL = `
+SELECT actual_model,bucket_at,total_requests,successes,failures,
+       exact_model_requests,estimated_model_requests
+FROM account_monitor_group_model_10m
+WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
+ORDER BY LOWER(actual_model),actual_model,bucket_at`
+
+const groupMonitorQualitySQL = `
+SELECT COUNT(*) FILTER (WHERE group_id IS NULL),
+       COUNT(*) FILTER (WHERE model_attribution='exact'),
+       COUNT(*) FILTER (WHERE model_attribution<>'exact')
+FROM account_monitor_request_facts
+WHERE occurred_at >= $1 AND occurred_at < $2`
+
 type AdminService struct {
 	repo         *Repository
 	source       *PostgresSource
@@ -298,7 +332,62 @@ type DataQualityResponse struct {
 	ExactModels          int64    `json:"exact_models"`
 	EstimatedModels      int64    `json:"estimated_models"`
 	FallbackIdentities   int64    `json:"fallback_identities"`
+	MissingGroupRequests int64    `json:"missing_group_requests"`
 	DataSource           string   `json:"data_source"`
+}
+
+type GroupMonitorBucket struct {
+	BucketAt  time.Time `json:"bucket_at"`
+	Total     int64     `json:"total"`
+	Successes int64     `json:"successes"`
+	Failures  int64     `json:"failures"`
+	Status    string    `json:"status"`
+}
+
+type GroupMonitorQuality struct {
+	MissingGroupRequests   int64 `json:"missing_group_requests"`
+	ExactModelRequests     int64 `json:"exact_model_requests"`
+	EstimatedModelRequests int64 `json:"estimated_model_requests"`
+}
+
+type GroupMonitorCard struct {
+	GroupID       int64                `json:"group_id"`
+	Name          string               `json:"name"`
+	Platform      string               `json:"platform"`
+	GroupStatus   string               `json:"group_status"`
+	CallStatus    string               `json:"call_status"`
+	TotalRequests int64                `json:"total_requests"`
+	Successes     int64                `json:"successes"`
+	Failures      int64                `json:"failures"`
+	SuccessRate   *float64             `json:"success_rate"`
+	Timeline      []GroupMonitorBucket `json:"timeline"`
+}
+
+type GroupMonitorGroupsResponse struct {
+	Items     []GroupMonitorCard  `json:"items"`
+	Total     int64               `json:"total"`
+	Page      int                 `json:"page"`
+	PageSize  int                 `json:"page_size"`
+	Platforms []string            `json:"platforms"`
+	DataAsOf  time.Time           `json:"data_as_of"`
+	Quality   GroupMonitorQuality `json:"data_quality"`
+}
+
+type GroupMonitorModel struct {
+	ActualModel            string               `json:"actual_model"`
+	TotalRequests          int64                `json:"total_requests"`
+	Successes              int64                `json:"successes"`
+	Failures               int64                `json:"failures"`
+	ExactModelRequests     int64                `json:"exact_model_requests"`
+	EstimatedModelRequests int64                `json:"estimated_model_requests"`
+	SuccessRate            *float64             `json:"success_rate"`
+	Timeline               []GroupMonitorBucket `json:"timeline"`
+}
+
+type GroupMonitorDetailResponse struct {
+	Group    GroupMonitorCard    `json:"group"`
+	Models   []GroupMonitorModel `json:"models"`
+	DataAsOf time.Time           `json:"data_as_of"`
 }
 
 func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (any, error) {
@@ -335,9 +424,240 @@ func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (
 		return s.repo.CreateRebuildJob(ctx, request.From, request.To, request.ActorID)
 	case ResourceRebuildJob:
 		return s.rebuildJob(ctx, request.JobID)
+	case ResourceGroupMonitorGroups:
+		return s.groupMonitorGroups(ctx, request)
+	case ResourceGroupMonitorGroup:
+		return s.groupMonitorGroup(ctx, request)
 	default:
 		return nil, errors.New("unsupported account monitor resource")
 	}
+}
+
+func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequest) (GroupMonitorGroupsResponse, error) {
+	result := GroupMonitorGroupsResponse{
+		Items: make([]GroupMonitorCard, 0), Page: request.Page, PageSize: request.PageSize,
+		Platforms: make([]string, 0), DataAsOf: request.To,
+	}
+	dimensions, err := s.loadVisibleGroupDimensions(ctx)
+	if err != nil {
+		return result, err
+	}
+	platformSet := make(map[string]struct{})
+	filteredDimensions := make([]GroupDimension, 0, len(dimensions))
+	statusFilter := strings.ToLower(strings.TrimSpace(request.Query["group_status"]))
+	if statusFilter == "" {
+		statusFilter = "active"
+	}
+	platformFilter := strings.ToLower(strings.TrimSpace(request.Query["platform"]))
+	nameFilter := strings.ToLower(strings.TrimSpace(request.Query["query"]))
+	for _, dimension := range dimensions {
+		if _, seen := platformSet[dimension.Platform]; !seen {
+			platformSet[dimension.Platform] = struct{}{}
+			result.Platforms = append(result.Platforms, dimension.Platform)
+		}
+		if statusFilter != "all" && !strings.EqualFold(dimension.Status, statusFilter) {
+			continue
+		}
+		if platformFilter != "" && !strings.EqualFold(dimension.Platform, platformFilter) {
+			continue
+		}
+		if nameFilter != "" && !strings.Contains(strings.ToLower(dimension.Name), nameFilter) {
+			continue
+		}
+		filteredDimensions = append(filteredDimensions, dimension)
+	}
+	groupIDs := make([]int64, 0, len(filteredDimensions))
+	for _, dimension := range filteredDimensions {
+		groupIDs = append(groupIDs, dimension.ID)
+	}
+	buckets, err := s.loadGroupBuckets(ctx, request.From, request.To, groupIDs)
+	if err != nil {
+		return result, err
+	}
+	callStatus := strings.TrimSpace(request.Query["call_status"])
+	for _, dimension := range filteredDimensions {
+		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID])
+		if callStatus != "" && card.CallStatus != callStatus {
+			continue
+		}
+		result.Items = append(result.Items, card)
+	}
+	result.Total = int64(len(result.Items))
+	result.Items = pageGroupCards(result.Items, request.Page, request.PageSize)
+	if err := s.repo.db.QueryRowContext(ctx, groupMonitorQualitySQL, request.From, request.To).Scan(
+		&result.Quality.MissingGroupRequests, &result.Quality.ExactModelRequests, &result.Quality.EstimatedModelRequests,
+	); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminRequest) (GroupMonitorDetailResponse, error) {
+	var result GroupMonitorDetailResponse
+	result.DataAsOf = request.To
+	var dimension GroupDimension
+	var deleted sql.NullTime
+	if err := s.repo.db.QueryRowContext(ctx, groupDimensionByIDSQL, request.GroupID).Scan(
+		&dimension.ID, &dimension.Name, &dimension.Platform, &dimension.Status, &deleted,
+	); err != nil {
+		return result, err
+	}
+	rows, err := s.repo.db.QueryContext(ctx, groupModelTimelineSQL, request.GroupID, request.From, request.To)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	models := make([]GroupMonitorModel, 0)
+	modelIndexes := make(map[string]int)
+	modelBuckets := make(map[string]map[time.Time]GroupMonitorBucket)
+	groupBuckets := make(map[time.Time]GroupMonitorBucket)
+	for rows.Next() {
+		var model string
+		var bucket GroupMonitorBucket
+		var exact, estimated int64
+		if err := rows.Scan(&model, &bucket.BucketAt, &bucket.Total, &bucket.Successes, &bucket.Failures, &exact, &estimated); err != nil {
+			return result, err
+		}
+		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
+		index, ok := modelIndexes[model]
+		if !ok {
+			index = len(models)
+			modelIndexes[model] = index
+			models = append(models, GroupMonitorModel{ActualModel: model})
+			modelBuckets[model] = make(map[time.Time]GroupMonitorBucket)
+		}
+		modelBuckets[model][bucket.BucketAt] = bucket
+		models[index].TotalRequests += bucket.Total
+		models[index].Successes += bucket.Successes
+		models[index].Failures += bucket.Failures
+		models[index].ExactModelRequests += exact
+		models[index].EstimatedModelRequests += estimated
+		combined := groupBuckets[bucket.BucketAt]
+		combined.BucketAt = bucket.BucketAt
+		combined.Total += bucket.Total
+		combined.Successes += bucket.Successes
+		combined.Failures += bucket.Failures
+		groupBuckets[bucket.BucketAt] = combined
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	for index := range models {
+		models[index].Timeline = completeGroupTimeline(request.From, request.To, modelBuckets[models[index].ActualModel])
+		models[index].SuccessRate = successRatePtr(models[index].Successes, models[index].TotalRequests)
+	}
+	result.Group = buildGroupCard(dimension, request.From, request.To, groupBuckets)
+	result.Models = models
+	return result, nil
+}
+
+func (s *AdminService) loadVisibleGroupDimensions(ctx context.Context) ([]GroupDimension, error) {
+	rows, err := s.repo.db.QueryContext(ctx, groupDimensionsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]GroupDimension, 0)
+	for rows.Next() {
+		var item GroupDimension
+		var deleted sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.Platform, &item.Status, &deleted); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time, groupIDs []int64) (map[int64]map[time.Time]GroupMonitorBucket, error) {
+	result := make(map[int64]map[time.Time]GroupMonitorBucket)
+	if len(groupIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.repo.db.QueryContext(ctx, groupTimelineSQL, from, to, pq.Array(groupIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var groupID int64
+		var bucket GroupMonitorBucket
+		if err := rows.Scan(&groupID, &bucket.BucketAt, &bucket.Total, &bucket.Successes, &bucket.Failures); err != nil {
+			return nil, err
+		}
+		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
+		if result[groupID] == nil {
+			result[groupID] = make(map[time.Time]GroupMonitorBucket)
+		}
+		result[groupID][bucket.BucketAt] = bucket
+	}
+	return result, rows.Err()
+}
+
+func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[time.Time]GroupMonitorBucket) GroupMonitorCard {
+	card := GroupMonitorCard{GroupID: dimension.ID, Name: dimension.Name, Platform: dimension.Platform, GroupStatus: dimension.Status}
+	card.Timeline = completeGroupTimeline(from, to, buckets)
+	for _, bucket := range card.Timeline {
+		card.TotalRequests += bucket.Total
+		card.Successes += bucket.Successes
+		card.Failures += bucket.Failures
+	}
+	card.SuccessRate = successRatePtr(card.Successes, card.TotalRequests)
+	if len(card.Timeline) == 0 || card.TotalRequests == 0 {
+		card.CallStatus = "no_data"
+	} else {
+		last := card.Timeline[len(card.Timeline)-1]
+		if last.Total == 0 {
+			card.CallStatus = "recently_idle"
+		} else {
+			card.CallStatus = last.Status
+		}
+	}
+	return card
+}
+
+func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket) []GroupMonitorBucket {
+	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/(10*time.Minute)))
+	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(10 * time.Minute) {
+		bucket := buckets[bucketAt]
+		bucket.BucketAt = bucketAt
+		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
+		result = append(result, bucket)
+	}
+	return result
+}
+
+func groupBucketStatus(total, successes int64) string {
+	switch {
+	case total == 0:
+		return "no_data"
+	case successes == total:
+		return "normal"
+	case successes == 0:
+		return "all_failed"
+	default:
+		return "partial_failure"
+	}
+}
+
+func successRatePtr(successes, total int64) *float64 {
+	if total == 0 {
+		return nil
+	}
+	result := float64(successes) / float64(total)
+	return &result
+}
+
+func pageGroupCards(items []GroupMonitorCard, page, pageSize int) []GroupMonitorCard {
+	start := (page - 1) * pageSize
+	if start < 0 || start >= len(items) {
+		return []GroupMonitorCard{}
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }
 
 func (s *AdminService) overview(ctx context.Context, request AdminRequest) (OverviewResponse, error) {
@@ -802,7 +1122,9 @@ func (s *AdminService) dataQuality(ctx context.Context, request AdminRequest) (D
 		return result, err
 	}
 	var failed int64
-	if err := s.repo.db.QueryRowContext(ctx, requestQualitySQL, request.From, request.To).Scan(&result.UnattributedErrors, &failed); err != nil {
+	if err := s.repo.db.QueryRowContext(ctx, requestQualitySQL, request.From, request.To).Scan(
+		&result.UnattributedErrors, &failed, &result.MissingGroupRequests,
+	); err != nil {
 		return result, err
 	}
 	if failed > 0 {

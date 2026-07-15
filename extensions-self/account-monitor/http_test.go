@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -109,5 +110,71 @@ func TestHandlerRejectsUnknownEndpoint(t *testing.T) {
 	NewHandler(&fakeAdminBackend{}, "").ServeAdmin(recorder, httptest.NewRequest(http.MethodGet, "/secret", nil), "/secret", 99)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
+func TestHandlerRoutesGroupMonitorUsingCompleteTenMinuteRange(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 7, 30, 0, time.UTC)
+	tests := []struct {
+		path     string
+		resource string
+		groupID  int64
+	}{
+		{path: "/group-monitor/groups?range=6h&page_size=12", resource: "group-monitor-groups"},
+		{path: "/group-monitor/groups/42?range=24h", resource: "group-monitor-group", groupID: 42},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			backend := &fakeAdminBackend{}
+			handler := NewHandler(backend, "")
+			handler.now = func() time.Time { return now }
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "http://example.test"+test.path, nil)
+			handler.ServeAdmin(recorder, req, strings.Split(test.path, "?")[0], 99)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if backend.request.Resource != test.resource || adminRequestGroupID(t, backend.request) != test.groupID {
+				t.Fatalf("request = %+v", backend.request)
+			}
+			wantTo := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+			if !backend.request.To.Equal(wantTo) {
+				t.Fatalf("range end = %s, want %s", backend.request.To, wantTo)
+			}
+			wantDuration := 6 * time.Hour
+			if test.groupID > 0 {
+				wantDuration = 24 * time.Hour
+			}
+			if backend.request.To.Sub(backend.request.From) != wantDuration {
+				t.Fatalf("range = %s", backend.request.To.Sub(backend.request.From))
+			}
+		})
+	}
+}
+
+func adminRequestGroupID(t *testing.T, request AdminRequest) int64 {
+	t.Helper()
+	field := reflect.ValueOf(request).FieldByName("GroupID")
+	if !field.IsValid() {
+		t.Fatal("AdminRequest is missing GroupID")
+	}
+	return field.Int()
+}
+
+func TestHandlerRejectsInvalidGroupMonitorOptions(t *testing.T) {
+	for _, path := range []string{
+		"/group-monitor/groups?range=2h",
+		"/group-monitor/groups?page_size=20",
+		"/group-monitor/groups/no?range=6h",
+	} {
+		backend := &fakeAdminBackend{}
+		handler := NewHandler(backend, "")
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "http://example.test"+path, nil)
+		handler.ServeAdmin(recorder, req, strings.Split(path, "?")[0], 99)
+		if recorder.Code != http.StatusBadRequest && recorder.Code != http.StatusNotFound {
+			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
 	}
 }
