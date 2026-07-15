@@ -31,20 +31,21 @@ const (
 )
 
 type AdminRequest struct {
-	Resource  string
-	Method    string
-	ActorID   int64
-	AccountID int64
-	GroupID   int64
-	JobID     int64
-	From      time.Time
-	To        time.Time
-	Page      int
-	PageSize  int
-	SortBy    string
-	SortOrder string
-	Query     map[string]string
-	Body      json.RawMessage
+	Resource      string
+	Method        string
+	ActorID       int64
+	AccountID     int64
+	GroupID       int64
+	JobID         int64
+	From          time.Time
+	To            time.Time
+	Page          int
+	PageSize      int
+	BucketSeconds int
+	SortBy        string
+	SortOrder     string
+	Query         map[string]string
+	Body          json.RawMessage
 }
 
 type AdminBackend interface {
@@ -158,13 +159,8 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	if groupMonitor {
 		defaultPageSize = 12
 	}
-	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), defaultPageSize); err != nil ||
-		(!groupMonitor && pageSize != 20 && pageSize != 50 && pageSize != 100) ||
-		(groupMonitor && pageSize != 12 && pageSize != 24 && pageSize != 48) {
-		if groupMonitor {
-			return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 12, 24, or 48")
-		}
-		return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be one of 20, 50, or 100")
+	if pageSize, err := parsePositiveInt(r.URL.Query().Get("page_size"), defaultPageSize); err != nil || pageSize < 5 || pageSize > 1000 {
+		return AdminRequest{}, http.StatusBadRequest, errors.New("page_size must be an integer from 5 to 1000")
 	} else {
 		request.PageSize = pageSize
 	}
@@ -190,7 +186,7 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 		var from, to time.Time
 		var err error
 		if groupMonitor {
-			from, to, err = h.parseGroupRange(r)
+			from, to, request.BucketSeconds, err = h.parseGroupRange(r)
 		} else {
 			from, to, err = h.parseRange(r)
 		}
@@ -219,20 +215,32 @@ func (h *Handler) parseAdminRequest(r *http.Request, relativePath string, actorI
 	return request, http.StatusOK, nil
 }
 
-func (h *Handler) parseGroupRange(r *http.Request) (time.Time, time.Time, error) {
-	durations := map[string]time.Duration{
-		"1h": time.Hour, "6h": 6 * time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour,
-	}
+func (h *Handler) parseGroupRange(r *http.Request) (time.Time, time.Time, int, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get("range"))
 	if raw == "" {
 		raw = "6h"
 	}
-	duration, ok := durations[raw]
-	if !ok {
-		return time.Time{}, time.Time{}, errors.New("range must be one of 1h, 6h, 12h, or 24h")
+	var duration time.Duration
+	bucketSeconds := 600
+	switch raw {
+	case "1h":
+		duration = time.Hour
+	case "6h":
+		duration = 6 * time.Hour
+	case "12h":
+		duration = 12 * time.Hour
+	case "24h":
+		duration = 24 * time.Hour
+	case "7d":
+		duration, bucketSeconds = 7*24*time.Hour, 3600
+	case "30d":
+		duration, bucketSeconds = 30*24*time.Hour, 21600
+	default:
+		return time.Time{}, time.Time{}, 0, errors.New("range must be one of 1h, 6h, 12h, 24h, 7d, or 30d")
 	}
-	to := h.now().UTC().Truncate(10 * time.Minute)
-	return to.Add(-duration), to, nil
+	bucketDuration := time.Duration(bucketSeconds) * time.Second
+	to := h.now().UTC().Truncate(bucketDuration)
+	return to.Add(-duration), to, bucketSeconds, nil
 }
 
 func (h *Handler) parseRange(r *http.Request) (time.Time, time.Time, error) {

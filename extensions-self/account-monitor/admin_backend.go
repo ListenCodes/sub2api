@@ -250,18 +250,23 @@ FROM account_monitor_group_dimensions
 WHERE group_id=$1 AND deleted_at IS NULL`
 
 const groupTimelineSQL = `
-SELECT group_id,bucket_at,SUM(total_requests),SUM(successes),SUM(failures)
+SELECT group_id,
+       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+       SUM(total_requests),SUM(successes),SUM(failures)
 FROM account_monitor_group_model_10m
 WHERE bucket_at >= $1 AND bucket_at < $2 AND group_id=ANY($3)
-GROUP BY group_id,bucket_at
-ORDER BY group_id,bucket_at`
+GROUP BY group_id,display_bucket
+ORDER BY group_id,display_bucket`
 
 const groupModelTimelineSQL = `
-SELECT actual_model,bucket_at,total_requests,successes,failures,
-       exact_model_requests,estimated_model_requests
+SELECT actual_model,
+       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+       SUM(total_requests),SUM(successes),SUM(failures),
+       SUM(exact_model_requests),SUM(estimated_model_requests)
 FROM account_monitor_group_model_10m
 WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
-ORDER BY LOWER(actual_model),actual_model,bucket_at`
+GROUP BY actual_model,display_bucket
+ORDER BY LOWER(actual_model),actual_model,display_bucket`
 
 type AdminService struct {
 	repo         *Repository
@@ -389,13 +394,14 @@ type GroupMonitorCard struct {
 }
 
 type GroupMonitorGroupsResponse struct {
-	Items     []GroupMonitorCard  `json:"items"`
-	Total     int64               `json:"total"`
-	Page      int                 `json:"page"`
-	PageSize  int                 `json:"page_size"`
-	Platforms []string            `json:"platforms"`
-	DataAsOf  *time.Time          `json:"data_as_of"`
-	Quality   GroupMonitorQuality `json:"data_quality"`
+	Items         []GroupMonitorCard  `json:"items"`
+	Total         int64               `json:"total"`
+	Page          int                 `json:"page"`
+	PageSize      int                 `json:"page_size"`
+	BucketSeconds int                 `json:"bucket_seconds"`
+	Platforms     []string            `json:"platforms"`
+	DataAsOf      *time.Time          `json:"data_as_of"`
+	Quality       GroupMonitorQuality `json:"data_quality"`
 }
 
 type GroupMonitorModel struct {
@@ -410,9 +416,10 @@ type GroupMonitorModel struct {
 }
 
 type GroupMonitorDetailResponse struct {
-	Group    GroupMonitorCard    `json:"group"`
-	Models   []GroupMonitorModel `json:"models"`
-	DataAsOf time.Time           `json:"data_as_of"`
+	Group         GroupMonitorCard    `json:"group"`
+	Models        []GroupMonitorModel `json:"models"`
+	DataAsOf      time.Time           `json:"data_as_of"`
+	BucketSeconds int                 `json:"bucket_seconds"`
 }
 
 func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (any, error) {
@@ -459,9 +466,10 @@ func (s *AdminService) ExecuteAdmin(ctx context.Context, request AdminRequest) (
 }
 
 func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequest) (GroupMonitorGroupsResponse, error) {
+	bucketSeconds := normalizedGroupBucketSeconds(request.BucketSeconds)
 	result := GroupMonitorGroupsResponse{
 		Items: make([]GroupMonitorCard, 0), Page: request.Page, PageSize: request.PageSize,
-		Platforms: make([]string, 0),
+		Platforms: make([]string, 0), BucketSeconds: bucketSeconds,
 	}
 	dimensions, err := s.loadVisibleGroupDimensions(ctx)
 	if err != nil {
@@ -495,13 +503,13 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 	for _, dimension := range filteredDimensions {
 		groupIDs = append(groupIDs, dimension.ID)
 	}
-	buckets, err := s.loadGroupBuckets(ctx, request.From, request.To, groupIDs)
+	buckets, err := s.loadGroupBuckets(ctx, request.From, request.To, groupIDs, bucketSeconds)
 	if err != nil {
 		return result, err
 	}
 	callStatus := strings.TrimSpace(request.Query["call_status"])
 	for _, dimension := range filteredDimensions {
-		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID])
+		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID], bucketSeconds)
 		if callStatus != "" && card.CallStatus != callStatus {
 			continue
 		}
@@ -519,7 +527,8 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 }
 
 func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminRequest) (GroupMonitorDetailResponse, error) {
-	var result GroupMonitorDetailResponse
+	bucketSeconds := normalizedGroupBucketSeconds(request.BucketSeconds)
+	result := GroupMonitorDetailResponse{BucketSeconds: bucketSeconds}
 	result.DataAsOf = request.To
 	var dimension GroupDimension
 	var deleted sql.NullTime
@@ -528,7 +537,7 @@ func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminReque
 	); err != nil {
 		return result, err
 	}
-	rows, err := s.repo.db.QueryContext(ctx, groupModelTimelineSQL, request.GroupID, request.From, request.To)
+	rows, err := s.repo.db.QueryContext(ctx, groupModelTimelineSQL, request.GroupID, request.From, request.To, bucketSeconds)
 	if err != nil {
 		return result, err
 	}
@@ -569,10 +578,10 @@ func (s *AdminService) groupMonitorGroup(ctx context.Context, request AdminReque
 		return result, err
 	}
 	for index := range models {
-		models[index].Timeline = completeGroupTimeline(request.From, request.To, modelBuckets[models[index].ActualModel])
+		models[index].Timeline = completeGroupTimeline(request.From, request.To, modelBuckets[models[index].ActualModel], bucketSeconds)
 		models[index].SuccessRate = successRatePtr(models[index].Successes, models[index].TotalRequests)
 	}
-	result.Group = buildGroupCard(dimension, request.From, request.To, groupBuckets)
+	result.Group = buildGroupCard(dimension, request.From, request.To, groupBuckets, bucketSeconds)
 	result.Models = models
 	return result, nil
 }
@@ -595,12 +604,16 @@ func (s *AdminService) loadVisibleGroupDimensions(ctx context.Context) ([]GroupD
 	return result, rows.Err()
 }
 
-func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time, groupIDs []int64) (map[int64]map[time.Time]GroupMonitorBucket, error) {
+func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time, groupIDs []int64, requestedBucketSeconds ...int) (map[int64]map[time.Time]GroupMonitorBucket, error) {
 	result := make(map[int64]map[time.Time]GroupMonitorBucket)
 	if len(groupIDs) == 0 {
 		return result, nil
 	}
-	rows, err := s.repo.db.QueryContext(ctx, groupTimelineSQL, from, to, pq.Array(groupIDs))
+	bucketSeconds := 600
+	if len(requestedBucketSeconds) > 0 {
+		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
+	}
+	rows, err := s.repo.db.QueryContext(ctx, groupTimelineSQL, from, to, pq.Array(groupIDs), bucketSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -611,6 +624,7 @@ func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time,
 		if err := rows.Scan(&groupID, &bucket.BucketAt, &bucket.Total, &bucket.Successes, &bucket.Failures); err != nil {
 			return nil, err
 		}
+		bucket.BucketAt = bucket.BucketAt.UTC()
 		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
 		if result[groupID] == nil {
 			result[groupID] = make(map[time.Time]GroupMonitorBucket)
@@ -620,9 +634,9 @@ func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time,
 	return result, rows.Err()
 }
 
-func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[time.Time]GroupMonitorBucket) GroupMonitorCard {
+func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[time.Time]GroupMonitorBucket, requestedBucketSeconds ...int) GroupMonitorCard {
 	card := GroupMonitorCard{GroupID: dimension.ID, Name: dimension.Name, Platform: dimension.Platform, GroupStatus: dimension.Status}
-	card.Timeline = completeGroupTimeline(from, to, buckets)
+	card.Timeline = completeGroupTimeline(from, to, buckets, requestedBucketSeconds...)
 	for _, bucket := range card.Timeline {
 		card.TotalRequests += bucket.Total
 		card.Successes += bucket.Successes
@@ -642,19 +656,33 @@ func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[ti
 	return card
 }
 
-func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket) []GroupMonitorBucket {
+func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket, requestedBucketSeconds ...int) []GroupMonitorBucket {
+	bucketSeconds := 600
+	if len(requestedBucketSeconds) > 0 {
+		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
+	}
+	bucketDuration := time.Duration(bucketSeconds) * time.Second
 	normalizedBuckets := make(map[time.Time]GroupMonitorBucket, len(buckets))
 	for bucketAt, bucket := range buckets {
 		normalizedBuckets[bucketAt.UTC()] = bucket
 	}
-	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/(10*time.Minute)))
-	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(10 * time.Minute) {
+	result := make([]GroupMonitorBucket, 0, int(to.Sub(from)/bucketDuration))
+	for bucketAt := from.UTC(); bucketAt.Before(to); bucketAt = bucketAt.Add(bucketDuration) {
 		bucket := normalizedBuckets[bucketAt]
 		bucket.BucketAt = bucketAt
 		bucket.Status = groupBucketStatus(bucket.Total, bucket.Successes)
 		result = append(result, bucket)
 	}
 	return result
+}
+
+func normalizedGroupBucketSeconds(value int) int {
+	switch value {
+	case 600, 3600, 21600:
+		return value
+	default:
+		return 600
+	}
 }
 
 func groupBucketStatus(total, successes int64) string {
