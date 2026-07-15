@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const overviewAttemptsSQL = `
@@ -100,6 +102,15 @@ SELECT COUNT(*) FILTER (WHERE result='failed' AND account_id IS NULL),COUNT(*) F
 FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
 
 const selectThresholdSQL = `SELECT config FROM account_monitor_thresholds WHERE scope_type='global' AND scope_id=0`
+const selectThresholdOverridesSQL = `SELECT scope_type,scope_id,config FROM account_monitor_thresholds ORDER BY scope_type,scope_id`
+const healthMetricsSQL = `
+SELECT CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END AS rollup_account_id,
+       COUNT(*),COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
+       MAX(attempted_at) FILTER (WHERE result='succeeded')
+FROM account_monitor_attempt_facts
+WHERE attempted_at >= $1 AND attempted_at < $2
+  AND (cardinality($4::bigint[])=0 OR (CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END)=ANY($4))
+GROUP BY 1 ORDER BY 1`
 const upsertThresholdSQL = `
 INSERT INTO account_monitor_thresholds(scope_type,scope_id,config,updated_by,updated_at)
 VALUES ($1,$2,$3,$4,NOW())
@@ -113,13 +124,14 @@ type AdminService struct {
 	repo         *Repository
 	source       *PostgresSource
 	queryTimeout time.Duration
+	now          func() time.Time
 }
 
 func NewAdminService(repo *Repository, source *PostgresSource, queryTimeout time.Duration) *AdminService {
 	if queryTimeout <= 0 {
 		queryTimeout = 3 * time.Second
 	}
-	return &AdminService{repo: repo, source: source, queryTimeout: queryTimeout}
+	return &AdminService{repo: repo, source: source, queryTimeout: queryTimeout, now: func() time.Time { return time.Now().UTC() }}
 }
 
 type OverviewResponse struct {
@@ -240,6 +252,15 @@ func (s *AdminService) overview(ctx context.Context, request AdminRequest) (Over
 	if err := s.repo.db.QueryRowContext(ctx, syncOverviewSQL).Scan(&result.LastSyncAt, &result.SyncLagSeconds); err != nil {
 		return result, err
 	}
+	healthByAccount, err := s.evaluateAccountHealth(ctx, "physical", nil)
+	if err != nil {
+		return result, err
+	}
+	for _, health := range healthByAccount {
+		if health.Level != HealthNormal {
+			result.AbnormalAccounts++
+		}
+	}
 	return result, nil
 }
 
@@ -280,11 +301,21 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 			return PageResponse{}, err
 		}
 		item.AccountName = fmt.Sprintf("账号 %d", item.AccountID)
-		item.Health = EvaluateHealth(HealthMetrics{Attempts1H: item.Attempts, Successes1H: item.Successes, Failures1H: item.Failures, LastSuccessAt: item.LastSuccessAt}, DefaultThresholds(), time.Now().UTC())
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return PageResponse{}, err
+	}
+	healthByAccount, err := s.evaluateAccountHealth(ctx, rollup, items)
+	if err != nil {
+		return PageResponse{}, err
+	}
+	for index := range items {
+		health, ok := healthByAccount[items[index].AccountID]
+		if !ok {
+			health = Health{Level: HealthNormal, Reasons: []string{}}
+		}
+		items[index].Health = health
 	}
 	if s.source != nil && len(items) > 0 {
 		ids := make([]int64, 0, len(items))
@@ -300,6 +331,65 @@ func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (Page
 		}
 	}
 	return PageResponse{Items: items, Total: total, Page: request.Page, PageSize: request.PageSize}, nil
+}
+
+func (s *AdminService) evaluateAccountHealth(ctx context.Context, rollup string, accounts []AccountSummary) (map[int64]Health, error) {
+	overrides, err := s.loadThresholdOverrides(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accountIDs := make([]int64, 0, len(accounts))
+	contexts := make(map[int64]ThresholdContext, len(accounts))
+	for _, account := range accounts {
+		accountIDs = append(accountIDs, account.AccountID)
+		contexts[account.AccountID] = ThresholdContext{ParentAccountID: account.ParentAccountID, AccountID: account.AccountID}
+	}
+	now := s.now()
+	rows, err := s.repo.db.QueryContext(ctx, healthMetricsSQL, now.Add(-time.Hour), now, rollup, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]Health)
+	for rows.Next() {
+		var accountID, attempts, successes, failures int64
+		var lastSuccess sql.NullTime
+		if err := rows.Scan(&accountID, &attempts, &successes, &failures, &lastSuccess); err != nil {
+			return nil, err
+		}
+		metrics := HealthMetrics{Attempts1H: attempts, Successes1H: successes, Failures1H: failures}
+		if lastSuccess.Valid {
+			metrics.LastSuccessAt = lastSuccess.Time
+		}
+		thresholds := ResolveThresholds(DefaultThresholds(), overrides, contexts[accountID])
+		result[accountID] = EvaluateHealth(metrics, thresholds, now)
+	}
+	return result, rows.Err()
+}
+
+func (s *AdminService) loadThresholdOverrides(ctx context.Context) ([]ThresholdOverride, error) {
+	rows, err := s.repo.db.QueryContext(ctx, selectThresholdOverridesSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	overrides := make([]ThresholdOverride, 0)
+	for rows.Next() {
+		var override ThresholdOverride
+		var raw []byte
+		if err := rows.Scan(&override.Scope, &override.ScopeID, &raw); err != nil {
+			return nil, err
+		}
+		var config struct {
+			SuccessRate *float64 `json:"success_rate"`
+		}
+		if err := json.Unmarshal(raw, &config); err != nil {
+			return nil, err
+		}
+		override.SuccessRate = config.SuccessRate
+		overrides = append(overrides, override)
+	}
+	return overrides, rows.Err()
 }
 
 func (s *AdminService) account(ctx context.Context, request AdminRequest) (AccountSummary, error) {
@@ -423,7 +513,10 @@ func (s *AdminService) attempts(ctx context.Context, request AdminRequest) (Page
 }
 
 func (s *AdminService) dataQuality(ctx context.Context, request AdminRequest) (DataQualityResponse, error) {
-	result := DataQualityResponse{SourceConnected: s.source != nil, DataSource: "90 天明细"}
+	result := DataQualityResponse{DataSource: "90 天明细"}
+	if s.source != nil {
+		result.SourceConnected = s.source.Ping(ctx) == nil
+	}
 	if err := s.repo.db.QueryRowContext(ctx, dataQualitySQL, request.From, request.To).Scan(&result.ExactModels, &result.EstimatedModels, &result.FallbackIdentities, &result.RecoveredFailures); err != nil {
 		return result, err
 	}

@@ -132,6 +132,15 @@ func NewPostgresSource(db *sql.DB, queryTimeout time.Duration, batchSize int) *P
 	return &PostgresSource{db: db, queryTimeout: queryTimeout, batchSize: batchSize}
 }
 
+func (s *PostgresSource) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("account monitor source database is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	return s.db.PingContext(ctx)
+}
+
 func (s *PostgresSource) ReadUsage(ctx context.Context, after Cursor, from time.Time, limit int) ([]UsageSourceRow, error) {
 	return s.readUsage(ctx, usageSourceQuery, from, after.Time, after.ID, s.pageSize(limit))
 }

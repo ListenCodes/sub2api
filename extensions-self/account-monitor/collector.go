@@ -117,15 +117,18 @@ func (c *Collector) SyncOnce(ctx context.Context) error {
 
 func (c *Collector) readAllUsage(ctx context.Context, cursor Cursor, from time.Time) ([]UsageSourceRow, Cursor, error) {
 	all := make([]UsageSourceRow, 0)
+	scan := Cursor{Time: from}
 	latest := cursor
 	for {
-		rows, err := c.source.ReadUsage(ctx, latest, from, c.cfg.BatchSize)
+		rows, err := c.source.ReadUsage(ctx, scan, from, c.cfg.BatchSize)
 		if err != nil {
 			return nil, latest, err
 		}
 		all = append(all, rows...)
 		for _, row := range rows {
-			latest = laterCursor(latest, Cursor{Time: row.CreatedAt, ID: row.ID})
+			rowCursor := Cursor{Time: row.CreatedAt, ID: row.ID}
+			scan = laterCursor(scan, rowCursor)
+			latest = laterCursor(latest, rowCursor)
 		}
 		if len(rows) < c.cfg.BatchSize {
 			return all, latest, nil
@@ -135,15 +138,18 @@ func (c *Collector) readAllUsage(ctx context.Context, cursor Cursor, from time.T
 
 func (c *Collector) readAllErrors(ctx context.Context, cursor Cursor, from time.Time) ([]ErrorSourceRow, Cursor, error) {
 	all := make([]ErrorSourceRow, 0)
+	scan := Cursor{Time: from}
 	latest := cursor
 	for {
-		rows, err := c.source.ReadErrors(ctx, latest, from, c.cfg.BatchSize)
+		rows, err := c.source.ReadErrors(ctx, scan, from, c.cfg.BatchSize)
 		if err != nil {
 			return nil, latest, err
 		}
 		all = append(all, rows...)
 		for _, row := range rows {
-			latest = laterCursor(latest, Cursor{Time: row.CreatedAt, ID: row.ID})
+			rowCursor := Cursor{Time: row.CreatedAt, ID: row.ID}
+			scan = laterCursor(scan, rowCursor)
+			latest = laterCursor(latest, rowCursor)
 		}
 		if len(rows) < c.cfg.BatchSize {
 			return all, latest, nil

@@ -10,14 +10,17 @@ import (
 type fakeCollectorSource struct {
 	usageAfter Cursor
 	usageFrom  time.Time
+	usageCalls []Cursor
 	errorAfter Cursor
 	errorFrom  time.Time
+	errorCalls []Cursor
 	usage      []UsageSourceRow
 	errors     []ErrorSourceRow
 }
 
 func (f *fakeCollectorSource) ReadUsage(_ context.Context, after Cursor, from time.Time, _ int) ([]UsageSourceRow, error) {
 	f.usageAfter, f.usageFrom = after, from
+	f.usageCalls = append(f.usageCalls, after)
 	rows := f.usage
 	f.usage = nil
 	return rows, nil
@@ -25,6 +28,7 @@ func (f *fakeCollectorSource) ReadUsage(_ context.Context, after Cursor, from ti
 
 func (f *fakeCollectorSource) ReadErrors(_ context.Context, after Cursor, from time.Time, _ int) ([]ErrorSourceRow, error) {
 	f.errorAfter, f.errorFrom = after, from
+	f.errorCalls = append(f.errorCalls, after)
 	rows := f.errors
 	f.errors = nil
 	return rows, nil
@@ -66,10 +70,12 @@ func TestCollectorSyncOnceUsesSeparateLookbackCursors(t *testing.T) {
 	if err := collector.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if source.usageAfter != usageCursor || !source.usageFrom.Equal(usageCursor.Time.Add(-5*time.Minute)) {
+	usageScanCursor := Cursor{Time: usageCursor.Time.Add(-5 * time.Minute)}
+	errorScanCursor := Cursor{Time: errorCursor.Time.Add(-5 * time.Minute)}
+	if source.usageAfter != usageScanCursor || !source.usageFrom.Equal(usageScanCursor.Time) {
 		t.Fatalf("usage cursor=%+v from=%s", source.usageAfter, source.usageFrom)
 	}
-	if source.errorAfter != errorCursor || !source.errorFrom.Equal(errorCursor.Time.Add(-5*time.Minute)) {
+	if source.errorAfter != errorScanCursor || !source.errorFrom.Equal(errorScanCursor.Time) {
 		t.Fatalf("error cursor=%+v from=%s", source.errorAfter, source.errorFrom)
 	}
 	if store.batch.UsageCursor.ID != 11 || store.batch.ErrorCursor.ID != 21 {
@@ -77,6 +83,30 @@ func TestCollectorSyncOnceUsesSeparateLookbackCursors(t *testing.T) {
 	}
 	if !store.cleanedAt.Equal(now) {
 		t.Fatalf("cleanup time = %s", store.cleanedAt)
+	}
+}
+
+func TestCollectorSyncOnceCollectsLateRowsWithoutRegressingCursor(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	persisted := Cursor{Time: now.Add(-time.Minute), ID: 100}
+	lateAt := persisted.Time.Add(-2 * time.Minute)
+	source := &fakeCollectorSource{
+		usage: []UsageSourceRow{{ID: 90, CreatedAt: lateAt, ActualCost: 1, AccountID: 1}},
+	}
+	store := &fakeCollectorStore{usageCursor: persisted, errorCursor: persisted}
+	collector := NewCollector(source, store, Config{Lookback: 5 * time.Minute, BatchSize: 100}, func() time.Time { return now })
+
+	if err := collector.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(source.usageCalls) != 1 || source.usageCalls[0] != (Cursor{Time: persisted.Time.Add(-5 * time.Minute)}) {
+		t.Fatalf("usage scan cursors = %+v", source.usageCalls)
+	}
+	if len(store.batch.Attempts) != 1 {
+		t.Fatalf("committed attempts = %d, want late row", len(store.batch.Attempts))
+	}
+	if store.batch.UsageCursor != persisted {
+		t.Fatalf("committed cursor = %+v, want persisted %+v", store.batch.UsageCursor, persisted)
 	}
 }
 
