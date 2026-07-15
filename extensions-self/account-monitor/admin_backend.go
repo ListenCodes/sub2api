@@ -247,13 +247,13 @@ func accountSortClause(sortBy, order string) string {
 	columns := map[string]string{"attempts": "attempts", "success_rate": "success_rate", "failures": "failures", "tokens": "tokens", "user_cost": "user_cost", "p95_duration_ms": "p95_duration_ms"}
 	column, ok := columns[sortBy]
 	if !ok {
-		return "attempts DESC, account_id ASC"
+		return "attempts DESC, rollup_account_id ASC"
 	}
 	direction := "DESC"
 	if strings.EqualFold(order, "asc") {
 		direction = "ASC"
 	}
-	return column + " " + direction + ", account_id ASC"
+	return column + " " + direction + ", rollup_account_id ASC"
 }
 
 func (s *AdminService) accounts(ctx context.Context, request AdminRequest) (PageResponse, error) {

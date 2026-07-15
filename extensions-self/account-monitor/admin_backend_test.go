@@ -35,10 +35,10 @@ func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 }
 
 func TestAccountSortClauseUsesWhitelist(t *testing.T) {
-	if got := accountSortClause("success_rate", "asc"); got != "success_rate ASC, account_id ASC" {
+	if got := accountSortClause("success_rate", "asc"); got != "success_rate ASC, rollup_account_id ASC" {
 		t.Fatalf("sort = %q", got)
 	}
-	if got := accountSortClause("attempts; DROP TABLE x", "asc"); got != "attempts DESC, account_id ASC" {
+	if got := accountSortClause("attempts; DROP TABLE x", "asc"); got != "attempts DESC, rollup_account_id ASC" {
 		t.Fatalf("unsafe sort = %q", got)
 	}
 }
