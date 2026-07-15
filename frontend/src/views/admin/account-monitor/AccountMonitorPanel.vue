@@ -32,17 +32,16 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { accountMonitorAPI, type AccountDataQuality, type AccountFilters, type AccountMonitorAccount, type AccountMonitorOverview, type AccountPageSize } from '@/api/admin/accountMonitor'
-import AccountMonitorOverviewPanel from './AccountMonitorOverview.vue'
+import { accountMonitorAPI, type AccountDataQuality, type AccountFilters, type AccountMonitorAccount, type AccountMonitorOverview as AccountMonitorOverviewResponse, type AccountPageSize } from '@/api/admin/accountMonitor'
+import AccountMonitorOverview from './AccountMonitorOverview.vue'
 import AccountMonitorFilters from './AccountMonitorFilters.vue'
 import AccountMonitorTable from './AccountMonitorTable.vue'
 import AccountMonitorDrawer from './AccountMonitorDrawer.vue'
 import AccountMonitorThresholdDialog from './AccountMonitorThresholdDialog.vue'
 import AccountMonitorRebuildDialog from './AccountMonitorRebuildDialog.vue'
-import { resolveTimeRange, useAccountMonitorFilters, type AccountDetailTab, type AccountMonitorFilterState } from './useAccountMonitorFilters'
+import { resolveTimeRange, useAccountMonitorFilters, type AccountDetailTab } from './useAccountMonitorFilters'
 
-const AccountMonitorOverview = AccountMonitorOverviewPanel
-const overview = ref<AccountMonitorOverview | null>(null)
+const overview = ref<AccountMonitorOverviewResponse | null>(null)
 const quality = ref<AccountDataQuality | null>(null)
 const accounts = ref<AccountMonitorAccount[]>([])
 const total = ref(0)
