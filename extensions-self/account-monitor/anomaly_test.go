@@ -45,3 +45,22 @@ func TestEvaluateHealthAuthenticationFailuresAreCritical(t *testing.T) {
 		t.Fatalf("level = %q, reasons=%v", health.Level, health.Reasons)
 	}
 }
+
+func TestEvaluateHealthFlagsActiveAccountWithNoSuccess(t *testing.T) {
+	health := EvaluateHealth(HealthMetrics{Attempts1H: 8, Failures1H: 8}, DefaultThresholds(), time.Now())
+	if health.Level != HealthAttention {
+		t.Fatalf("level = %q, reasons=%v", health.Level, health.Reasons)
+	}
+	if joined := strings.Join(health.Reasons, " "); !strings.Contains(joined, "没有成功调用") {
+		t.Fatalf("reasons = %q", joined)
+	}
+}
+
+func TestPlatformScopeIDIsStableAndDistinct(t *testing.T) {
+	if PlatformScopeID(" Anthropic ") != PlatformScopeID("anthropic") {
+		t.Fatal("platform scope id must normalize case and whitespace")
+	}
+	if PlatformScopeID("anthropic") == 0 || PlatformScopeID("anthropic") == PlatformScopeID("openai") {
+		t.Fatal("platform scope ids must be non-zero and distinct")
+	}
+}

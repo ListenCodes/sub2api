@@ -135,13 +135,80 @@ FROM account_monitor_request_facts WHERE occurred_at >= $1 AND occurred_at < $2`
 const selectThresholdSQL = `SELECT config FROM account_monitor_thresholds WHERE scope_type='global' AND scope_id=0`
 const selectThresholdOverridesSQL = `SELECT scope_type,scope_id,config FROM account_monitor_thresholds ORDER BY scope_type,scope_id`
 const healthMetricsSQL = `
-SELECT CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END AS rollup_account_id,
-       COUNT(*),COUNT(*) FILTER (WHERE result='succeeded'),COUNT(*) FILTER (WHERE result='failed'),
-       MAX(attempted_at) FILTER (WHERE result='succeeded')
-FROM account_monitor_attempt_facts
-WHERE attempted_at >= $1 AND attempted_at < $2
-  AND (cardinality($4::bigint[])=0 OR (CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END)=ANY($4))
-GROUP BY 1 ORDER BY 1`
+WITH scoped AS (
+  SELECT id,CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END AS rollup_account_id,
+         parent_account_id,platform,attempted_at,result,error_category,actual_model,user_id,duration_ms
+  FROM account_monitor_attempt_facts
+  WHERE attempted_at >= $2-INTERVAL '7 days' AND attempted_at < $2
+    AND (cardinality($4::bigint[])=0 OR (CASE WHEN $3='parent' THEN COALESCE(parent_account_id,account_id) ELSE account_id END)=ANY($4))
+), account_dims AS (
+  SELECT rollup_account_id,COALESCE(MAX(parent_account_id),0) AS parent_account_id,COALESCE(MAX(platform),'') AS platform
+  FROM scoped GROUP BY rollup_account_id
+), one_hour AS (
+  SELECT rollup_account_id,COUNT(*) AS attempts,COUNT(*) FILTER (WHERE result='succeeded') AS successes,
+         COUNT(*) FILTER (WHERE result='failed') AS failures,MAX(attempted_at) FILTER (WHERE result='succeeded') AS last_success_at,
+         COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0) AS p95_duration_ms
+  FROM scoped WHERE attempted_at >= $1 GROUP BY rollup_account_id
+), fifteen_minutes AS (
+  SELECT rollup_account_id,
+         COUNT(*) FILTER (WHERE result='failed' AND error_category IN ('账号认证失效','账号额度不足')) AS auth_quota_failures,
+         COUNT(*) FILTER (WHERE result='failed' AND error_category IN ('限流','上游过载'))::float/NULLIF(COUNT(*),0) AS rate_overload_ratio
+  FROM scoped WHERE attempted_at >= $2-INTERVAL '15 minutes' GROUP BY rollup_account_id
+), daily AS (
+  SELECT rollup_account_id,COUNT(*) AS attempts FROM scoped
+  WHERE attempted_at >= $2-INTERVAL '24 hours' GROUP BY rollup_account_id
+), user_counts AS (
+  SELECT rollup_account_id,user_id,COUNT(*) AS attempts FROM scoped
+  WHERE attempted_at >= $2-INTERVAL '24 hours' AND user_id IS NOT NULL GROUP BY rollup_account_id,user_id
+), top_users AS (
+  SELECT rollup_account_id,MAX(attempts) AS attempts FROM user_counts GROUP BY rollup_account_id
+), model_ordered AS (
+  SELECT rollup_account_id,actual_model,result,
+         SUM(CASE WHEN result='succeeded' THEN 1 ELSE 0 END) OVER (
+           PARTITION BY rollup_account_id,actual_model ORDER BY attempted_at DESC,id DESC
+           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+         ) AS successes_seen
+  FROM scoped WHERE attempted_at >= $2-INTERVAL '24 hours'
+), model_streaks AS (
+  SELECT rollup_account_id,actual_model,COUNT(*) AS failures FROM model_ordered
+  WHERE result='failed' AND successes_seen=0 GROUP BY rollup_account_id,actual_model
+), consecutive_failures AS (
+  SELECT rollup_account_id,MAX(failures) AS failures FROM model_streaks GROUP BY rollup_account_id
+), error_counts AS (
+  SELECT rollup_account_id,error_category,COUNT(*) AS failures FROM scoped
+  WHERE attempted_at >= $1 AND result='failed' GROUP BY rollup_account_id,error_category
+), ranked_errors AS (
+  SELECT rollup_account_id,error_category,failures,
+         ROW_NUMBER() OVER (PARTITION BY rollup_account_id ORDER BY failures DESC,error_category) AS rank
+  FROM error_counts
+), baseline_samples AS (
+  SELECT dimensions.rollup_account_id,day_offset,
+         COUNT(sample.attempted_at) AS attempts,
+         percentile_disc(0.95) WITHIN GROUP (ORDER BY sample.duration_ms) FILTER (WHERE sample.duration_ms IS NOT NULL) AS p95_duration_ms
+  FROM account_dims dimensions CROSS JOIN generate_series(1,7) AS days(day_offset)
+  LEFT JOIN scoped sample ON sample.rollup_account_id=dimensions.rollup_account_id
+    AND sample.attempted_at >= $2-(day_offset*INTERVAL '1 day')-INTERVAL '1 hour'
+    AND sample.attempted_at < $2-(day_offset*INTERVAL '1 day')
+  GROUP BY dimensions.rollup_account_id,day_offset
+), baselines AS (
+  SELECT rollup_account_id,AVG(attempts) AS attempts,COALESCE(AVG(p95_duration_ms),0) AS p95_duration_ms
+  FROM baseline_samples GROUP BY rollup_account_id
+)
+SELECT dimensions.rollup_account_id,dimensions.parent_account_id,dimensions.platform,
+       COALESCE(hour.attempts,0),COALESCE(hour.successes,0),COALESCE(hour.failures,0),hour.last_success_at,
+       COALESCE(streak.failures,0),COALESCE(quarter.auth_quota_failures,0),COALESCE(quarter.rate_overload_ratio,0),
+       COALESCE(day.attempts,0),COALESCE(top_user.attempts::float/NULLIF(day.attempts,0),0),
+       COALESCE(hour.attempts,0),COALESCE(baseline.attempts,0),COALESCE(hour.p95_duration_ms,0),COALESCE(baseline.p95_duration_ms,0),
+       COALESCE(top_error.error_category,''),COALESCE(top_error.failures,0)
+FROM account_dims dimensions
+LEFT JOIN one_hour hour USING (rollup_account_id)
+LEFT JOIN fifteen_minutes quarter USING (rollup_account_id)
+LEFT JOIN daily day USING (rollup_account_id)
+LEFT JOIN top_users top_user USING (rollup_account_id)
+LEFT JOIN consecutive_failures streak USING (rollup_account_id)
+LEFT JOIN baselines baseline USING (rollup_account_id)
+LEFT JOIN ranked_errors top_error ON top_error.rollup_account_id=dimensions.rollup_account_id AND top_error.rank=1
+ORDER BY dimensions.rollup_account_id`
 const upsertThresholdSQL = `
 INSERT INTO account_monitor_thresholds(scope_type,scope_id,config,updated_by,updated_at)
 VALUES ($1,$2,$3,$4,NOW())
@@ -406,7 +473,7 @@ func (s *AdminService) evaluateAccountHealth(ctx context.Context, rollup string,
 	contexts := make(map[int64]ThresholdContext, len(accounts))
 	for _, account := range accounts {
 		accountIDs = append(accountIDs, account.AccountID)
-		contexts[account.AccountID] = ThresholdContext{ParentAccountID: account.ParentAccountID, AccountID: account.AccountID}
+		contexts[account.AccountID] = ThresholdContext{PlatformID: PlatformScopeID(account.Platform), ParentAccountID: account.ParentAccountID, AccountID: account.AccountID}
 	}
 	now := s.now()
 	rows, err := s.repo.db.QueryContext(ctx, healthMetricsSQL, now.Add(-time.Hour), now, rollup, pq.Array(accountIDs))
@@ -416,16 +483,28 @@ func (s *AdminService) evaluateAccountHealth(ctx context.Context, rollup string,
 	defer rows.Close()
 	result := make(map[int64]Health)
 	for rows.Next() {
-		var accountID, attempts, successes, failures int64
+		var accountID, parentAccountID int64
+		var platform, topErrorCategory string
 		var lastSuccess sql.NullTime
-		if err := rows.Scan(&accountID, &attempts, &successes, &failures, &lastSuccess); err != nil {
+		var metrics HealthMetrics
+		if err := rows.Scan(
+			&accountID, &parentAccountID, &platform,
+			&metrics.Attempts1H, &metrics.Successes1H, &metrics.Failures1H, &lastSuccess,
+			&metrics.ConsecutiveModelFailures, &metrics.AuthOrQuotaFailures15M, &metrics.RateOrOverloadRatio15M,
+			&metrics.Attempts24H, &metrics.TopUserRatio24H, &metrics.CurrentHourVolume, &metrics.BaselineHourVolume,
+			&metrics.P95DurationMS, &metrics.BaselineP95DurationMS, &topErrorCategory, &metrics.TopErrorCount,
+		); err != nil {
 			return nil, err
 		}
-		metrics := HealthMetrics{Attempts1H: attempts, Successes1H: successes, Failures1H: failures}
 		if lastSuccess.Valid {
 			metrics.LastSuccessAt = lastSuccess.Time
 		}
-		thresholds := ResolveThresholds(DefaultThresholds(), overrides, contexts[accountID])
+		metrics.TopErrorCategory = ErrorCategory(topErrorCategory)
+		thresholdContext := contexts[accountID]
+		thresholdContext.AccountID = accountID
+		thresholdContext.ParentAccountID = parentAccountID
+		thresholdContext.PlatformID = PlatformScopeID(platform)
+		thresholds := ResolveThresholds(DefaultThresholds(), overrides, thresholdContext)
 		result[accountID] = EvaluateHealth(metrics, thresholds, now)
 	}
 	return result, rows.Err()

@@ -24,8 +24,8 @@ func TestAdminServiceOverviewUsesAttemptAndRequestFacts(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).WillReturnRows(sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}))
 	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).WithArgs(to.Add(-time.Hour), to, "physical", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(healthMetricColumns()).
-			AddRow(int64(1), int64(20), int64(10), int64(10), to.Add(-time.Minute)).
-			AddRow(int64(2), int64(30), int64(30), int64(0), to.Add(-time.Minute)))
+			AddRow(int64(1), int64(0), "openai", int64(20), int64(10), int64(10), to.Add(-time.Minute), 0, 0, 0.0, int64(20), 0.0, int64(20), 20.0, int64(100), 100.0, "限流", int64(10)).
+			AddRow(int64(2), int64(0), "anthropic", int64(30), int64(30), int64(0), to.Add(-time.Minute), 0, 0, 0.0, int64(30), 0.0, int64(30), 30.0, int64(100), 100.0, "", int64(0)))
 
 	service := NewAdminService(NewRepository(db), nil, time.Second)
 	service.now = func() time.Time { return to }
@@ -61,11 +61,12 @@ func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 			))
 	mock.ExpectQuery(regexp.QuoteMeta(selectThresholdOverridesSQL)).WillReturnRows(
 		sqlmock.NewRows([]string{"scope_type", "scope_id", "config"}).
-			AddRow("global", int64(0), []byte(`{"success_rate":0.95}`)),
+			AddRow("global", int64(0), []byte(`{"success_rate":0.95}`)).
+			AddRow("platform", PlatformScopeID("anthropic"), []byte(`{"success_rate":0.96}`)),
 	)
 	mock.ExpectQuery(regexp.QuoteMeta(healthMetricsSQL)).WithArgs(now.Add(-time.Hour), now, "physical", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(healthMetricColumns()).AddRow(
-			int64(9), int64(20), int64(18), int64(2), now.Add(-time.Minute),
+			int64(9), int64(7), "anthropic", int64(20), int64(18), int64(2), now.Add(-time.Minute), 0, 3, 0.0, int64(20), 0.0, int64(20), 20.0, int64(300), 300.0, "限流", int64(2),
 		))
 
 	service := NewAdminService(NewRepository(db), nil, time.Second)
@@ -77,11 +78,11 @@ func TestAdminServiceAccountsUsesSavedThresholdAndOneHourMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := result.(PageResponse).Items.([]AccountSummary)
-	if len(items) != 2 || items[0].Health.Level != HealthAbnormal || items[1].Health.Level != HealthNormal {
+	if len(items) != 2 || items[0].Health.Level != HealthCritical || items[1].Health.Level != HealthNormal {
 		t.Fatalf("accounts = %+v", items)
 	}
 	reason := strings.Join(items[0].Health.Reasons, " ")
-	for _, want := range []string{"近 1 小时调用 20 次", "成功率 90.0%", "低于 95.0% 阈值"} {
+	for _, want := range []string{"认证失效或额度不足 3 次", "近 1 小时调用 20 次", "成功率 90.0%", "低于 96.0% 阈值"} {
 		if !strings.Contains(reason, want) {
 			t.Fatalf("health reason %q missing %q", reason, want)
 		}
@@ -282,5 +283,5 @@ func accountSummaryColumns() []string {
 }
 
 func healthMetricColumns() []string {
-	return []string{"account_id", "attempts", "successes", "failures", "last_success_at"}
+	return []string{"account_id", "parent_account_id", "platform", "attempts", "successes", "failures", "last_success_at", "consecutive_model_failures", "auth_quota_failures_15m", "rate_overload_ratio_15m", "attempts_24h", "top_user_ratio_24h", "current_hour_volume", "baseline_hour_volume", "p95_duration_ms", "baseline_p95_duration_ms", "top_error_category", "top_error_count"}
 }

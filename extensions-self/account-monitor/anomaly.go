@@ -2,6 +2,8 @@ package accountmonitor
 
 import (
 	"fmt"
+	"hash/fnv"
+	"strings"
 	"time"
 )
 
@@ -38,6 +40,20 @@ type ThresholdContext struct {
 	PlatformID      int64
 	ParentAccountID int64
 	AccountID       int64
+}
+
+func PlatformScopeID(platform string) int64 {
+	normalized := strings.ToLower(strings.TrimSpace(platform))
+	if normalized == "" {
+		return 0
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(normalized))
+	value := int64(hash.Sum64() & uint64(^uint64(0)>>1))
+	if value == 0 {
+		return 1
+	}
+	return value
 }
 
 func DefaultThresholds() Thresholds {
@@ -141,7 +157,7 @@ func EvaluateHealth(metrics HealthMetrics, thresholds Thresholds, now time.Time)
 	if metrics.RateOrOverloadRatio15M > thresholds.RateErrorsRatio15M {
 		add(HealthAttention, fmt.Sprintf("近 15 分钟限流或过载占比 %.1f%%，高于 %.1f%% 阈值。", metrics.RateOrOverloadRatio15M*100, thresholds.RateErrorsRatio15M*100))
 	}
-	if metrics.Attempts1H > 0 && !metrics.LastSuccessAt.IsZero() && now.Sub(metrics.LastSuccessAt) >= thresholds.NoSuccessDuration {
+	if metrics.Attempts1H > 0 && (metrics.LastSuccessAt.IsZero() || now.Sub(metrics.LastSuccessAt) >= thresholds.NoSuccessDuration) {
 		add(HealthAttention, fmt.Sprintf("活跃账号已连续 %s 没有成功调用。", thresholds.NoSuccessDuration))
 	}
 	if metrics.Attempts24H >= int64(thresholds.UserConcentrationMinimum) && metrics.TopUserRatio24H > thresholds.UserConcentration {

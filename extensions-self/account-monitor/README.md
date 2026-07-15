@@ -47,14 +47,18 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 
 - `GET /overview`
 - `GET /accounts`、`GET /accounts/:id`
-- `GET /accounts/:id/models|users|errors`
+- `GET /accounts/:id/models|users|errors|trends`
 - `GET /attempts`
 - `GET /data-quality`
 - `GET|PUT /thresholds`
 - `POST /rebuild-jobs`、`GET /rebuild-jobs/:id`
 
-查询区间不得超过 90 天，`page_size` 最大 100，请求体最大 256 KiB。API 只接受主应用
+查询区间不得超过 90 天，`page_size` 只接受 20、50、100，请求体最大 256 KiB。API 只接受主应用
 代理生成的 HMAC 时间戳、nonce、签名和管理员 actor ID。
+
+阈值按 `global -> platform -> parent -> account` 依次覆盖。`platform` 作用域的
+`scope_id` 使用 `PlatformScopeID`：对去空格、转小写后的平台名计算 FNV-1a 64 位哈希，
+再清除符号位；该映射稳定且不依赖主库内部枚举。
 
 静态页面由扩展 `/account-monitor/` 提供，通过主应用鉴权后的
 `/api/v1/extensions-self/account-monitor/` 加载。Vue 路由 `/admin/account-monitor` 只是

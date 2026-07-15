@@ -40,7 +40,7 @@
 - `account_monitor_schema_migrations`：扩展 schema 版本。
 - `account_monitor_sync_state`：`usage` 与 `error` 独立游标、最后成功时间和错误。
 - `account_monitor_rebuild_jobs`：31 天以内重建任务、请求管理员、状态和处理行数。
-- `account_monitor_thresholds`：global/platform/account/model 分层阈值 JSON 与修改人。
+- `account_monitor_thresholds`：global/platform/parent/account 分层阈值 JSON 与修改人。platform 的 `scope_id` 是规范化平台名的稳定 FNV-1a 64 位正整数映射（`PlatformScopeID`）。
 
 ## Safe Source Views
 
