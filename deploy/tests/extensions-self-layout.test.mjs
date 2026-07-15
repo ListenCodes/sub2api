@@ -14,6 +14,8 @@ function read(relativePath) {
 test('custom extensions live under the extensions-self namespace', () => {
   assert.equal(existsSync(resolve(repoRoot, 'risk-control')), false)
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/risk-control/go.mod')), true)
+  assert.equal(existsSync(resolve(repoRoot, 'extensions-self/account-monitor/go.mod')), true)
+  assert.equal(existsSync(resolve(repoRoot, 'extensions-self/account-monitor/web/index.html')), true)
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/homepage/index.html')), true)
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/Dockerfile')), true)
 })
