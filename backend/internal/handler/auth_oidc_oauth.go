@@ -669,6 +669,10 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid"))
 		return
 	}
+	if err := h.preflightRegistrationRisk(c, email, "oidc"); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	client := h.entClient()
 	if client == nil {
@@ -705,6 +709,7 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		return
 	}
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportOAuthRegistrationRisk(c, user, "oidc", email)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
 

@@ -67,6 +67,42 @@ func executeAdminIdempotentJSON(
 	executeAdminIdempotentJSONWithMode(c, scope, payload, ttl, idempotencyStoreUnavailableFailClose, execute)
 }
 
+func executeAdminIdempotentAcceptedJSON(
+	c *gin.Context,
+	scope string,
+	payload any,
+	ttl time.Duration,
+	execute func(context.Context) (any, error),
+) {
+	result, err := executeAdminIdempotent(c, scope, payload, ttl, execute)
+	if err != nil {
+		if infraerrors.Code(err) == infraerrors.Code(service.ErrIdempotencyStoreUnavail) {
+			service.RecordIdempotencyStoreUnavailable(c.FullPath(), scope, "handler_fail_close")
+			logger.LegacyPrintf("handler.idempotency", "[Idempotency] store unavailable: method=%s route=%s scope=%s strategy=fail_close", c.Request.Method, c.FullPath(), scope)
+		}
+		if retryAfter := service.RetryAfterSecondsFromError(err); retryAfter > 0 {
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+		}
+		response.ErrorFrom(c, err)
+		return
+	}
+	if result != nil && result.Replayed {
+		c.Header("X-Idempotency-Replayed", "true")
+	}
+	jobIDPresent := false
+	switch data := result.Data.(type) {
+	case gin.H:
+		_, jobIDPresent = data["job_id"]
+	case map[string]any:
+		_, jobIDPresent = data["job_id"]
+	}
+	if jobIDPresent {
+		response.Accepted(c, result.Data)
+		return
+	}
+	response.Success(c, result.Data)
+}
+
 func executeAdminIdempotentJSONFailOpenOnStoreUnavailable(
 	c *gin.Context,
 	scope string,

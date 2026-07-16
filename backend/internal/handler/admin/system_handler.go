@@ -24,7 +24,8 @@ type SystemHandler struct {
 
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
-	PerformUpdate(ctx context.Context) error
+	PerformUpdate(ctx context.Context) (*service.UpdateJob, error)
+	GetUpdateStatus(ctx context.Context, jobID string) (*service.UpdateJob, error)
 	Rollback() error
 	ListRollbackVersions(ctx context.Context) ([]service.RollbackVersion, error)
 	RollbackToVersion(ctx context.Context, version string) error
@@ -64,7 +65,7 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 	operationID := buildSystemOperationID(c, "update")
 	payload := gin.H{"operation_id": operationID}
-	executeAdminIdempotentJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+	executeAdminIdempotentAcceptedJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
 			return nil, err
@@ -75,7 +76,8 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
-		if err := h.updateSvc.PerformUpdate(ctx); err != nil {
+		job, err := h.updateSvc.PerformUpdate(ctx)
+		if err != nil {
 			if errors.Is(err, service.ErrNoUpdateAvailable) {
 				info, checkErr := h.updateSvc.CheckUpdate(ctx, false)
 				if checkErr != nil {
@@ -97,11 +99,40 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 		succeeded = true
 
 		return gin.H{
-			"message":      "Update completed. Please restart the service.",
-			"need_restart": true,
-			"operation_id": lock.OperationID(),
+			"job_id":             job.JobID,
+			"status":             job.Status,
+			"message":            job.Message,
+			"integration_branch": job.IntegrationBranch,
+			"base_commit":        job.BaseCommit,
+			"conflict_files":     job.ConflictFiles,
+			"conflict_base":      job.ConflictBase,
+			"conflict_upstream":  job.ConflictUpstream,
+			"conflict_log":       job.ConflictLog,
+			"resolution_hint":    job.ResolutionHint,
+			"need_restart":       job.NeedRestart,
+			"published":          job.Published,
+			"published_commit":   job.PublishedCommit,
+			"started_at":         job.StartedAt,
+			"finished_at":        job.FinishedAt,
+			"operation_id":       lock.OperationID(),
 		}, nil
 	})
+}
+
+// GetUpdateStatus returns the current status for an asynchronous upstream update.
+// GET /api/v1/admin/system/update/status?job_id=...
+func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
+	jobID := strings.TrimSpace(c.Query("job_id"))
+	if jobID == "" {
+		response.ErrorFrom(c, service.ErrUpdateJobIDRequired)
+		return
+	}
+	job, err := h.updateSvc.GetUpdateStatus(c.Request.Context(), jobID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, job)
 }
 
 // GetRollbackVersions lists versions available for rollback

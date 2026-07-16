@@ -174,4 +174,16 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith(target)
   })
+
+  it('redirects non-admin users away from the account monitor', async () => {
+    const { navigation, next } = runGuard(
+      { requiresAdmin: true },
+      '/admin/account-monitor'
+    )
+
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/dashboard')
+  })
 })

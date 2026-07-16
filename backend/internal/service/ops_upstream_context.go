@@ -15,6 +15,7 @@ const (
 	OpsUpstreamErrorMessageKey = "ops_upstream_error_message"
 	OpsUpstreamErrorDetailKey  = "ops_upstream_error_detail"
 	OpsUpstreamErrorsKey       = "ops_upstream_errors"
+	OpsUpstreamModelKey        = "ops_upstream_model"
 
 	// Optional stage latencies (milliseconds) for troubleshooting and alerting.
 	OpsAuthLatencyMsKey      = "ops_auth_latency_ms"
@@ -171,9 +172,10 @@ type OpsUpstreamErrorEvent struct {
 	Passthrough bool `json:"passthrough,omitempty"`
 
 	// Context
-	Platform    string `json:"platform,omitempty"`
-	AccountID   int64  `json:"account_id,omitempty"`
-	AccountName string `json:"account_name,omitempty"`
+	Platform      string `json:"platform,omitempty"`
+	AccountID     int64  `json:"account_id,omitempty"`
+	AccountName   string `json:"account_name,omitempty"`
+	UpstreamModel string `json:"upstream_model,omitempty"`
 
 	// Outcome
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
@@ -206,6 +208,14 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 		ev.AtUnixMs = time.Now().UnixMilli()
 	}
 	ev.Platform = strings.TrimSpace(ev.Platform)
+	ev.UpstreamModel = strings.TrimSpace(ev.UpstreamModel)
+	if ev.UpstreamModel == "" {
+		if value, ok := c.Get(OpsUpstreamModelKey); ok {
+			if model, ok := value.(string); ok {
+				ev.UpstreamModel = strings.TrimSpace(model)
+			}
+		}
+	}
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
 	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
 	ev.Kind = strings.TrimSpace(ev.Kind)

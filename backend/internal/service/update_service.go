@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -65,6 +66,9 @@ type UpdateService struct {
 	githubClient   GitHubReleaseClient
 	currentVersion string
 	buildType      string // "source" for manual builds, "release" for CI builds
+	scriptPath     string
+	statusPath     string
+	jobIDPath      string
 }
 
 // NewUpdateService creates a new UpdateService
@@ -74,6 +78,9 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 		githubClient:   githubClient,
 		currentVersion: version,
 		buildType:      buildType,
+		scriptPath:     defaultUpdateScriptPath,
+		statusPath:     defaultUpdateStatusPath,
+		jobIDPath:      defaultUpdateJobIDPath,
 	}
 }
 
@@ -160,19 +167,61 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 	return info, nil
 }
 
-// PerformUpdate downloads and applies the update
-// Uses atomic file replacement pattern for safe in-place updates
-func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+// PerformUpdate starts the conflict-gated upstream sync/publish job and returns
+// before the host-side workflow completes.
+func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !info.HasUpdate {
-		return ErrNoUpdateAvailable
+		return nil, ErrNoUpdateAvailable
 	}
 
-	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
+	if existing, readErr := readUpdateStatus(s.statusPath, ""); readErr == nil && existing.Status == UpdateStatusRunning {
+		return nil, ErrUpdateInProgress
+	}
+	if _, err := os.Stat(s.scriptPath); err != nil {
+		return nil, fmt.Errorf("sync script not found at %s: %w", s.scriptPath, err)
+	}
+
+	jobID, err := newUpdateJobID()
+	if err != nil {
+		return nil, err
+	}
+	startedAt := time.Now().UTC()
+	job := &UpdateJob{
+		JobID:       jobID,
+		Status:      UpdateStatusRunning,
+		Message:     "sync triggered",
+		NeedRestart: false,
+		Published:   false,
+		Timestamp:   startedAt,
+		StartedAt:   &startedAt,
+	}
+	if err := writeUpdateStatus(s.statusPath, job); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(s.jobIDPath, []byte(jobID+"\n"), 0644); err != nil {
+		return nil, fmt.Errorf("write update job id: %w", err)
+	}
+
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", s.scriptPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		finishedAt := time.Now().UTC()
+		_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "failed to start sync: "+err.Error(), &startedAt, &finishedAt)
+		return nil, fmt.Errorf("start upstream sync: %w", err)
+	}
+	go func() {
+		// The host sync script owns the terminal status. We only reap the child
+		// process here so an async update does not leave a zombie process.
+		_ = cmd.Wait()
+	}()
+
+	return job, nil
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,

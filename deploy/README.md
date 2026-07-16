@@ -65,9 +65,9 @@ chmod +x docker-deploy.sh
 
 **What the script does:**
 - Downloads `docker-compose.local.yml` and `.env.example`
-- Automatically generates secure secrets (JWT_SECRET, TOTP_ENCRYPTION_KEY, POSTGRES_PASSWORD)
+- Automatically generates secure secrets for Sub2API and the independent risk-control service
 - Creates `.env` file with generated secrets
-- Creates necessary data directories (data/, postgres_data/, redis_data/)
+- Creates necessary data directories (data/, postgres_data/, redis_data/, risk_control_postgres_data/)
 - **Displays generated credentials** (POSTGRES_PASSWORD, JWT_SECRET, etc.)
 
 **After running the script:**
@@ -97,16 +97,20 @@ cd sub2api/deploy
 # Configure environment
 cp .env.example .env
 chmod 600 .env
-nano .env  # Set POSTGRES_PASSWORD and other required variables
+	nano .env  # Set required variables, including the risk-control secret and DB password
 
 # Generate secure secrets (recommended)
 JWT_SECRET=$(openssl rand -hex 32)
 TOTP_ENCRYPTION_KEY=$(openssl rand -hex 32)
+RISK_CONTROL_INTERNAL_SECRET=$(openssl rand -hex 32)
+RISK_CONTROL_POSTGRES_PASSWORD=$(openssl rand -hex 32)
 echo "JWT_SECRET=${JWT_SECRET}" >> .env
 echo "TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}" >> .env
+echo "RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET}" >> .env
+echo "RISK_CONTROL_POSTGRES_PASSWORD=${RISK_CONTROL_POSTGRES_PASSWORD}" >> .env
 
 # Create data directories
-mkdir -p data postgres_data redis_data
+mkdir -p data postgres_data redis_data risk_control_postgres_data
 
 # Start all services using local directory version
 docker compose -f docker-compose.local.yml up -d
@@ -122,8 +126,8 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 | Version | Data Storage | Migration | Best For |
 |---------|-------------|-----------|----------|
-| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
-| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/) | ⚠️ Requires docker commands | Simple setup, don't need migration |
+| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data, ./risk_control_postgres_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
+| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/, including risk_control_postgres_data) | ⚠️ Requires docker commands | Simple setup, don't need migration |
 
 **Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
 
@@ -144,6 +148,105 @@ When using Docker Compose with `AUTO_SETUP=true`:
    ```bash
    docker compose logs sub2api | grep "admin password"
    ```
+
+### Risk-control operations
+
+The risk-control service is internal-only. It has no host `ports` mapping; Sub2API reaches it over the Compose network after normal administrator authentication. Keep `RISK_CONTROL_MODE=shadow` for the first rollout and switch to `review` only after confirming real events and reasons in the three user-risk pages.
+
+Before an upgrade, back up its dedicated database:
+
+```bash
+docker compose -f docker-compose.local.yml exec -T risk-control-postgres \
+  pg_dump -U "$RISK_CONTROL_POSTGRES_USER" -d "$RISK_CONTROL_POSTGRES_DB" -Fc \
+  > risk-control-$(date +%Y%m%d-%H%M%S).dump
+```
+
+Restore with the service stopped using `pg_restore --clean --if-exists`. The risk service runs its idempotent schema at startup and records schema version `1`; do not delete `risk_control_postgres_data` during rollback. A schema change must include a new versioned migration before production rollout.
+
+### Account-monitor operations
+
+The account monitor runs inside the same `extensions-self` container and stores
+facts/aggregates in `risk-control-postgres`. It reads Sub2API only through the
+`extensions_self_ro` views with the dedicated `extensions_self_monitor` login.
+Do not reuse `POSTGRES_USER` in `ACCOUNT_MONITOR_SOURCE_DATABASE_URL`.
+
+The default is disabled. For production, URL-encode the generated login
+password and configure:
+
+```dotenv
+ACCOUNT_MONITOR_ENABLED=true
+ACCOUNT_MONITOR_SOURCE_DATABASE_URL=postgres://extensions_self_monitor:<URL-encoded-password>@postgres:5432/sub2api?sslmode=disable
+ACCOUNT_MONITOR_POLL_SECONDS=60
+ACCOUNT_MONITOR_LOOKBACK_SECONDS=300
+ACCOUNT_MONITOR_BATCH_SIZE=1000
+ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000
+```
+
+Use only `deploy/ops/publish-custom.sh` for the first enabled release. After
+backing up both databases, it runs `install-account-monitor-source.sql`, checks
+`SET ROLE extensions_self_monitor_ro`, proves that the login cannot read full
+keys or credentials, builds, and verifies the signed `data-quality` API. A failed
+permission probe stops before build.
+
+The publisher also verifies both dump archives, captures the Nginx origin
+certificate/key and container/image metadata, and writes exact rollback tags to
+`release-metadata.env`. It probes both `usage_source` and `group_dimension`.
+
+The native Vue entries are `/admin/extensions/account-monitor` and
+`/admin/extensions/group-monitor`; both use the authenticated admin proxy
+`/api/v1/admin/extensions-self/account-monitor/*`. Details and rollback steps are in
+[`../docs/ACCOUNT-MONITOR-CHECKLIST.md`](../docs/ACCOUNT-MONITOR-CHECKLIST.md).
+
+After a healthy publish, backfill only the `data-quality` `available_from/to`
+interval. The command creates contiguous segments of at most 31 days, waits for
+each job, stops on the first failure, and records results in the release backup:
+
+```bash
+/root/sub2api/deploy/ops/backfill-account-monitor.sh \
+  --from <available-from-RFC3339> --to <available-to-RFC3339> \
+  --record-dir /root/backups/sub2api/<release-id>
+```
+
+### Custom fork update and release
+
+For this deployment, `upstream/main` is only an input to local integration.
+The approved release branch is `origin/custom` on the user's fork. Do not use
+`git pull`, a direct upstream rebase, or `docker compose up` as a production
+update procedure.
+
+The versioned scripts in `deploy/ops/` are installed on the VPS as follows:
+
+```bash
+install -m 0755 deploy/ops/sync-upstream.sh /opt/sub2api-custom/sync-upstream.sh
+install -m 0755 deploy/ops/sync-trigger.sh /opt/sub2api-custom/sync-trigger.sh
+install -m 0755 deploy/ops/sync-and-publish.sh /opt/sub2api-custom/sync-and-publish.sh
+install -m 0755 deploy/ops/auto-update.sh /opt/sub2api-custom/auto-update.sh
+install -m 0755 deploy/ops/publish-custom.sh /opt/sub2api-custom/publish-custom.sh
+```
+
+Install these two root crontab entries as part of the same change. Do not
+point the per-minute trigger consumer at `sync-upstream.sh`; that script only
+prepares an integration branch and does not publish it.
+
+```cron
+0 3 * * * /bin/bash /opt/sub2api-custom/auto-update.sh >> /var/log/sub2api-update.log 2>&1
+* * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
+```
+
+The admin trigger and daily job use `sync-and-publish.sh`. It prepares an
+`origin/integration/upstream-*` branch, stops on conflicts or base drift, and
+automatically promotes and publishes only a clean integration. The publish
+step still uses the exact `origin/custom` commit, creates a production backup,
+and runs the normal health checks. A failed publish remains stopped for that
+run, retains the exact pending commit, and is retried by the next unified
+wrapper invocation only after the origin/custom and local-branch checks pass.
+
+When a merge conflict occurs, the update status and admin panel list the exact
+conflicted files, both commit IDs, the resolution hint, and the diagnostic
+artifact path. The snapshot is stored under
+`/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/<job-id>/`;
+production remains unchanged until the conflict is resolved and a new update
+is approved.
 
 ### Database Migration Notes (PostgreSQL)
 
@@ -236,6 +339,12 @@ docker compose down -v
 | `SERVER_PORT` | No | `8080` | Server port |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
+| `ACCOUNT_MONITOR_ENABLED` | No | `false` | Enable account-monitor collection and admin page |
+| `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | When enabled | - | Dedicated `extensions_self_monitor` read-only DSN |
+| `ACCOUNT_MONITOR_POLL_SECONDS` | No | `60` | Incremental collection interval |
+| `ACCOUNT_MONITOR_LOOKBACK_SECONDS` | No | `300` | Late-event lookback window |
+| `ACCOUNT_MONITOR_BATCH_SIZE` | No | `1000` | Maximum source rows per page |
+| `ACCOUNT_MONITOR_QUERY_TIMEOUT_MS` | No | `3000` | Safe-view query timeout |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
 | `GEMINI_OAUTH_CLIENT_ID` | No | *(builtin)* | Google OAuth client ID (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
 | `GEMINI_OAUTH_CLIENT_SECRET` | No | *(builtin)* | Google OAuth client secret (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
@@ -575,6 +684,7 @@ sudo systemctl status redis
 2. **Database connection failed**: Check PostgreSQL is running and credentials are correct
 3. **Redis connection failed**: Check Redis is running and password is correct
 4. **Permission denied**: Ensure proper file ownership for binary install
+5. **Account monitor unavailable**: Check `extensions-self` logs, `data-quality`, source-role grants, and source DSN; do not interpret an incomplete historical range as zero traffic
 
 ---
 

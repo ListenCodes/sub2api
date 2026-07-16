@@ -19,6 +19,7 @@ import (
 
 type systemHandlerUpdateServiceStub struct {
 	performErr           error
+	performJob           *service.UpdateJob
 	updateInfo           *service.UpdateInfo
 	checkErr             error
 	checkForces          []bool
@@ -37,9 +38,13 @@ func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bo
 	return s.updateInfo, s.checkErr
 }
 
-func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) error {
+func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) (*service.UpdateJob, error) {
 	s.performCall++
-	return s.performErr
+	return s.performJob, s.performErr
+}
+
+func (s *systemHandlerUpdateServiceStub) GetUpdateStatus(context.Context, string) (*service.UpdateJob, error) {
+	return s.performJob, nil
 }
 
 func (s *systemHandlerUpdateServiceStub) Rollback() error {
@@ -91,6 +96,7 @@ func newSystemHandlerTestRouter(t *testing.T, updateSvc *systemHandlerUpdateServ
 
 	router := gin.New()
 	router.POST("/api/v1/admin/system/update", handler.PerformUpdate)
+	router.GET("/api/v1/admin/system/update/status", handler.GetUpdateStatus)
 	router.POST("/api/v1/admin/system/rollback", handler.Rollback)
 	router.GET("/api/v1/admin/system/rollback-versions", handler.GetRollbackVersions)
 	return router
@@ -163,6 +169,49 @@ func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, http.StatusInternalServerError, body.Code)
 	require.Equal(t, "internal error", body.Message)
+}
+
+func TestSystemHandlerPerformUpdateReturnsAcceptedJob(t *testing.T) {
+	started := time.Now().UTC()
+	updateSvc := &systemHandlerUpdateServiceStub{
+		performJob: &service.UpdateJob{
+			JobID:     "update-test",
+			Status:    service.UpdateStatusRunning,
+			Message:   "sync triggered",
+			StartedAt: &started,
+		},
+	}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req.Header.Set("Idempotency-Key", "async-update")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	var body struct {
+		Data service.UpdateJob `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "update-test", body.Data.JobID)
+	require.Equal(t, service.UpdateStatusRunning, body.Data.Status)
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
+}
+
+func TestSystemHandlerGetUpdateStatusRequiresJobID(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/update/status", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var body systemUpdateErrorEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "job id is required", body.Message)
 }
 
 func TestSystemHandlerRollbackWithoutBodyUsesLegacyBackup(t *testing.T) {

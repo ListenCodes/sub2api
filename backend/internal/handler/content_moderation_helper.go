@@ -76,6 +76,9 @@ func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.Conte
 			zap.Float64("highest_score", decision.HighestScore),
 		)
 	}
+	if decision != nil && decision.Blocked {
+		SetRiskEventContext(c, "content_risk", "content_policy_violation", decision.Message)
+	}
 	return decision
 }
 

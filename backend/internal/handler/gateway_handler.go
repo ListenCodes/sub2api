@@ -1755,6 +1755,7 @@ func (h *GatewayHandler) checkClaudeCodeVersion(c *gin.Context) bool {
 
 // errorResponse 返回Claude API格式的错误响应
 func (h *GatewayHandler) errorResponse(c *gin.Context, status int, errType, message string) {
+	SetRiskEventContext(c, "api_error", errType, message)
 	c.JSON(status, gin.H{
 		"type": "error",
 		"error": gin.H{

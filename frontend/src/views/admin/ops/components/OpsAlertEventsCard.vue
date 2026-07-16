@@ -546,7 +546,7 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
                 />
                 <button type="button" class="btn btn-secondary btn-sm" :disabled="detailActionLoading" @click="silenceAlert">
                   <Icon name="ban" size="sm" />
-                  {{ t('common.apply') }}
+                  {{ t('common.confirm') }}
                 </button>
               </div>
 
@@ -645,4 +645,3 @@ const empty = computed(() => events.value.length === 0 && !loading.value)
     </BaseDialog>
   </div>
 </template>
-

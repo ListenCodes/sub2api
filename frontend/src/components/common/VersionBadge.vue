@@ -44,7 +44,7 @@
             <button
               @click="refreshVersion(true)"
               class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-dark-200"
-              :disabled="loading"
+              :disabled="loading || updating"
               :title="t('version.refresh')"
             >
               <Icon
@@ -136,6 +136,26 @@
                     <p class="truncate text-xs text-red-600/70 dark:text-red-400/70">
                       {{ updateError }}
                     </p>
+                    <div
+                      v-if="conflictFiles.length"
+                      class="mt-2 rounded-md border border-red-200 bg-white/70 p-2 text-xs text-red-700 dark:border-red-800/60 dark:bg-dark-900/30 dark:text-red-300"
+                    >
+                      <p class="font-medium">{{ t('version.updateConflict') }}</p>
+                      <p class="mt-1">{{ t('version.updateConflictNoProductionChange') }}</p>
+                      <p class="mt-2 font-medium">{{ t('version.updateConflictFiles') }}</p>
+                      <ul class="mt-1 list-disc space-y-0.5 pl-4 break-words">
+                        <li v-for="file in conflictFiles" :key="file">{{ file }}</li>
+                      </ul>
+                      <p v-if="conflictBase || conflictUpstream" class="mt-2 break-all text-[11px] opacity-75">
+                        {{ t('version.updateConflictCommits') }}:
+                        {{ conflictBase.slice(0, 12) || '-' }} ->
+                        {{ conflictUpstream.slice(0, 12) || '-' }}
+                      </p>
+                      <p v-if="resolutionHint" class="mt-2">{{ resolutionHint }}</p>
+                      <p v-if="conflictLog" class="mt-2 break-all text-[11px] opacity-75">
+                        {{ t('version.updateConflictLog') }}: {{ conflictLog }}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -149,8 +169,8 @@
                 </button>
               </div>
 
-              <!-- Priority 2: Update success - need restart -->
-              <div v-else-if="updateSuccess && needRestart" class="space-y-2">
+              <!-- Priority 2: Update/preparation success -->
+              <div v-else-if="updateSuccess" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800/50 dark:bg-green-900/20"
                 >
@@ -172,17 +192,28 @@
                       {{
                         successKind === 'rollback'
                           ? t('version.rollbackComplete')
-                          : t('version.updateComplete')
+                          : published
+                            ? t('version.updatePublished')
+                          : needRestart
+                            ? t('version.updateComplete')
+                            : t('version.updatePrepared')
                       }}
                     </p>
                     <p class="text-xs text-green-600/70 dark:text-green-400/70">
-                      {{ t('version.restartRequired') }}
+                      {{ needRestart ? t('version.restartRequired') : updateSuccessMessage }}
+                    </p>
+                    <p
+                      v-if="published && publishedCommit"
+                      class="mt-1 text-[11px] text-green-600/60 dark:text-green-400/60"
+                    >
+                      commit {{ publishedCommit.slice(0, 12) }}
                     </p>
                   </div>
                 </div>
 
                 <!-- Restart button with countdown -->
                 <button
+                  v-if="needRestart"
                   @click="handleRestart"
                   :disabled="restarting"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -231,14 +262,10 @@
                 </button>
               </div>
 
-              <!-- Priority 3: Update available for source build - show git pull hint -->
+              <!-- Priority 3: Update available for source/custom build - show sync button -->
               <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
-                <a
-                  v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
-                  :href="releaseInfo.html_url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="group flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 transition-colors hover:bg-amber-100 dark:border-amber-800/50 dark:bg-amber-900/20 dark:hover:bg-amber-900/30"
+                <div
+                  class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
                 >
                   <div
                     class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/50"
@@ -258,16 +285,22 @@
                       v{{ latestVersion }}
                     </p>
                   </div>
-                  <svg
-                    class="h-4 w-4 text-amber-500 transition-transform group-hover:translate-x-0.5 dark:text-amber-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </div>
+
+                <!-- Sync button -->
+                <button
+                  @click="handleUpdate"
+                  :disabled="updating"
+                  class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <svg v-if="updating" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                </a>
+                  <Icon v-else name="download" size="sm" :stroke-width="2" />
+                  {{ updating ? t('version.updating') : t('version.updateNow') }}
+                </button>
+
                 <!-- Source build hint -->
                 <div
                   class="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-2 dark:border-blue-800/50 dark:bg-blue-900/20"
@@ -643,10 +676,14 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
   performUpdate,
+  getUpdateStatus,
+  updateNeedsRestart,
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
-  type RollbackVersionInfo
+  type RollbackVersionInfo,
+  type UpdateJob,
+  updateWasPublished
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
@@ -683,7 +720,18 @@ const restarting = ref(false)
 const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
+const updateSuccessMessage = ref('')
+const published = ref(false)
+const publishedCommit = ref('')
+const conflictFiles = ref<string[]>([])
+const conflictBase = ref('')
+const conflictUpstream = ref('')
+const conflictLog = ref('')
+const resolutionHint = ref('')
 const restartCountdown = ref(0)
+const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+let updatePollInFlight = false
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<'update' | 'rollback'>('update')
 
@@ -740,12 +788,21 @@ function closeDropdown() {
 }
 
 async function refreshVersion(force = true) {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || updating.value) return
 
   // Reset update states when refreshing
   updateError.value = ''
   updateSuccess.value = false
+  updateSuccessMessage.value = ''
+  published.value = false
+  publishedCommit.value = ''
+  conflictFiles.value = []
+  conflictBase.value = ''
+  conflictUpstream.value = ''
+  conflictLog.value = ''
+  resolutionHint.value = ''
   needRestart.value = false
+  stopUpdatePolling()
   resetRollbackState()
 
   await appStore.fetchVersion(force)
@@ -757,20 +814,100 @@ async function handleUpdate() {
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
+  updateSuccessMessage.value = ''
+  published.value = false
+  publishedCommit.value = ''
+  conflictFiles.value = []
+  conflictBase.value = ''
+  conflictUpstream.value = ''
+  conflictLog.value = ''
+  resolutionHint.value = ''
 
   try {
-    const result = await performUpdate()
-    successKind.value = 'update'
-    updateSuccess.value = true
-    needRestart.value = result.need_restart
-    // Clear version cache to reflect update completed
-    appStore.clearVersionCache()
+    const job = await performUpdate()
+    startUpdatePolling(job.job_id)
   } catch (error: unknown) {
+    stopUpdatePolling()
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
-  } finally {
     updating.value = false
   }
+}
+
+function stopUpdatePolling() {
+  if (updatePollTimer.value) {
+    clearInterval(updatePollTimer.value)
+    updatePollTimer.value = null
+  }
+  if (updatePollDeadlineTimer.value) {
+    clearTimeout(updatePollDeadlineTimer.value)
+    updatePollDeadlineTimer.value = null
+  }
+  updatePollInFlight = false
+}
+
+function finishUpdateSuccess(
+  status: Pick<UpdateJob, 'need_restart' | 'published' | 'published_commit' | 'message'>
+) {
+  stopUpdatePolling()
+  successKind.value = 'update'
+  updateSuccess.value = true
+  needRestart.value = updateNeedsRestart({ need_restart: status.need_restart })
+  published.value = updateWasPublished(status)
+  publishedCommit.value = status.published_commit || ''
+  updateSuccessMessage.value = status.message
+  updating.value = false
+  appStore.clearVersionCache()
+}
+
+function finishUpdateFailure(
+  status: Pick<
+    UpdateJob,
+    | 'message'
+    | 'conflict_files'
+    | 'conflict_base'
+    | 'conflict_upstream'
+    | 'conflict_log'
+    | 'resolution_hint'
+  >
+) {
+  stopUpdatePolling()
+  updateError.value = status.message || t('version.updateFailed')
+  conflictFiles.value = status.conflict_files || []
+  conflictBase.value = status.conflict_base || ''
+  conflictUpstream.value = status.conflict_upstream || ''
+  conflictLog.value = status.conflict_log || ''
+  resolutionHint.value = status.resolution_hint || ''
+  updating.value = false
+}
+
+async function pollUpdateStatus(jobID: string) {
+  if (updatePollInFlight) return
+  updatePollInFlight = true
+  try {
+    const status = await getUpdateStatus(jobID)
+    if (status.status === 'success') {
+      finishUpdateSuccess(status)
+    } else if (status.status === 'failed') {
+      finishUpdateFailure(status)
+    }
+  } catch {
+    // Keep polling transient request failures until the 15-minute deadline.
+  } finally {
+    updatePollInFlight = false
+  }
+}
+
+function startUpdatePolling(jobID: string) {
+  stopUpdatePolling()
+  updating.value = true
+  void pollUpdateStatus(jobID)
+  updatePollTimer.value = setInterval(() => {
+    void pollUpdateStatus(jobID)
+  }, 5000)
+  updatePollDeadlineTimer.value = setTimeout(() => {
+    finishUpdateFailure({ message: `${t('version.updateFailed')}: status polling timed out` })
+  }, 15 * 60 * 1000)
 }
 
 function resetRollbackState() {
@@ -837,6 +974,9 @@ async function handleRollback() {
     successKind.value = 'rollback'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    published.value = false
+    publishedCommit.value = ''
+    updateSuccessMessage.value = result.message
     rollbackPanelOpen.value = false
     // Clear version cache so the next check reflects the rolled-back version
     appStore.clearVersionCache()
@@ -918,6 +1058,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopUpdatePolling()
   document.removeEventListener('click', handleClickOutside)
 })
 </script>

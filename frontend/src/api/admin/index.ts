@@ -32,6 +32,7 @@ import channelMonitorTemplateAPI from './channelMonitorTemplate'
 import adminPaymentAPI from './payment'
 import affiliatesAPI from './affiliates'
 import riskControlAPI from './riskControl'
+import userRiskControlAPI from './userRiskControl'
 import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
 
@@ -68,6 +69,7 @@ export const adminAPI = {
   payment: adminPaymentAPI,
   affiliates: affiliatesAPI,
   riskControl: riskControlAPI,
+  userRiskControl: userRiskControlAPI,
   compliance: adminComplianceAPI,
   audit: auditAPI
 }
@@ -102,6 +104,7 @@ export {
   adminPaymentAPI,
   affiliatesAPI,
   riskControlAPI,
+  userRiskControlAPI,
   adminComplianceAPI,
   auditAPI
 }
@@ -115,3 +118,14 @@ export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from 
 export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'
 export type { TLSFingerprintProfile, CreateProfileRequest, UpdateProfileRequest } from './tlsFingerprintProfile'
 export type { ContentModerationConfig, ContentModerationLog, ModerationMode } from './riskControl'
+export type {
+  RiskAction,
+  RiskOverview,
+  RiskEvent,
+  RiskSubject,
+  RiskCase,
+  RiskScenario,
+  RiskListItem,
+  RiskAuditItem,
+  RiskSystemStatus,
+} from './userRiskControl'

@@ -1,5 +1,9 @@
 <template>
   <div class="table-page-layout" :class="{ 'mobile-mode': isMobile }">
+    <header v-if="title" class="lg:hidden">
+      <h1 class="text-xl font-semibold text-gray-900 dark:text-white">{{ title }}</h1>
+      <p v-if="description" class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ description }}</p>
+    </header>
     <!-- 固定区域：操作按钮 -->
     <div v-if="$slots.actions" class="layout-section-fixed">
       <slot name="actions" />
@@ -27,10 +31,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 
+defineProps<{ title?: string; description?: string }>()
+
 const isMobile = ref(false)
 
 const checkMobile = () => {
-  isMobile.value = window.innerWidth < 1024
+  isMobile.value = window.innerWidth < 768
 }
 
 onMounted(() => {

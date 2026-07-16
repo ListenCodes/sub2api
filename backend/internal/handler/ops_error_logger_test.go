@@ -99,6 +99,16 @@ func TestEnqueueOpsErrorLog_EarlyReturnBranches(t *testing.T) {
 	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
 }
 
+func TestSetOpsEndpointContextSharesMappedModelWithServiceEvents(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	setOpsEndpointContext(c, " gpt-5.4 ", 2)
+
+	value, ok := c.Get(service.OpsUpstreamModelKey)
+	require.True(t, ok)
+	require.Equal(t, "gpt-5.4", value)
+}
+
 func TestOpsCaptureWriterPool_ResetOnRelease(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -986,7 +996,7 @@ func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 
 	setOpsEndpointContext(c, "claude-3-5-sonnet-20241022", int16(2)) // stream
 
-	v, ok := c.Get(opsUpstreamModelKey)
+	v, ok := c.Get(service.OpsUpstreamModelKey)
 	require.True(t, ok)
 	vStr, ok := v.(string)
 	require.True(t, ok)
@@ -1007,7 +1017,7 @@ func TestSetOpsEndpointContext_EmptyModelNotStored(t *testing.T) {
 
 	setOpsEndpointContext(c, "", int16(1))
 
-	_, ok := c.Get(opsUpstreamModelKey)
+	_, ok := c.Get(service.OpsUpstreamModelKey)
 	require.False(t, ok, "empty upstream model should not be stored")
 
 	rt, ok := c.Get(opsRequestTypeKey)

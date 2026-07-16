@@ -8,20 +8,12 @@
   >
     <!-- Logo/Brand -->
     <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
-      <!-- Custom Logo or Default Logo -->
-      <router-link
-        :to="homePath"
-        class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl shadow-glow transition-opacity hover:opacity-80"
-        @click="handleMenuItemClick(homePath)"
-      >
+      <!-- Custom Logo or Default Logo — clickable to home -->
+      <router-link to="/" class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl shadow-glow" title="Back to Home">
         <img v-if="settingsLoaded" :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
       </router-link>
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
-        <router-link
-          :to="homePath"
-          class="sidebar-brand-title text-lg font-bold text-gray-900 transition-colors hover:text-primary-600 dark:text-white dark:hover:text-primary-400"
-          @click="handleMenuItemClick(homePath)"
-        >
+        <router-link to="/" class="sidebar-brand-title text-lg font-bold text-gray-900 dark:text-white hover:text-primary-500 dark:hover:text-primary-400 transition-colors" style="text-decoration:none">
           {{ siteName }}
         </router-link>
         <!-- Version Badge -->
@@ -68,7 +60,7 @@
                   :key="child.path"
                   :to="child.path"
                   class="sidebar-link mb-0.5 py-1.5 text-sm"
-                  :class="{ 'sidebar-link-active': route.path === child.path }"
+                  :class="{ 'sidebar-link-active': isChildActive(child) }"
                   @click="handleMenuItemClick(child.path)"
                 >
                   <component :is="child.icon" class="h-4 w-4 flex-shrink-0" />
@@ -205,6 +197,7 @@ interface NavItem {
   iconSvg?: string
   hideInSimpleMode?: boolean
   children?: NavItem[]
+  activePrefix?: string
   /**
    * When true, the parent item only toggles the expand/collapse state and
    * does NOT navigate to its `path`. The `path` is purely a stable key.
@@ -249,8 +242,6 @@ const mobileOpen = computed(() => appStore.mobileOpen)
 const isAdmin = computed(() => authStore.isAdmin)
 const sidebarNavRef = ref<HTMLElement | null>(null)
 const isDark = ref(document.documentElement.classList.contains('dark'))
-
-const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
 
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set())
@@ -771,7 +762,19 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
-    { path: '/admin/risk-control', label: t('nav.riskControl'), icon: ShieldIcon, hideInSimpleMode: true, featureFlag: flagRiskControl },
+    {
+      path: '/admin/extensions',
+      label: '扩展中心',
+      icon: ShieldIcon,
+      hideInSimpleMode: true,
+      expandOnly: true,
+      children: [
+        { path: '/admin/extensions/user-risk/users', activePrefix: '/admin/extensions/user-risk', label: '用户风控', icon: ShieldIcon },
+        { path: '/admin/extensions/account-monitor', label: '账号监控', icon: ChartIcon },
+        { path: '/admin/extensions/group-monitor', label: '分组监控', icon: FolderIcon },
+      ],
+    },
+    { path: '/admin/risk-control', label: t('nav.contentModeration'), icon: ShieldIcon, featureFlag: flagRiskControl },
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
     { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
     {
@@ -864,7 +867,14 @@ function isActive(path: string): boolean {
 
 function isGroupActive(item: NavItem): boolean {
   if (!item.children) return false
-  return item.children.some(child => route.path === child.path)
+  return isActive(item.path) || item.children.some(isChildActive)
+}
+
+function isChildActive(item: NavItem): boolean {
+  if (item.activePrefix) {
+    return route.path === item.activePrefix || route.path.startsWith(item.activePrefix + '/')
+  }
+  return route.path === item.path
 }
 
 function isGroupExpanded(item: NavItem): boolean {

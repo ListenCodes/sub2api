@@ -455,12 +455,15 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 
 	// 验证密码
 	if !s.CheckPassword(password, user.PasswordHash) {
-		return "", nil, ErrInvalidCredentials
+		// The handler still returns the same generic credentials error. Returning
+		// the already-loaded user only lets internal risk reporting associate the
+		// failed attempt with the real account without exposing account existence.
+		return "", user, ErrInvalidCredentials
 	}
 
 	// 检查用户状态
 	if !user.IsActive() {
-		return "", nil, ErrUserNotActive
+		return "", user, ErrUserNotActive
 	}
 
 	// 生成JWT token

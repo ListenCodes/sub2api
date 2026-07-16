@@ -220,6 +220,12 @@ func RegisterAuthRoutes(
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
 
+	extensions := v1.Group("/extensions-self")
+	{
+		extensions.GET("/homepage/*path", h.Auth.ProxyExtensionsHomepage)
+		extensions.HEAD("/homepage/*path", h.Auth.ProxyExtensionsHomepage)
+	}
+
 	// 需要认证的当前用户信息
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))

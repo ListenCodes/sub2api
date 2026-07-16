@@ -108,6 +108,12 @@ func RegisterAdminRoutes(
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
 
+		// 用户风险控制代理（主站鉴权后转发到独立风险服务）
+		admin.Group("/user-risk-control").Any("/*path", h.Admin.User.ProxyRiskControl)
+
+		// 账号监控代理（扩展签名 API，严格白名单）
+		admin.Group("/extensions-self/account-monitor").Any("/*path", h.Admin.User.ProxyAccountMonitor)
+
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
 
@@ -264,6 +270,7 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		users.GET("", h.Admin.User.List)
 		users.GET("/:id", h.Admin.User.GetByID)
+		users.POST("/:id/risk-status", h.Admin.User.SetRiskStatus)
 		users.POST("/:id/auth-identities", h.Admin.User.BindAuthIdentity)
 		users.POST("", h.Admin.User.Create)
 		users.PUT("/:id", h.Admin.User.Update)
@@ -577,6 +584,7 @@ func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		system.GET("/check-updates", h.Admin.System.CheckUpdates)
 		system.GET("/rollback-versions", h.Admin.System.GetRollbackVersions)
 		system.POST("/update", h.Admin.System.PerformUpdate)
+		system.GET("/update/status", h.Admin.System.GetUpdateStatus)
 		system.POST("/rollback", h.Admin.System.Rollback)
 		system.POST("/restart", h.Admin.System.RestartService)
 	}

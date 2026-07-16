@@ -5,6 +5,8 @@ import resources from './resources'
 import ops from './ops'
 import settings from './settings'
 import audit from './audit'
+import userRiskControl from './userRiskControl'
+import accountMonitor from './accountMonitor'
 
 export default {
   ...overview,
@@ -14,4 +16,6 @@ export default {
   ...ops,
   ...settings,
   ...audit,
+  ...userRiskControl,
+  ...accountMonitor,
 }

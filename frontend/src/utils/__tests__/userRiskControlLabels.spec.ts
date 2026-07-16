@@ -1,0 +1,43 @@
+import { describe, expect, it } from 'vitest'
+import {
+  formatAccountStatus,
+  formatAuditResult,
+  formatRiskAction,
+  formatRiskLevel,
+  formatRiskReason,
+  formatRiskType,
+} from '@/utils/userRiskControlLabels'
+
+describe('user risk-control labels', () => {
+  it('formats protocol enums as Chinese administrator labels', () => {
+    expect(formatRiskType('login_failure')).toBe('登录失败')
+    expect(formatRiskLevel('critical')).toBe('严重风险')
+    expect(formatRiskAction('reject_candidate')).toBe('拒绝注册')
+    expect(formatAccountStatus('disabled')).toBe('已封禁')
+    expect(formatAuditResult('partial')).toBe('部分成功')
+  })
+
+  it('preserves unknown values instead of rendering blank text', () => {
+    expect(formatRiskType('new_signal')).toBe('未知类型（new_signal）')
+    expect(formatRiskLevel('extreme')).toBe('未知等级（extreme）')
+    expect(formatRiskAction('freeze')).toBe('未知动作（freeze）')
+    expect(formatAuditResult('queued')).toBe('未知结果（queued）')
+  })
+
+  it('builds an understandable fallback reason from rule evidence', () => {
+    expect(formatRiskReason('', {
+      eventType: 'login_failure',
+      ruleName: '登录失败爆发',
+      count: 5,
+      windowSeconds: 300,
+    })).toBe('命中规则：登录失败爆发（5 分钟内失败 5 次）')
+  })
+
+  it('translates legacy rule-hit reasons into direct administrator language', () => {
+    expect(formatRiskReason('规则 api_request_observation 命中')).toBe('API 请求观察：请求达到观察记录条件，仅用于行为观察，不代表账号异常。')
+  })
+
+  it('translates structured legacy reasons into readable rule evidence', () => {
+    expect(formatRiskReason('rule=login_failure_burst count=9 window=300')).toBe('命中规则：登录失败爆发（5 分钟内失败 9 次）')
+  })
+})

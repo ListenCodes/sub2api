@@ -31,8 +31,7 @@ const (
 	opsAccountIDKey              = "ops_account_id"
 	opsRoutingCapacityLimitedKey = "ops_routing_capacity_limited"
 
-	opsUpstreamModelKey = "ops_upstream_model"
-	opsRequestTypeKey   = "ops_request_type"
+	opsRequestTypeKey = "ops_request_type"
 
 	// 错误过滤匹配常量 — shouldSkipOpsErrorLog 和错误分类共用
 	opsErrContextCanceled            = "context canceled"
@@ -408,7 +407,7 @@ func setOpsEndpointContext(c *gin.Context, upstreamModel string, requestType int
 		return
 	}
 	if upstreamModel = strings.TrimSpace(upstreamModel); upstreamModel != "" {
-		c.Set(opsUpstreamModelKey, upstreamModel)
+		c.Set(service.OpsUpstreamModelKey, upstreamModel)
 	}
 	c.Set(opsRequestTypeKey, requestType)
 }
@@ -817,7 +816,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				UpstreamEndpoint: GetUpstreamEndpoint(c, platform),
 				RequestedModel:   modelName,
 				UpstreamModel: func() string {
-					if v, ok := c.Get(opsUpstreamModelKey); ok {
+					if v, ok := c.Get(service.OpsUpstreamModelKey); ok {
 						if s, ok := v.(string); ok {
 							return strings.TrimSpace(s)
 						}
@@ -960,7 +959,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			UpstreamEndpoint: GetUpstreamEndpoint(c, platform),
 			RequestedModel:   modelName,
 			UpstreamModel: func() string {
-				if v, ok := c.Get(opsUpstreamModelKey); ok {
+				if v, ok := c.Get(service.OpsUpstreamModelKey); ok {
 					if s, ok := v.(string); ok {
 						return strings.TrimSpace(s)
 					}
@@ -1116,7 +1115,7 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 		UpstreamEndpoint: GetUpstreamEndpoint(c, platform),
 		RequestedModel:   modelName,
 		UpstreamModel: func() string {
-			if v, ok := c.Get(opsUpstreamModelKey); ok {
+			if v, ok := c.Get(service.OpsUpstreamModelKey); ok {
 				if s, ok := v.(string); ok {
 					return strings.TrimSpace(s)
 				}

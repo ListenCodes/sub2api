@@ -1,0 +1,61 @@
+package main
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestRiskEventContractDoesNotSerializeSensitiveFields(t *testing.T) {
+	payload, err := json.Marshal(EventReport{
+		EventKey:    "registration-1",
+		EventType:   "registration_attempt",
+		Password:    "should-not-appear",
+		RequestBody: `{"password":"should-not-appear"}`,
+		RawDeviceID: "raw-device-id",
+		EmailHash:   "email-hash",
+		DeviceHash:  "device-hash",
+	})
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	serialized := string(payload)
+	for _, forbidden := range []string{"password", "request_body", "raw_device_id", "should-not-appear", "raw-device-id"} {
+		if strings.Contains(serialized, forbidden) {
+			t.Fatalf("serialized event contains forbidden value %q: %s", forbidden, serialized)
+		}
+	}
+}
+
+func TestRiskDecisionAcceptsSupportedActions(t *testing.T) {
+	for _, action := range []string{"allow", "review", "ban", "reject_candidate"} {
+		if !validRiskAction(action) {
+			t.Fatalf("validRiskAction(%q) = false", action)
+		}
+	}
+	if validRiskAction("delete_everything") {
+		t.Fatal("unsupported action accepted")
+	}
+}
+
+func TestEventRecordUsesStableJSONFieldNames(t *testing.T) {
+	payload, err := json.Marshal(EventRecord{
+		ID: 7, EventKey: "login-7-1", EventType: "login_failure", RiskType: "login_failure",
+		Reason: "invalid credentials", OccurredAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("marshal event record: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode event record: %v", err)
+	}
+	for _, key := range []string{"id", "event_key", "event_type", "risk_type", "reason", "occurred_at"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("event record missing JSON field %q: %s", key, payload)
+		}
+	}
+	if _, ok := decoded["EventType"]; ok {
+		t.Fatalf("event record must not expose Go field names: %s", payload)
+	}
+}

@@ -1,0 +1,78 @@
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$syncScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-upstream.sh')
+$triggerScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-trigger.sh')
+$syncPublishPath = Join-Path $repoRoot 'deploy\ops\sync-and-publish.sh'
+$syncPublishScript = if (Test-Path -LiteralPath $syncPublishPath) {
+    Get-Content -Raw -LiteralPath $syncPublishPath
+} else {
+    ''
+}
+$autoUpdateScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\auto-update.sh')
+$publishScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\publish-custom.sh')
+
+function Assert-Matches {
+    param(
+        [string]$Text,
+        [string]$Pattern,
+        [string]$Message
+    )
+
+    if ($Text -notmatch $Pattern) {
+        throw "ASSERTION FAILED: $Message"
+    }
+}
+
+function Assert-NotMatches {
+    param(
+        [string]$Text,
+        [string]$Pattern,
+        [string]$Message
+    )
+
+    if ($Text -match $Pattern) {
+        throw "ASSERTION FAILED: $Message"
+    }
+}
+
+# Upstream preparation must be isolated from custom and production.
+Assert-Matches $syncScript 'git\s+fetch\s+"?\$UPSTREAM_REMOTE"?' 'sync fetches the configured upstream remote'
+Assert-Matches $syncScript 'git\s+-C\s+"?\$WORKTREE"?\s+merge' 'sync merges upstream in a temporary worktree'
+Assert-Matches $syncScript 'integration/upstream-' 'sync publishes an integration branch'
+Assert-Matches $syncScript 'need_restart:false' 'sync reports preparation-only status'
+Assert-NotMatches $syncScript 'git\s+rebase' 'sync must not rebase'
+Assert-NotMatches $syncScript 'docker\s+(build|compose\s+up)' 'sync must not build or deploy'
+Assert-NotMatches $syncScript 'git\s+push\s+[^\r\n]*\bcustom\b' 'sync must not push custom'
+Assert-NotMatches $syncScript '--force' 'sync must not force-update refs'
+Assert-Matches $syncScript 'SUB2API_SYNC_DEFER_RESULT' 'sync supports deferred trigger results'
+Assert-Matches $syncScript 'base_commit' 'sync records the origin/custom base commit'
+Assert-Matches $syncScript 'SCHEDULED_RUN' 'scheduled syncs use an independent run mode'
+Assert-Matches $syncScript 'CONFLICT_DIR' 'sync stores conflict artifacts under a configured directory'
+Assert-Matches $syncScript 'conflict_files' 'sync records conflicted files'
+Assert-Matches $syncScript 'conflict_log' 'sync records the conflict artifact path'
+Assert-Matches $syncScript 'conflict_upstream' 'sync records the conflicting upstream commit'
+Assert-Matches $triggerScript 'conflict_files' 'admin trigger initializes conflict metadata fields'
+
+# Both the scheduled and admin-triggered paths must use the same auto-publish wrapper.
+Assert-Matches $autoUpdateScript 'sync-and-publish\.sh' 'scheduled updates use the unified wrapper'
+Assert-Matches $syncPublishScript 'publish-custom\.sh' 'unified flow invokes the production publisher'
+Assert-Matches $syncPublishScript 'git\s+merge\s+--ff-only' 'unified flow promotes only by fast-forward'
+Assert-Matches $syncPublishScript 'origin/custom' 'unified flow validates the approved custom base'
+Assert-Matches $syncPublishScript 'SUB2API_SYNC_PUBLISH_LOCK' 'unified flow has an end-to-end lock'
+Assert-Matches $syncPublishScript 'published_commit' 'unified flow records the published commit'
+Assert-Matches $syncPublishScript 'sync-pending-publish' 'unified flow preserves a failed publish for retry'
+Assert-Matches $syncPublishScript 'prepare_scheduled_status' 'scheduled runs initialize independent status metadata'
+Assert-NotMatches $syncPublishScript 'git\s+push\s+[^\r\n]*--force' 'unified flow must not force-push'
+
+# Production publishing must require an approved origin/custom commit and preserve rollback data.
+Assert-Matches $publishScript -- '--commit' 'publish requires an explicit commit argument'
+Assert-Matches $publishScript 'origin/custom' 'publish validates against origin/custom'
+Assert-Matches $publishScript 'BACKUP_ROOT' 'publish creates a backup under the configured backup root'
+Assert-Matches $publishScript 'pg_dump' 'publish backs up PostgreSQL before deployment'
+Assert-Matches $publishScript 'docker\s+compose\s+--project-name\s+deploy' 'publish uses the stable Compose project name'
+Assert-Matches $publishScript '--no-deps\s+--force-recreate\s+sub2api\s+risk-control' 'publish recreates only the affected services'
+Assert-NotMatches $publishScript 'git\s+reset\s+--hard' 'publish must not discard source changes'
+Assert-NotMatches $publishScript 'git\s+push\s+[^\r\n]*--force' 'publish must not force-push'
+
+Write-Output 'script-contract=PASS'

@@ -7,6 +7,14 @@
 
 export type Platform = 'anthropic' | 'openai' | 'antigravity' | 'gemini' | 'grok'
 
+export const SUPPORTED_PLATFORM_OPTIONS = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'antigravity', label: 'Antigravity' },
+  { value: 'grok', label: 'Grok' }
+] as const
+
 // ── Badge (bg + text + border, for inline badges with border) ───────
 const BADGE: Record<Platform, string> = {
   anthropic: 'bg-orange-500/10 text-orange-600 border-orange-500/30 dark:text-orange-400',

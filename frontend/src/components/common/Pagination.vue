@@ -122,7 +122,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import Select from './Select.vue'
-import { getConfiguredTablePageSizeOptions, normalizeTablePageSize } from '@/utils/tablePreferences'
+import { getConfiguredTablePageSizeOptions } from '@/utils/tablePreferences'
 import { setPersistedPageSize } from '@/composables/usePersistedPageSize'
 
 const { t } = useI18n()
@@ -142,7 +142,6 @@ interface Emits {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  pageSizeOptions: () => getConfiguredTablePageSizeOptions(),
   showPageSizeSelector: true,
   showJump: false
 })
@@ -162,12 +161,12 @@ const toItem = computed(() => {
 })
 
 const pageSizeSelectOptions = computed(() => {
-  const options = Array.from(
-    new Set([
-      ...getConfiguredTablePageSizeOptions(),
-      normalizeTablePageSize(props.pageSize)
-    ])
-  ).sort((a, b) => a - b)
+  const source = props.pageSizeOptions ?? getConfiguredTablePageSizeOptions()
+  const options = Array.from(new Set(source.filter(isValidPageSize))).sort((a, b) => a - b)
+  if (isValidPageSize(props.pageSize) && !options.includes(props.pageSize)) {
+    options.push(props.pageSize)
+    options.sort((a, b) => a - b)
+  }
 
   return options.map((size) => ({
     value: size,
@@ -224,9 +223,16 @@ const goToPage = (newPage: number) => {
 
 const handlePageSizeChange = (value: string | number | boolean | null) => {
   if (value === null || typeof value === 'boolean') return
-  const newPageSize = normalizeTablePageSize(typeof value === 'string' ? parseInt(value, 10) : value)
+  const requested = typeof value === 'string' ? Number.parseInt(value, 10) : value
+  const options = pageSizeSelectOptions.value.map((option) => Number(option.value))
+  if (!Number.isInteger(requested) || options.length === 0) return
+  const newPageSize = options.find((option) => option >= requested) ?? options[options.length - 1]
   setPersistedPageSize(newPageSize)
   emit('update:pageSize', newPageSize)
+}
+
+function isValidPageSize(value: number): boolean {
+  return Number.isInteger(value) && value >= 5 && value <= 1000
 }
 
 const submitJump = () => {

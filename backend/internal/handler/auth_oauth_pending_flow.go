@@ -1754,6 +1754,10 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := h.preflightRegistrationRisk(c, email, session.ProviderType); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	tokenPair, user, err := h.authService.RegisterOAuthEmailAccount(
 		c.Request.Context(),
@@ -1876,6 +1880,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 
 	h.authService.ApplyOAuthSignupPromoCode(c.Request.Context(), user.ID, pendingOAuthPromoCode(session))
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportOAuthRegistrationRisk(c, user, session.ProviderType, email)
 	// createPendingOAuthAccount = 注册新账户，需要把钉钉昵称同步到 users.username 作为初始值
 	h.maybeSyncDingTalkAfterRegistration(c.Request.Context(), session, user.ID)
 	clearCookies()

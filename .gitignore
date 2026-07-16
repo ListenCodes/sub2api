@@ -136,6 +136,9 @@ docs/*
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/ASYNC_IMAGE_TASKS.md
+!docs/EXTENSIONS-SELF-ARCHITECTURE.md
+!docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md
+!docs/ACCOUNT-MONITOR-CHECKLIST.md
 !docs/legal/
 !docs/legal/*.md
 .serena/
