@@ -136,7 +136,7 @@ describe('AccountMonitorPanel', () => {
     expect(wrapper.text()).toContain('严重')
 		expect(wrapper.text()).toContain('认证错误增多')
 		expect(wrapper.text()).toContain('采集已延迟 900 秒')
-		expect(wrapper.text()).toContain('2026/7/1')
+		expect(wrapper.text()).toContain(new Date('2026-07-01T00:00:00Z').toLocaleString())
 		expect(wrapper.text()).toContain('用量游标 11')
 		expect(wrapper.text()).toContain('错误游标 22')
     expect(wrapper.find('iframe').exists()).toBe(false)
