@@ -37,7 +37,8 @@ func TestAppendOpsUpstreamErrorCopiesMappedModelFromContext(t *testing.T) {
 
 	raw, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
-	events := raw.([]*OpsUpstreamErrorEvent)
+	events, ok := raw.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
 	require.Len(t, events, 1)
 	require.Equal(t, "gpt-5.4", events[0].UpstreamModel)
 }
@@ -48,8 +49,10 @@ func TestAppendOpsUpstreamErrorPreservesEventSpecificModel(t *testing.T) {
 
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{UpstreamModel: "attempt-model"})
 
-	raw, _ := c.Get(OpsUpstreamErrorsKey)
-	events := raw.([]*OpsUpstreamErrorEvent)
+	raw, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := raw.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
 	require.Equal(t, "attempt-model", events[0].UpstreamModel)
 }
 

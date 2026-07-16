@@ -123,7 +123,7 @@ func (c *RiskControlClient) proxyExtensionAsset(ctx context.Context, method, pre
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHomepageProxyBody+1))
 	if err != nil {
 		return nil, err
@@ -277,7 +277,7 @@ func (c *RiskControlClient) signedRequestOnce(ctx context.Context, method, path 
 	}
 	ts := time.Now().Unix()
 	mac := hmac.New(sha256.New, c.secret)
-	_, _ = mac.Write([]byte(fmt.Sprintf("%d\n%s\n", ts, nonce)))
+	_, _ = fmt.Fprintf(mac, "%d\n%s\n", ts, nonce)
 	_, _ = mac.Write(body)
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
@@ -294,7 +294,7 @@ func (c *RiskControlClient) signedRequestOnce(ctx context.Context, method, path 
 	if err != nil {
 		return nil, 0, true, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if readErr != nil {
 		return nil, resp.StatusCode, resp.StatusCode >= 500, readErr

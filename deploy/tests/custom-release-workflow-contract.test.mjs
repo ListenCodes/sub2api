@@ -23,6 +23,11 @@ test('custom-release workflow gates paired images on every required validation j
   assert.match(workflow, /push:[\s\S]*branches:[\s\S]*custom-release[\s\S]*integration\/release-/)
   assert.match(workflow, /permissions:[\s\S]*contents:\s*read[\s\S]*packages:\s*write/)
   assert.doesNotMatch(workflow, /contents:\s*write/)
+  assert.match(
+    workflow,
+    /\n      - name: golangci-lint\n        uses: golangci\/golangci-lint-action@v9\n        with:\n          version: v2\.9\.0\n          install-mode: goinstall\n/,
+    'golangci-lint must be built with the configured Go toolchain'
+  )
 
   for (const marker of [
     'make test-unit',
