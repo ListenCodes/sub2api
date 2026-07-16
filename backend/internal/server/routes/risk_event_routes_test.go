@@ -45,12 +45,21 @@ func TestAuthenticatedReadAliasesRegisterRiskEventMiddleware(t *testing.T) {
 		if _, tracked := wantPaths[path]; !tracked {
 			return true
 		}
-		for _, arg := range call.Args[1:] {
-			if ident, ok := arg.(*ast.Ident); ok && ident.Name == "riskEvents" {
-				wantPaths[path] = true
-				break
+		authIndex := -1
+		groupIndex := -1
+		riskIndex := -1
+		for index, arg := range call.Args[1:] {
+			if expressionContainsIdentifier(arg, "apiKeyAuth") {
+				authIndex = index
+			}
+			if expressionContainsIdentifier(arg, "requireGroupAnthropic") {
+				groupIndex = index
+			}
+			if expressionContainsIdentifier(arg, "riskEvents") {
+				riskIndex = index
 			}
 		}
+		wantPaths[path] = authIndex >= 0 && groupIndex > authIndex && riskIndex > groupIndex
 		return true
 	})
 
@@ -59,4 +68,16 @@ func TestAuthenticatedReadAliasesRegisterRiskEventMiddleware(t *testing.T) {
 			t.Errorf("GET %s must register riskEvents after authentication", path)
 		}
 	}
+}
+
+func expressionContainsIdentifier(expression ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(expression, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && ident.Name == name {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
 }

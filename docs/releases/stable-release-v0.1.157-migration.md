@@ -24,6 +24,16 @@
 - Files in manifest: 241
 - Apply method: `git apply --3way --index`
 
+## Ownership Boundary
+
+- Official baseline: the peeled `v0.1.157` commit, including its upstream
+  routing, scheduler, audit, step-up, asynchronous image, and cooldown behavior.
+- Self-hosted extensions: risk control, account/group monitoring, the custom
+  homepage, their native UI/proxy routes, and the `riskEvents` gateway wiring.
+- Compatibility fixes may adjust self-hosted extension calls or middleware
+  registration inside official-path files, but must not change unrelated
+  official handlers, routing decisions, or cooldown semantics.
+
 ## Initial Conflicts
 
 The three-way application produced eight conflicted files:
@@ -63,7 +73,7 @@ these overlaps.
 | Frontend `pnpm typecheck` after custom transplant | PASS | `vue-tsc --noEmit` exited 0 with all conflict resolutions staged |
 | `git diff --cached --check` after custom transplant | PASS | No whitespace errors |
 | Stable Release ancestry check | PASS | Peeled `v0.1.157` commit is an ancestor of the reconstruction branch |
-| Go baseline validation | NOT RUN | Go is not installed in the local PowerShell environment |
+| Backend handler/service/routes focused Go tests | PASS | Portable verified Go 1.26.5; custom constructor compatibility fixed and focused packages passed |
 | Docker baseline validation | NOT RUN | Docker CLI is not installed in the local PowerShell environment |
 
 ## Final State
