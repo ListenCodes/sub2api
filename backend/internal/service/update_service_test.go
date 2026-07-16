@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -49,7 +51,10 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 	panic("FetchChecksumFile should not be called when no update is available")
 }
 
-func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
+func TestUpdateServicePerformUpdateQueuesEvenWhenBinaryVersionIsCurrent(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "sync-trigger.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755))
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{
@@ -61,13 +66,18 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 		"0.1.132",
 		"release",
 	)
+	svc.scriptPath = scriptPath
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+	svc.startScript = func(string) (func() error, error) {
+		return func() error { return nil }, nil
+	}
 
 	job, err := svc.PerformUpdate(context.Background())
 
-	require.Error(t, err)
-	require.Nil(t, job)
-	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
-	require.ErrorIs(t, err, ErrNoUpdateAvailable)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	require.Equal(t, UpdateStatusCheckingRelease, job.Status)
 }
 
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {

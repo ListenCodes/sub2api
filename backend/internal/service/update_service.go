@@ -67,8 +67,9 @@ type UpdateService struct {
 	currentVersion string
 	buildType      string // "source" for manual builds, "release" for CI builds
 	scriptPath     string
-	statusPath     string
+	jobsDir        string
 	jobIDPath      string
+	startScript    func(string) (func() error, error)
 }
 
 // NewUpdateService creates a new UpdateService
@@ -79,8 +80,9 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 		currentVersion: version,
 		buildType:      buildType,
 		scriptPath:     defaultUpdateScriptPath,
-		statusPath:     defaultUpdateStatusPath,
+		jobsDir:        defaultUpdateJobsDir,
 		jobIDPath:      defaultUpdateJobIDPath,
+		startScript:    startUpdateScript,
 	}
 }
 
@@ -170,17 +172,20 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate starts the conflict-gated upstream sync/publish job and returns
 // before the host-side workflow completes.
 func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
-	info, err := s.CheckUpdate(ctx, true)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	if !info.HasUpdate {
-		return nil, ErrNoUpdateAvailable
-	}
-
-	if existing, readErr := readUpdateStatus(s.statusPath, ""); readErr == nil && existing.Status == UpdateStatusRunning {
-		return nil, ErrUpdateInProgress
+	if currentID, readErr := os.ReadFile(s.jobIDPath); readErr == nil {
+		currentID := strings.TrimSpace(string(currentID))
+		if currentID != "" {
+			if currentPath, pathErr := updateJobPath(s.jobsDir, currentID); pathErr == nil {
+				if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && !IsTerminalUpdateStatus(existing.Status) {
+					return nil, ErrUpdateInProgress
+				}
+			}
+		}
+	} else if !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("read current update job id: %w", readErr)
 	}
 	if _, err := os.Stat(s.scriptPath); err != nil {
 		return nil, fmt.Errorf("sync script not found at %s: %w", s.scriptPath, err)
@@ -193,35 +198,46 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	startedAt := time.Now().UTC()
 	job := &UpdateJob{
 		JobID:       jobID,
-		Status:      UpdateStatusRunning,
-		Message:     "sync triggered",
+		Status:      UpdateStatusCheckingRelease,
+		Message:     "release job queued",
 		NeedRestart: false,
 		Published:   false,
 		Timestamp:   startedAt,
+		UpdatedAt:   startedAt,
 		StartedAt:   &startedAt,
 	}
-	if err := writeUpdateStatus(s.statusPath, job); err != nil {
+	jobPath, err := updateJobPath(s.jobsDir, jobID)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(s.jobIDPath, []byte(jobID+"\n"), 0644); err != nil {
+	if err := writeUpdateStatus(jobPath, job); err != nil {
+		return nil, err
+	}
+	if err := writeCurrentUpdateJobID(s.jobIDPath, jobID); err != nil {
 		return nil, fmt.Errorf("write update job id: %w", err)
 	}
 
-	cmd := exec.CommandContext(context.Background(), "/bin/sh", s.scriptPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	wait, err := s.startScript(s.scriptPath)
+	if err != nil {
 		finishedAt := time.Now().UTC()
 		_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "failed to start sync: "+err.Error(), &startedAt, &finishedAt)
 		return nil, fmt.Errorf("start upstream sync: %w", err)
 	}
 	go func() {
-		// The host sync script owns the terminal status. We only reap the child
-		// process here so an async update does not leave a zombie process.
-		_ = cmd.Wait()
+		_ = wait()
 	}()
 
 	return job, nil
+}
+
+func startUpdateScript(scriptPath string) (func() error, error) {
+	cmd := exec.Command("/bin/sh", scriptPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd.Wait, nil
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,

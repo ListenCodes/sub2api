@@ -23,6 +23,7 @@ type systemHandlerUpdateServiceStub struct {
 	updateInfo           *service.UpdateInfo
 	checkErr             error
 	checkForces          []bool
+	statusJobIDs         []string
 	performCall          int
 	rollbackCall         int
 	rollbackToCall       int
@@ -43,7 +44,8 @@ func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) (*servic
 	return s.performJob, s.performErr
 }
 
-func (s *systemHandlerUpdateServiceStub) GetUpdateStatus(context.Context, string) (*service.UpdateJob, error) {
+func (s *systemHandlerUpdateServiceStub) GetUpdateStatus(_ context.Context, jobID string) (*service.UpdateJob, error) {
+	s.statusJobIDs = append(s.statusJobIDs, jobID)
 	return s.performJob, nil
 }
 
@@ -115,39 +117,6 @@ func requireSystemLockStatus(t *testing.T, repo *memoryIdempotencyRepoStub, want
 	t.Fatalf("system lock status %q not found in records: %#v", wantStatus, repo.data)
 }
 
-func TestSystemHandlerPerformUpdateAlreadyUpToDateReturnsOK(t *testing.T) {
-	updateSvc := &systemHandlerUpdateServiceStub{
-		performErr: service.ErrNoUpdateAvailable,
-		updateInfo: &service.UpdateInfo{
-			CurrentVersion: "0.1.132",
-			LatestVersion:  "0.1.132",
-			HasUpdate:      false,
-		},
-	}
-	repo := newMemoryIdempotencyRepoStub()
-	router := newSystemHandlerTestRouter(t, updateSvc, repo)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
-	req.Header.Set("Idempotency-Key", "already-up-to-date")
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, 1, updateSvc.performCall)
-	require.Equal(t, []bool{false}, updateSvc.checkForces)
-	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
-
-	var body systemUpdateResponseEnvelope
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, 0, body.Code)
-	require.Equal(t, "success", body.Message)
-	require.Equal(t, "Already up to date", body.Data.Message)
-	require.True(t, body.Data.AlreadyUpToDate)
-	require.Equal(t, "0.1.132", body.Data.CurrentVersion)
-	require.Equal(t, "0.1.132", body.Data.LatestVersion)
-	require.NotEmpty(t, body.Data.OperationID)
-}
-
 func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{
 		performErr: errors.New("download failed"),
@@ -176,7 +145,7 @@ func TestSystemHandlerPerformUpdateReturnsAcceptedJob(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{
 		performJob: &service.UpdateJob{
 			JobID:              "update-test",
-			Status:             service.UpdateStatusRunning,
+			Status:             service.UpdateStatusCheckingRelease,
 			Message:            "sync triggered",
 			ReleaseTag:         "v0.1.158",
 			ReleaseCommit:      "26abd19a2812edba02bbef93c3e2a620141cc257",
@@ -198,15 +167,20 @@ func TestSystemHandlerPerformUpdateReturnsAcceptedJob(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "update-test", body.Data.JobID)
-	require.Equal(t, service.UpdateStatusRunning, body.Data.Status)
+	require.Equal(t, service.UpdateStatusCheckingRelease, body.Data.Status)
 	require.Equal(t, "v0.1.158", body.Data.ReleaseTag)
 	require.Equal(t, "26abd19a2812edba02bbef93c3e2a620141cc257", body.Data.ReleaseCommit)
 	require.Equal(t, "2026-07-16T12:37:06Z", body.Data.ReleasePublishedAt)
 	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
 }
 
-func TestSystemHandlerGetUpdateStatusRequiresJobID(t *testing.T) {
-	updateSvc := &systemHandlerUpdateServiceStub{}
+func TestSystemHandlerGetUpdateStatusWithoutJobIDReturnsCurrentJob(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{
+		performJob: &service.UpdateJob{
+			JobID:  "update-current",
+			Status: service.UpdateStatusWaitingImages,
+		},
+	}
 	repo := newMemoryIdempotencyRepoStub()
 	router := newSystemHandlerTestRouter(t, updateSvc, repo)
 
@@ -214,10 +188,14 @@ func TestSystemHandlerGetUpdateStatusRequiresJobID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/update/status", nil)
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	var body systemUpdateErrorEnvelope
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Data service.UpdateJob `json:"data"`
+	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "job id is required", body.Message)
+	require.Equal(t, "update-current", body.Data.JobID)
+	require.Equal(t, service.UpdateStatusWaitingImages, body.Data.Status)
+	require.Equal(t, []string{""}, updateSvc.statusJobIDs)
 }
 
 func TestSystemHandlerRollbackWithoutBodyUsesLegacyBackup(t *testing.T) {

@@ -29,15 +29,21 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 		"source",
 	)
 	svc.scriptPath = scriptPath
-	svc.statusPath = filepath.Join(tmpDir, "sync-status")
-	svc.jobIDPath = filepath.Join(tmpDir, "sync-job-id")
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+	svc.startScript = func(string) (func() error, error) {
+		return func() error {
+			time.Sleep(2 * time.Second)
+			return nil
+		}, nil
+	}
 
 	started := time.Now()
 	job, err := svc.PerformUpdate(context.Background())
 
 	require.NoError(t, err)
 	require.NotEmpty(t, job.JobID)
-	require.Equal(t, UpdateStatusRunning, job.Status)
+	require.Equal(t, UpdateStatusCheckingRelease, job.Status)
 	require.False(t, job.NeedRestart)
 	require.False(t, job.Published)
 	require.Less(t, time.Since(started), 500*time.Millisecond)
@@ -98,7 +104,7 @@ func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","status":"running","message":"syncing","ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","status":"waiting_actions","message":"syncing","ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
 
 	_, err := readUpdateStatus(statusPath, "update-b")
 
@@ -106,10 +112,74 @@ func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {
 	require.True(t, errors.Is(err, ErrUpdateJobNotFound))
 }
 
-func TestUpdateServiceGetUpdateStatusRequiresJobID(t *testing.T) {
+func TestWriteUpdateStatusAcceptsEveryReleaseState(t *testing.T) {
+	t.Parallel()
+
+	validStates := []string{
+		UpdateStatusCheckingRelease,
+		UpdateStatusValidatingTag,
+		UpdateStatusMergingRelease,
+		UpdateStatusWaitingActions,
+		UpdateStatusWaitingImages,
+		UpdateStatusPromotingRelease,
+		UpdateStatusBackingUp,
+		UpdateStatusDeployingExtensions,
+		UpdateStatusDeployingMain,
+		UpdateStatusHealthChecking,
+		UpdateStatusRollingBack,
+		UpdateStatusSuccess,
+		UpdateStatusFailed,
+		UpdateStatusConflict,
+	}
+	for _, state := range validStates {
+		state := state
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "release-job.json")
+			require.NoError(t, writeUpdateStatus(path, &UpdateJob{
+				JobID:  "update-valid-state",
+				Status: state,
+			}))
+		})
+	}
+}
+
+func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
 	svc := NewUpdateService(nil, nil, "0.1.132", "source")
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+	require.NoError(t, os.MkdirAll(svc.jobsDir, 0755))
+	require.NoError(t, os.WriteFile(svc.jobIDPath, []byte("update-current\n"), 0644))
+	require.NoError(t, writeUpdateStatus(filepath.Join(svc.jobsDir, "update-current.json"), &UpdateJob{
+		JobID:  "update-current",
+		Status: UpdateStatusWaitingActions,
+	}))
 
-	_, err := svc.GetUpdateStatus(context.Background(), " ")
+	job, err := svc.GetUpdateStatus(context.Background(), " ")
 
-	require.ErrorIs(t, err, ErrUpdateJobIDRequired)
+	require.NoError(t, err)
+	require.Equal(t, "update-current", job.JobID)
+	require.Equal(t, UpdateStatusWaitingActions, job.Status)
+}
+
+func TestUpdateServiceGetUpdateStatusReadsSpecificDurableJob(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	svc := NewUpdateService(nil, nil, "0.1.132", "source")
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+	require.NoError(t, os.MkdirAll(svc.jobsDir, 0755))
+	require.NoError(t, writeUpdateStatus(filepath.Join(svc.jobsDir, "update-old.json"), &UpdateJob{
+		JobID:  "update-old",
+		Status: UpdateStatusSuccess,
+	}))
+
+	job, err := svc.GetUpdateStatus(context.Background(), "update-old")
+
+	require.NoError(t, err)
+	require.Equal(t, "update-old", job.JobID)
 }

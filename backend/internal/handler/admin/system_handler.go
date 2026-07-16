@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -78,21 +77,6 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 
 		job, err := h.updateSvc.PerformUpdate(ctx)
 		if err != nil {
-			if errors.Is(err, service.ErrNoUpdateAvailable) {
-				info, checkErr := h.updateSvc.CheckUpdate(ctx, false)
-				if checkErr != nil {
-					releaseReason = "SYSTEM_UPDATE_FAILED"
-					return nil, checkErr
-				}
-				succeeded = true
-				return gin.H{
-					"message":            "Already up to date",
-					"already_up_to_date": true,
-					"current_version":    info.CurrentVersion,
-					"latest_version":     info.LatestVersion,
-					"operation_id":       lock.OperationID(),
-				}, nil
-			}
 			releaseReason = "SYSTEM_UPDATE_FAILED"
 			return nil, err
 		}
@@ -104,18 +88,28 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			"message":              job.Message,
 			"integration_branch":   job.IntegrationBranch,
 			"base_commit":          job.BaseCommit,
+			"target_commit":        job.TargetCommit,
 			"release_tag":          job.ReleaseTag,
 			"release_commit":       job.ReleaseCommit,
 			"release_published_at": job.ReleasePublishedAt,
+			"workflow_url":         job.WorkflowURL,
+			"main_digest":          job.MainDigest,
+			"extensions_digest":    job.ExtensionsDigest,
 			"conflict_files":       job.ConflictFiles,
 			"conflict_base":        job.ConflictBase,
 			"conflict_upstream":    job.ConflictUpstream,
 			"conflict_release":     job.ConflictRelease,
 			"conflict_log":         job.ConflictLog,
 			"resolution_hint":      job.ResolutionHint,
+			"artifact_path":        job.ArtifactPath,
 			"need_restart":         job.NeedRestart,
 			"published":            job.Published,
 			"published_commit":     job.PublishedCommit,
+			"production_changed":   job.ProductionChanged,
+			"error_code":           job.ErrorCode,
+			"rollback":             job.Rollback,
+			"ts":                   job.Timestamp,
+			"updated_at":           job.UpdatedAt,
 			"started_at":           job.StartedAt,
 			"finished_at":          job.FinishedAt,
 			"operation_id":         lock.OperationID(),
@@ -127,10 +121,6 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 // GET /api/v1/admin/system/update/status?job_id=...
 func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
 	jobID := strings.TrimSpace(c.Query("job_id"))
-	if jobID == "" {
-		response.ErrorFrom(c, service.ErrUpdateJobIDRequired)
-		return
-	}
 	job, err := h.updateSvc.GetUpdateStatus(c.Request.Context(), jobID)
 	if err != nil {
 		response.ErrorFrom(c, err)
