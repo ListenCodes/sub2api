@@ -9,6 +9,7 @@ export type GroupRange = typeof GROUP_RANGES[number]
 export type SortOrder = 'asc' | 'desc'
 export type HealthLevel = 'normal' | 'attention' | 'abnormal' | 'critical'
 export type GroupCallStatus = 'normal' | 'partial_failure' | 'all_failed' | 'recently_idle' | 'no_data'
+export type GroupCallFilter = 'has_calls' | GroupCallStatus
 
 export interface TimeRange {
   from?: string
@@ -291,7 +292,7 @@ export interface GroupFilters {
   query?: string
   platform?: string
   groupStatus?: 'active' | 'inactive' | 'all'
-  callStatus?: GroupCallStatus | 'all'
+  callStatus?: GroupCallFilter | 'all'
 }
 
 type QueryValue = string | number | boolean | undefined | null

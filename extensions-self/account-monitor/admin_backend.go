@@ -517,11 +517,9 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 	callStatus := strings.TrimSpace(request.Query["call_status"])
 	for _, dimension := range filteredDimensions {
 		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID], bucketSeconds)
-		if callStatus != "" && card.CallStatus != callStatus {
-			continue
-		}
 		result.Items = append(result.Items, card)
 	}
+	result.Items = filterAndPrioritizeGroupCards(result.Items, callStatus)
 	result.Total = int64(len(result.Items))
 	result.Items = pageGroupCards(result.Items, request.Page, request.PageSize)
 	quality, err := s.qualitySnapshot(ctx, request.From, request.To)
@@ -723,6 +721,23 @@ func pageGroupCards(items []GroupMonitorCard, page, pageSize int) []GroupMonitor
 		end = len(items)
 	}
 	return items[start:end]
+}
+
+func filterAndPrioritizeGroupCards(items []GroupMonitorCard, callStatus string) []GroupMonitorCard {
+	filtered := make([]GroupMonitorCard, 0, len(items))
+	for _, card := range items {
+		if callStatus == "has_calls" && card.TotalRequests == 0 {
+			continue
+		}
+		if callStatus != "" && callStatus != "has_calls" && card.CallStatus != callStatus {
+			continue
+		}
+		filtered = append(filtered, card)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].TotalRequests > 0 && filtered[j].TotalRequests == 0
+	})
+	return filtered
 }
 
 func (s *AdminService) overview(ctx context.Context, request AdminRequest) (OverviewResponse, error) {

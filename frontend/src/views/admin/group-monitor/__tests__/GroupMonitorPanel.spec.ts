@@ -27,6 +27,10 @@ describe('group monitor URL state', () => {
 		expect(parseGroupMonitorQuery({ range: '1h' }).range).toBe('6h')
 		expect(parseGroupMonitorQuery({ range: '12h' }).range).toBe('6h')
 	})
+
+	it('restores the has-calls filter', () => {
+		expect(parseGroupMonitorQuery({ call_status: 'has_calls' }).callStatus).toBe('has_calls')
+	})
 })
 
 describe('GroupMonitorPanel', () => {

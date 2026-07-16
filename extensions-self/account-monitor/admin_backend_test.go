@@ -216,6 +216,36 @@ func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
 	}
 }
 
+func TestFilterAndPrioritizeGroupCardsPutsCallsFirstAndSupportsHasCalls(t *testing.T) {
+	cards := []GroupMonitorCard{
+		{GroupID: 1, Name: "A Zero", CallStatus: "no_data"},
+		{GroupID: 2, Name: "B Normal", CallStatus: "normal", TotalRequests: 3},
+		{GroupID: 3, Name: "C Failed", CallStatus: "all_failed", TotalRequests: 2},
+		{GroupID: 4, Name: "D Zero", CallStatus: "no_data"},
+	}
+
+	prioritized := filterAndPrioritizeGroupCards(cards, "")
+	if got := groupCardIDs(prioritized); !reflect.DeepEqual(got, []int64{2, 3, 1, 4}) {
+		t.Fatalf("calls-first IDs = %v", got)
+	}
+	hasCalls := filterAndPrioritizeGroupCards(cards, "has_calls")
+	if got := groupCardIDs(hasCalls); !reflect.DeepEqual(got, []int64{2, 3}) {
+		t.Fatalf("has-calls IDs = %v", got)
+	}
+	failed := filterAndPrioritizeGroupCards(cards, "all_failed")
+	if got := groupCardIDs(failed); !reflect.DeepEqual(got, []int64{3}) {
+		t.Fatalf("failed IDs = %v", got)
+	}
+}
+
+func groupCardIDs(cards []GroupMonitorCard) []int64 {
+	result := make([]int64, len(cards))
+	for index, card := range cards {
+		result[index] = card.GroupID
+	}
+	return result
+}
+
 func TestAdminServiceGroupDetailBuildsModelTimelines(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)

@@ -13,7 +13,7 @@ import { computed, reactive, watch } from 'vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
-import type { GroupCallStatus } from '@/api/admin/accountMonitor'
+import type { GroupCallFilter } from '@/api/admin/accountMonitor'
 import type { GroupMonitorFilterState } from './useGroupMonitorFilters'
 import { SUPPORTED_PLATFORM_OPTIONS } from '@/utils/platformColors'
 import { useDebouncedAction } from '@/composables/useDebouncedAction'
@@ -23,10 +23,10 @@ const draft = reactive({ ...props.state })
 watch(() => props.state, (value) => Object.assign(draft, value), { deep: true })
 const platformOptions = computed(() => [{ value: '', label: '全部平台' }, ...SUPPORTED_PLATFORM_OPTIONS])
 const groupStatusOptions = [{ value: 'active', label: '有效分组' }, { value: 'inactive', label: '停用分组' }, { value: 'all', label: '全部未删除分组' }]
-const callStatusOptions = [{ value: '', label: '全部调用状态' }, { value: 'normal', label: '正常' }, { value: 'partial_failure', label: '部分失败' }, { value: 'all_failed', label: '全部失败' }, { value: 'recently_idle', label: '近期空闲' }, { value: 'no_data', label: '无调用' }]
+const callStatusOptions = [{ value: '', label: '全部调用状态' }, { value: 'has_calls', label: '有调用记录' }, { value: 'normal', label: '正常' }, { value: 'partial_failure', label: '部分失败' }, { value: 'all_failed', label: '全部失败' }, { value: 'recently_idle', label: '近期空闲' }, { value: 'no_data', label: '无调用' }]
 const rangeOptions = [{ value: '6h', label: '近 6 小时' }, { value: '24h', label: '近 24 小时' }, { value: '7d', label: '近 7 天' }, { value: '30d', label: '近 30 天' }]
 function apply() { emit('apply', { ...draft }) }
 const { schedule, runNow } = useDebouncedAction(apply, 300)
 function updateQuery(value: string) { draft.query = value; schedule() }
-function updateCallStatus(value: unknown) { draft.callStatus = String(value || '') as GroupCallStatus || undefined; void runNow() }
+function updateCallStatus(value: unknown) { draft.callStatus = String(value || '') as GroupCallFilter || undefined; void runNow() }
 </script>

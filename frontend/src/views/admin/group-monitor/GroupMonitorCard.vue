@@ -10,7 +10,7 @@ import { computed } from 'vue'
 import type { GroupMonitorCard } from '@/api/admin/accountMonitor'
 import GroupMonitorTimeline from './GroupMonitorTimeline.vue'
 import PlatformBadge from '@/components/common/PlatformBadge.vue'
-const props = withDefaults(defineProps<{ group: GroupMonitorCard; bucketSeconds?: number }>(), { bucketSeconds: 600 })
+const props = withDefaults(defineProps<{ group: GroupMonitorCard; bucketSeconds?: number }>(), { bucketSeconds: 900 })
 defineEmits<{ select: [group: GroupMonitorCard] }>()
 const labels = { normal: { label: '正常', color: 'text-emerald-600' }, partial_failure: { label: '部分失败', color: 'text-amber-600' }, all_failed: { label: '全部失败', color: 'text-red-600' }, recently_idle: { label: '近期空闲', color: 'text-gray-600 dark:text-gray-300' }, no_data: { label: '无调用', color: 'text-gray-500' } }
 const status = computed(() => labels[props.group.call_status] || labels.no_data)
