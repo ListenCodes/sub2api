@@ -21,6 +21,7 @@ fail() {
   exit 1
 }
 
+[[ "$BRANCH" == custom-release ]] || fail "publication branch $BRANCH is not approved; expected custom-release"
 [[ "${1:-}" == "--commit" && -n "${2:-}" ]] || fail "usage: publish-custom.sh --commit <approved $ORIGIN_REF commit>"
 APPROVED_COMMIT="$2"
 

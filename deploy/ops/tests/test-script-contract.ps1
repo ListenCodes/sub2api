@@ -38,6 +38,7 @@ function Assert-NotMatches {
 
 # Stable Release preparation must be isolated from custom and production.
 Assert-Matches $syncScript 'resolve-stable-release\.sh' 'sync resolves the latest stable Release'
+Assert-Matches $syncScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'sync rejects non-approved publication branches'
 Assert-Matches $syncScript 'integration/release-' 'sync publishes a Release integration branch'
 Assert-Matches $syncScript 'release_tag' 'sync records the stable Release tag'
 Assert-Matches $syncScript 'release_commit' 'sync records the peeled Release commit'
@@ -75,6 +76,7 @@ Assert-Matches $syncPublishScript 'git\s+merge\s+--ff-only' 'unified flow promot
 Assert-Matches $syncPublishScript 'BRANCH="\$\{SUB2API_BRANCH:-custom-release\}"' 'unified flow defaults to custom-release'
 Assert-Matches $syncPublishScript 'ORIGIN_REMOTE="\$\{SUB2API_ORIGIN_REMOTE:-origin\}"' 'unified flow parameterizes the origin remote'
 Assert-Matches $syncPublishScript 'ORIGIN_REF="\$ORIGIN_REMOTE/\$BRANCH"' 'unified flow derives the approved origin ref'
+Assert-Matches $syncPublishScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'unified flow rejects non-approved publication branches'
 Assert-Matches $syncPublishScript 'SUB2API_SYNC_PUBLISH_LOCK' 'unified flow has an end-to-end lock'
 Assert-Matches $syncPublishScript 'published_commit' 'unified flow records the published commit'
 Assert-Matches $syncPublishScript 'sync-pending-publish' 'unified flow preserves a failed publish for retry'
@@ -89,6 +91,7 @@ Assert-Matches $publishScript -- '--commit' 'publish requires an explicit commit
 Assert-Matches $publishScript 'BRANCH="\$\{SUB2API_BRANCH:-custom-release\}"' 'publish defaults to custom-release'
 Assert-Matches $publishScript 'ORIGIN_REMOTE="\$\{SUB2API_ORIGIN_REMOTE:-origin\}"' 'publish parameterizes the origin remote'
 Assert-Matches $publishScript 'ORIGIN_REF="\$ORIGIN_REMOTE/\$BRANCH"' 'publish derives the approved origin ref'
+Assert-Matches $publishScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'publish rejects non-approved publication branches'
 Assert-Matches $publishScript 'BACKUP_ROOT' 'publish creates a backup under the configured backup root'
 Assert-Matches $publishScript 'pg_dump' 'publish backs up PostgreSQL before deployment'
 Assert-Matches $publishScript 'docker\s+compose\s+--project-name\s+deploy' 'publish uses the stable Compose project name'

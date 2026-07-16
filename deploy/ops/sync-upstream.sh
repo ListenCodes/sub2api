@@ -147,6 +147,7 @@ trap cleanup EXIT
 trap 'on_error "$LINENO"' ERR
 mkdir -p "$DATA_DIR" "$WORKTREE_ROOT" "$(dirname "$LOG")" "$(dirname "$LOCK_FILE")"
 touch "$LOG" "$LOCK_FILE"
+[[ "$BRANCH" == custom-release ]] || result "FAILED: publication branch $BRANCH is not approved; expected custom-release" 1
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then

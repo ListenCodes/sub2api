@@ -108,6 +108,8 @@ fail_run() {
   exit 1
 }
 
+[[ "$BRANCH" == custom-release ]] || fail_run "FAILED: publication branch $BRANCH is not approved; expected custom-release"
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   fail_run 'FAILED: another sync-and-publish run is already running'
