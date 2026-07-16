@@ -40,6 +40,15 @@ describe('GroupMonitorPanel', () => {
 		expect(wrapper.text()).toContain('采集已延迟 900 秒')
 		expect(wrapper.text()).not.toContain('自动刷新')
 		expect(wrapper.find('[data-testid="group-filter-apply"]').exists()).toBe(false)
+		for (const [testID, label] of [
+			['group-filter-query-label', '分组名称'],
+			['group-filter-platform-label', '平台'],
+			['group-filter-status-label', '分组状态'],
+			['group-filter-call-status-label', '调用状态'],
+			['group-filter-range-label', '时间范围'],
+		] as const) {
+			expect(wrapper.get(`[data-testid="${testID}"]`).text()).toBe(label)
+		}
 
     vi.mocked(accountMonitorAPI.listGroups).mockRejectedValueOnce(new Error('分组聚合暂不可用'))
     await wrapper.get('[data-testid="group-monitor-refresh"]').trigger('click')

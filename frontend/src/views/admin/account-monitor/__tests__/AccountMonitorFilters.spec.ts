@@ -10,6 +10,26 @@ vi.mock('vue-i18n', async (importOriginal) => ({
 }))
 
 describe('AccountMonitorFilters', () => {
+	it('shows the identity of every filter before a value is chosen', () => {
+		const wrapper = mount(AccountMonitorFilters, {
+			props: { state: parseAccountMonitorQuery({}), groups: [] },
+			global: { stubs: { Icon: true } },
+		})
+
+		for (const [testID, label] of [
+			['account-filter-range-label', '时间范围'],
+			['account-filter-platform-label', '平台'],
+			['account-filter-group-label', '分组'],
+			['account-filter-model-label', '实际模型'],
+			['account-filter-status-label', '账号状态'],
+			['account-filter-result-label', '调用结果'],
+			['account-filter-rollup-label', '账号口径'],
+			['account-filter-risk-label', '风险分'],
+		] as const) {
+			expect(wrapper.get(`[data-testid="${testID}"]`).text()).toBe(label)
+		}
+	})
+
   it('applies custom dates as soon as the input is committed', async () => {
     const wrapper = mount(AccountMonitorFilters, {
       props: {

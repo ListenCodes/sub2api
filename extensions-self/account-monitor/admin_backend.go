@@ -115,7 +115,7 @@ SELECT date_trunc($4,attempted_at) AS bucket,COUNT(*),
        COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0)
 FROM account_monitor_attempt_facts
 WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + trendDetailFiltersSQL + `
-GROUP BY 1 ORDER BY 1`
+GROUP BY 1 ORDER BY 1 DESC`
 
 const attemptsSQL = `
 SELECT event_key,request_key,attempted_at,account_id,platform,actual_model,model_attribution,

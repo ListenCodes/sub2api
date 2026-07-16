@@ -43,6 +43,12 @@ func TestGroupMonitorQueriesUseAdaptiveDisplayBuckets(t *testing.T) {
 	}
 }
 
+func TestAccountTrendQueryReturnsNewestBucketFirst(t *testing.T) {
+	if !strings.Contains(strings.ToLower(trendsSQL), "order by 1 desc") {
+		t.Fatalf("trend query is not newest first: %s", trendsSQL)
+	}
+}
+
 func TestGroupMonitorListAggregatesHourlyBuckets(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
