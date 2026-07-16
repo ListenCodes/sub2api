@@ -50,6 +50,9 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 - 事实和分钟聚合保留 90 天，日聚合保留 365 天（1 年）。
 - 分组维度镜像保留软删除状态；`account_monitor_group_model_10m` 按
   `bucket_at + group_id + actual_model` 幂等聚合，只读取已完整结束的 10 分钟桶并保留 90 天。
+- 分组页面的 `6h/24h/7d/30d` 展示区间始终生成 24 个桶，粒度依次为
+  15 分钟、1 小时、7 小时和 30 小时。展示桶从最终请求事实按同一 `[from,to)` UTC 区间精确汇总；
+  10 分钟表继续用于完整基础聚合，不能把 10 分钟桶近似拆成 15 分钟桶。
 - 主库错误明细通常只保留 30 天，首次回填超过现存范围时会产生真实数据缺口，不能外推。
 - 单个重建任务最长 31 天；重叠任务由 PostgreSQL advisory lock 拒绝。
 - 采集失败保留旧结果并指数退避，最长 15 分钟；主请求链路不等待采集器。
@@ -68,7 +71,8 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 - `POST /rebuild-jobs`、`GET /rebuild-jobs/:id`
 - `GET /group-monitor/groups`、`GET /group-monitor/groups/:id`
 
-查询区间不得超过 90 天，`page_size` 只接受 20、50、100，请求体最大 256 KiB。API 只接受主应用
+查询区间不得超过 90 天，`page_size` 接受 5 至 1000 的整数；管理页面必须提供 1000 条选项并
+保持用户选择。请求体最大 256 KiB。API 只接受主应用
 代理生成的 HMAC 时间戳、nonce、签名和管理员 actor ID。
 
 阈值按 `global -> platform -> parent -> account` 依次覆盖。`platform` 作用域的
@@ -112,3 +116,5 @@ docker exec risk-control-postgres psql -U risk_control_app -d risk_control \
 完整数据字典和发布检查清单见
 [`../../docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md`](../../docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md)
 与 [`../../docs/ACCOUNT-MONITOR-CHECKLIST.md`](../../docs/ACCOUNT-MONITOR-CHECKLIST.md)。
+2026-07-16 的首次完整生产发布证据见
+[`../../docs/ACCOUNT-MONITOR-RELEASE-2026-07-16.md`](../../docs/ACCOUNT-MONITOR-RELEASE-2026-07-16.md)。

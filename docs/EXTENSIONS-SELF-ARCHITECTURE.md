@@ -49,3 +49,6 @@ flowchart LR
 
 代码完成不等于生产发布。实现 commit、合并、推送、生产备份、发布和回滚是独立状态，
 必须分别报告。
+
+2026-07-16 账号与分组监控生产发布的批准提交、镜像、备份、回填和回滚记录见
+[`ACCOUNT-MONITOR-RELEASE-2026-07-16.md`](ACCOUNT-MONITOR-RELEASE-2026-07-16.md)。

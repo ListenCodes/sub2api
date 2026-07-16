@@ -53,7 +53,7 @@
 | `extensions_self_ro.usage_source` | 可计费用量、账号/模型、Token、成本、延迟和媒体值 |
 | `extensions_self_ro.error_source` | 脱敏错误、重试数组和新事件的实际上游模型 |
 | `extensions_self_ro.account_dimension` | 账号 ID、母账号、名称、平台和状态 |
-| `extensions_self_ro.account_group_dimension` | 账号与其全部分组的多对多映射，以及分组名称、平台、状态和软删除时间；不含账号凭据 |
+| `extensions_self_ro.account_group_dimension` | 账号与其全部分组的多对多映射，以及分组名称、平台、状态、倍率和软删除时间；新增列必须追加以保持 `CREATE OR REPLACE VIEW` 升级兼容；不含账号凭据 |
 | `extensions_self_ro.user_dimension` | 用户 ID、展示身份和状态 |
 | `extensions_self_ro.api_key_dimension` | API Key ID、名称和固定掩码前缀 |
 | `extensions_self_ro.group_dimension` | 分组 ID、名称、平台、状态和软删除时间；不含账号凭据 |
@@ -68,3 +68,6 @@
 - 共享快照字段为 `data_as_of`、`collection_lag_seconds`、`stale_data_warning`、
   `usage_cursor`、`error_cursor`、`recent_source_error`、`available_from/to`、
   `missing_group_requests`、`exact_model_requests` 和 `estimated_model_requests`。
+- 分组页面的四种时间范围都以最终请求事实为权威来源，在对齐的 UTC `[from,to)` 内精确汇总
+  24 个展示桶：`6h=15m`、`24h=1h`、`7d=7h`、`30d=30h`。基础 10 分钟聚合不能近似转换
+  15 分钟展示桶。
