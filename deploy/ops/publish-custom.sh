@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 REPO="${SUB2API_REPO:-/root/sub2api}"
+BRANCH="${SUB2API_BRANCH:-custom-release}"
+ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
+ORIGIN_REF="$ORIGIN_REMOTE/$BRANCH"
 COMPOSE="$REPO/deploy/docker-compose.yml"
 ENV_FILE="${SUB2API_ENV_FILE:-$REPO/deploy/.env}"
 BACKUP_ROOT="${SUB2API_BACKUP_ROOT:-/root/backups/sub2api}"
@@ -18,20 +21,20 @@ fail() {
   exit 1
 }
 
-[[ "${1:-}" == "--commit" && -n "${2:-}" ]] || fail 'usage: publish-custom.sh --commit <approved origin/custom commit>'
+[[ "${1:-}" == "--commit" && -n "${2:-}" ]] || fail "usage: publish-custom.sh --commit <approved $ORIGIN_REF commit>"
 APPROVED_COMMIT="$2"
 
 mkdir -p "$BACKUP_DIR" "$(dirname "$LOG")"
 touch "$LOG"
 cd "$REPO"
 
-[[ "$(git branch --show-current)" == custom ]] || fail 'VPS source branch must be custom'
+[[ "$(git branch --show-current)" == "$BRANCH" ]] || fail "VPS source branch must be $BRANCH"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'VPS source worktree is dirty'
 
-git fetch origin custom >> "$LOG" 2>&1 || fail 'fetch origin/custom failed'
-ORIGIN_COMMIT="$(git rev-parse origin/custom)"
-[[ "$APPROVED_COMMIT" == "$ORIGIN_COMMIT" ]] || fail "approved commit $APPROVED_COMMIT is not origin/custom $ORIGIN_COMMIT"
-git merge --ff-only origin/custom >> "$LOG" 2>&1 || fail 'fast-forward to origin/custom failed'
+git fetch "$ORIGIN_REMOTE" "$BRANCH" >> "$LOG" 2>&1 || fail "fetch $ORIGIN_REF failed"
+ORIGIN_COMMIT="$(git rev-parse "$ORIGIN_REF")"
+[[ "$APPROVED_COMMIT" == "$ORIGIN_COMMIT" ]] || fail "approved commit $APPROVED_COMMIT is not $ORIGIN_REF $ORIGIN_COMMIT"
+git merge --ff-only "$ORIGIN_REF" >> "$LOG" 2>&1 || fail "fast-forward to $ORIGIN_REF failed"
 [[ "$(git rev-parse HEAD)" == "$APPROVED_COMMIT" ]] || fail 'source HEAD is not the approved commit'
 
 if docker container inspect sub2api-risk-control >/dev/null 2>&1; then

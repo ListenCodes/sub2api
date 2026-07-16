@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 REPO="${SUB2API_REPO:-/root/sub2api}"
+BRANCH="${SUB2API_BRANCH:-custom-release}"
+ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
+ORIGIN_REF="$ORIGIN_REMOTE/$BRANCH"
 SYNC_SCRIPT="${SUB2API_SYNC_SCRIPT:-/opt/sub2api-custom/sync-upstream.sh}"
 PUBLISH_SCRIPT="${SUB2API_PUBLISH_SCRIPT:-/opt/sub2api-custom/publish-custom.sh}"
 DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
@@ -11,6 +14,8 @@ JOB_ID_FILE="$DATA_DIR/sync-job-id"
 PENDING_FILE="$DATA_DIR/sync-pending-publish"
 LOCK_FILE="${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-sync-publish.lock}"
 LOG="${SUB2API_SYNC_PUBLISH_LOG:-/var/log/sub2api-sync-publish.log}"
+
+export SUB2API_BRANCH="$BRANCH" SUB2API_ORIGIN_REMOTE="$ORIGIN_REMOTE"
 
 mkdir -p "$DATA_DIR" "$(dirname "$LOCK_FILE")" "$(dirname "$LOG")"
 touch "$LOG"
@@ -83,12 +88,12 @@ retry_pending_publish() {
   [[ -n "$pending_commit" ]] || { rm -f "$PENDING_FILE"; return 1; }
 
   cd "$REPO"
-  [[ "$(git branch --show-current)" == custom ]] || fail_run 'FAILED: VPS source branch is not custom'
+  [[ "$(git branch --show-current)" == "$BRANCH" ]] || fail_run "FAILED: VPS source branch is not $BRANCH"
   [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail_run 'FAILED: VPS source worktree is dirty; pending publish retained'
-  git fetch origin custom >> "$LOG" 2>&1 || fail_run 'FAILED: fetch origin/custom for pending publish'
-  origin_custom="$(git rev-parse origin/custom)"
-  [[ "$pending_commit" == "$origin_custom" ]] || fail_run "FAILED: pending publish commit $pending_commit is not origin/custom $origin_custom"
-  [[ "$(git rev-parse HEAD)" == "$origin_custom" ]] || fail_run 'FAILED: local custom is not aligned with origin/custom for pending publish'
+  git fetch "$ORIGIN_REMOTE" "$BRANCH" >> "$LOG" 2>&1 || fail_run "FAILED: fetch $ORIGIN_REF for pending publish"
+  origin_head="$(git rev-parse "$ORIGIN_REF")"
+  [[ "$pending_commit" == "$origin_head" ]] || fail_run "FAILED: pending publish commit $pending_commit is not $ORIGIN_REF $origin_head"
+  [[ "$(git rev-parse HEAD)" == "$origin_head" ]] || fail_run "FAILED: local $BRANCH is not aligned with $ORIGIN_REF for pending publish"
 
   update_status running "retrying pending publish $pending_commit" false "" retrying
   publish_commit "$pending_commit" "PUBLISH OK: commit=$pending_commit pending-retry=true"
@@ -118,14 +123,14 @@ if [[ -s "$PENDING_FILE" ]]; then
   exit 0
 fi
 
-log 'Starting conflict-gated upstream sync and publish'
+log "Starting conflict-gated stable Release sync and publish for $ORIGIN_REF"
 set +e
 SUB2API_SYNC_DEFER_RESULT=1 "$SYNC_SCRIPT" "$@"
 sync_exit=$?
 set -e
 
 if [[ "$sync_exit" -ne 0 ]]; then
-  message="$(jq -r '.message // "FAILED: upstream sync failed"' "$STATUS_FILE" 2>/dev/null || printf '%s' 'FAILED: upstream sync failed')"
+  message="$(jq -r '.message // "FAILED: stable Release sync failed"' "$STATUS_FILE" 2>/dev/null || printf '%s' 'FAILED: stable Release sync failed')"
   write_result "$message"
   log "$message"
   exit "$sync_exit"
@@ -133,7 +138,7 @@ fi
 
 integration_branch="$(jq -r '.integration_branch // empty' "$STATUS_FILE")"
 base_commit="$(jq -r '.base_commit // empty' "$STATUS_FILE")"
-sync_message="$(jq -r '.message // "upstream sync completed"' "$STATUS_FILE")"
+sync_message="$(jq -r '.message // "stable Release sync completed"' "$STATUS_FILE")"
 
 if [[ -z "$integration_branch" ]]; then
   write_result "$sync_message"
@@ -142,20 +147,20 @@ if [[ -z "$integration_branch" ]]; then
 fi
 
 cd "$REPO"
-[[ "$(git branch --show-current)" == custom ]] || fail_run 'FAILED: VPS source branch is not custom'
+[[ "$(git branch --show-current)" == "$BRANCH" ]] || fail_run "FAILED: VPS source branch is not $BRANCH"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail_run 'FAILED: VPS source worktree is dirty; no promotion performed'
 
-git fetch origin custom "$integration_branch" >> "$LOG" 2>&1 || fail_run 'FAILED: fetch integration branch for promotion'
-origin_custom="$(git rev-parse origin/custom)"
-integration_ref="origin/$integration_branch"
+git fetch "$ORIGIN_REMOTE" "$BRANCH" "$integration_branch" >> "$LOG" 2>&1 || fail_run "FAILED: fetch $ORIGIN_REF and integration branch for promotion"
+origin_head="$(git rev-parse "$ORIGIN_REF")"
+integration_ref="$ORIGIN_REMOTE/$integration_branch"
 integration_head="$(git rev-parse "$integration_ref")"
 
-[[ -n "$base_commit" && "$base_commit" == "$origin_custom" ]] || fail_run "FAILED: origin/custom changed since integration base (base=$base_commit current=$origin_custom)"
-git merge-base --is-ancestor "$origin_custom" "$integration_head" || fail_run 'FAILED: integration branch is not based on current origin/custom'
-[[ "$(git rev-parse HEAD)" == "$origin_custom" ]] || fail_run 'FAILED: local custom is not aligned with origin/custom'
+[[ -n "$base_commit" && "$base_commit" == "$origin_head" ]] || fail_run "FAILED: $ORIGIN_REF changed since integration base (base=$base_commit current=$origin_head)"
+git merge-base --is-ancestor "$origin_head" "$integration_head" || fail_run "FAILED: integration branch is not based on current $ORIGIN_REF"
+[[ "$(git rev-parse HEAD)" == "$origin_head" ]] || fail_run "FAILED: local $BRANCH is not aligned with $ORIGIN_REF"
 
 log "Promoting clean integration $integration_branch"
 git merge --ff-only "$integration_ref" >> "$LOG" 2>&1 || fail_run 'FAILED: integration promotion was not fast-forwardable'
-git push origin custom >> "$LOG" 2>&1 || fail_run 'FAILED: push promoted origin/custom failed'
+git push "$ORIGIN_REMOTE" "$BRANCH" >> "$LOG" 2>&1 || fail_run "FAILED: push promoted $ORIGIN_REF failed"
 approved_commit="$(git rev-parse HEAD)"
 publish_commit "$approved_commit" "PUBLISH OK: commit=$approved_commit integration=$integration_branch"
