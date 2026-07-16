@@ -33,6 +33,10 @@ fi
 trigger_output="$(SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh")"
 assert_eq update-fixture "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger did not carry the durable job id'
 [[ "$trigger_output" == *'release triggered: update-fixture'* ]] || fail 'trigger did not return immediately with the job id'
+release_job_init update-explicit
+printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
+SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" update-explicit >/dev/null
+assert_eq update-explicit "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger ignored the explicit durable job id'
 printf 'update-a.b\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 touch "$SUB2API_DATA_DIR/release-jobs/update-a.b.json"
 if SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" >/dev/null 2>&1; then

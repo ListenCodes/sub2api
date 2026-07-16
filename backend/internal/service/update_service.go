@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -69,7 +70,8 @@ type UpdateService struct {
 	scriptPath     string
 	jobsDir        string
 	jobIDPath      string
-	startScript    func(string) (func() error, error)
+	startScript    func(string, string) (func() error, error)
+	performMu      sync.Mutex
 }
 
 // NewUpdateService creates a new UpdateService
@@ -172,6 +174,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate starts the conflict-gated upstream sync/publish job and returns
 // before the host-side workflow completes.
 func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
+	s.performMu.Lock()
+	defer s.performMu.Unlock()
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -217,7 +222,7 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 		return nil, fmt.Errorf("write update job id: %w", err)
 	}
 
-	wait, err := s.startScript(s.scriptPath)
+	wait, err := s.startScript(s.scriptPath, jobID)
 	if err != nil {
 		finishedAt := time.Now().UTC()
 		_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "failed to start sync: "+err.Error(), &startedAt, &finishedAt)
@@ -230,8 +235,8 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	return job, nil
 }
 
-func startUpdateScript(scriptPath string) (func() error, error) {
-	cmd := exec.Command("/bin/sh", scriptPath)
+func startUpdateScript(scriptPath, jobID string) (func() error, error) {
+	cmd := exec.Command("/bin/sh", scriptPath, jobID)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

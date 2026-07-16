@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,7 +71,9 @@ func TestUpdateServicePerformUpdateQueuesEvenWhenBinaryVersionIsCurrent(t *testi
 	svc.scriptPath = scriptPath
 	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
 	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
-	svc.startScript = func(string) (func() error, error) {
+	var triggeredJobID string
+	svc.startScript = func(_ string, jobID string) (func() error, error) {
+		triggeredJobID = jobID
 		return func() error { return nil }, nil
 	}
 
@@ -78,6 +82,61 @@ func TestUpdateServicePerformUpdateQueuesEvenWhenBinaryVersionIsCurrent(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, job)
 	require.Equal(t, UpdateStatusCheckingRelease, job.Status)
+	require.Equal(t, job.JobID, triggeredJobID)
+}
+
+func TestUpdateServicePerformUpdateRejectsConcurrentRequests(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "sync-trigger.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755))
+	svc := NewUpdateService(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{},
+		"0.1.158",
+		"release",
+	)
+	svc.scriptPath = scriptPath
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+
+	var starts atomic.Int32
+	svc.startScript = func(string, string) (func() error, error) {
+		starts.Add(1)
+		return func() error { return nil }, nil
+	}
+
+	const callers = 32
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.PerformUpdate(context.Background())
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	succeeded := 0
+	inProgress := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrUpdateInProgress):
+			inProgress++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	require.Equal(t, 1, succeeded)
+	require.Equal(t, callers-1, inProgress)
+	require.Equal(t, int32(1), starts.Load())
 }
 
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {

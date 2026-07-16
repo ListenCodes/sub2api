@@ -31,7 +31,7 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 	svc.scriptPath = scriptPath
 	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
 	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
-	svc.startScript = func(string) (func() error, error) {
+	svc.startScript = func(string, string) (func() error, error) {
 		return func() error {
 			time.Sleep(2 * time.Second)
 			return nil

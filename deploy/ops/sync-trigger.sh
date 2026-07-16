@@ -6,7 +6,10 @@ JOB_ID_FILE=$DATA_DIR/release-current-job-id
 JOBS_DIR=$DATA_DIR/release-jobs
 TRIGGER_FILE=$DATA_DIR/release-trigger
 
-job_id=$(tr -d '[:space:]' < "$JOB_ID_FILE" 2>/dev/null || true)
+job_id=${1:-}
+if [ -z "$job_id" ]; then
+  job_id=$(tr -d '[:space:]' < "$JOB_ID_FILE" 2>/dev/null || true)
+fi
 if [ -z "$job_id" ]; then
   echo "release job id is missing" >&2
   exit 1

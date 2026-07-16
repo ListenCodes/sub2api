@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SYNC_SCRIPT="$ROOT_DIR/deploy/ops/sync-upstream.sh"
 
 grep -Fq 'conflict_snapshot_dir="$CONFLICT_DIR/$JOB_ID"' "$SYNC_SCRIPT"
-grep -Fq 'CONFLICT_LOG="$conflict_snapshot_dir/metadata.json"' "$SYNC_SCRIPT"
-grep -Fq 'CONFLICT_RELEASE="$RELEASE_TAG@$RELEASE_COMMIT"' "$SYNC_SCRIPT"
+grep -Fq 'artifact_path="$conflict_snapshot_dir/metadata.json"' "$SYNC_SCRIPT"
+grep -Fq 'conflict_release="$RELEASE_TAG@$RELEASE_COMMIT"' "$SYNC_SCRIPT"
 grep -Fq 'release_published_at' "$SYNC_SCRIPT"
 if grep -Fq 'upstream/main' "$SYNC_SCRIPT"; then
   echo 'stable Release sync must not reference upstream/main' >&2
