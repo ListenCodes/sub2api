@@ -93,22 +93,26 @@ func TestPostgresMigrationAggregationRebuildAndRetention(t *testing.T) {
 	assertDatabaseCount(t, db, "SELECT COUNT(*) FROM account_monitor_request_facts", 4)
 	assertGroupAggregate(t, db, completedBucket, groupID, "gpt-5", 2, 1, 1, 1, 1)
 	assertDatabaseCount(t, db, "SELECT COUNT(*) FROM account_monitor_group_model_10m WHERE bucket_at=$1", 0, currentBucket)
+	displayFrom := time.Unix(completedAt.Unix()-completedAt.Unix()%900, 0).UTC()
+	displayTo := displayFrom.Add(15 * time.Minute)
 	groupBuckets, err := NewAdminService(repository, nil, time.Second).loadGroupBuckets(
 		ctx,
-		completedBucket,
-		currentBucket,
+		displayFrom,
+		displayTo,
 		[]int64{groupID},
+		900,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	groupCard := buildGroupCard(batch.GroupDimensions[0], completedBucket, currentBucket, groupBuckets[groupID])
+	groupCard := buildGroupCard(batch.GroupDimensions[0], displayFrom, displayTo, groupBuckets[groupID], 900)
 	if groupCard.TotalRequests != 2 || groupCard.Successes != 1 || groupCard.Failures != 1 {
 		t.Fatalf("cross-zone group card = %+v, want 2 requests split 1/1", groupCard)
 	}
 
 	fifteenMinuteFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	thirtyHourFrom := fifteenMinuteFrom.Add(24 * time.Hour)
+	thirtyHourCandidate := fifteenMinuteFrom.Add(24 * time.Hour)
+	thirtyHourFrom := time.Unix(thirtyHourCandidate.Unix()-thirtyHourCandidate.Unix()%108000, 0).UTC()
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO account_monitor_group_dimensions(group_id,name,platform,status,synced_at)
 		VALUES (70,'Fifteen Minute','openai','active',$1),(80,'Thirty Hour','openai','active',$1)

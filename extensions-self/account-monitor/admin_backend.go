@@ -271,7 +271,8 @@ SELECT COALESCE(NULLIF(actual_model,''),'未知实际模型') AS actual_model,
 FROM account_monitor_request_facts
 WHERE group_id=$1 AND occurred_at >= $2 AND occurred_at < $3
 GROUP BY COALESCE(NULLIF(actual_model,''),'未知实际模型'),display_bucket
-ORDER BY LOWER(actual_model),actual_model,display_bucket`
+ORDER BY LOWER(COALESCE(NULLIF(actual_model,''),'未知实际模型')),
+	     COALESCE(NULLIF(actual_model,''),'未知实际模型'),display_bucket`
 
 type AdminService struct {
 	repo         *Repository
