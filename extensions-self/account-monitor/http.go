@@ -221,25 +221,21 @@ func (h *Handler) parseGroupRange(r *http.Request) (time.Time, time.Time, int, e
 		raw = "6h"
 	}
 	var duration time.Duration
-	bucketSeconds := 600
+	bucketSeconds := 900
 	switch raw {
-	case "1h":
-		duration = time.Hour
 	case "6h":
-		duration = 6 * time.Hour
-	case "12h":
-		duration = 12 * time.Hour
+		duration, bucketSeconds = 6*time.Hour, 900
 	case "24h":
-		duration = 24 * time.Hour
+		duration, bucketSeconds = 24*time.Hour, 3600
 	case "7d":
-		duration, bucketSeconds = 7*24*time.Hour, 3600
+		duration, bucketSeconds = 7*24*time.Hour, 25200
 	case "30d":
-		duration, bucketSeconds = 30*24*time.Hour, 21600
+		duration, bucketSeconds = 30*24*time.Hour, 108000
 	default:
-		return time.Time{}, time.Time{}, 0, errors.New("range must be one of 1h, 6h, 12h, 24h, 7d, or 30d")
+		return time.Time{}, time.Time{}, 0, errors.New("range must be one of 6h, 24h, 7d, or 30d")
 	}
-	bucketDuration := time.Duration(bucketSeconds) * time.Second
-	to := h.now().UTC().Truncate(bucketDuration)
+	now := h.now().UTC()
+	to := time.Unix(now.Unix()-now.Unix()%int64(bucketSeconds), 0).UTC()
 	return to.Add(-duration), to, bucketSeconds, nil
 }
 

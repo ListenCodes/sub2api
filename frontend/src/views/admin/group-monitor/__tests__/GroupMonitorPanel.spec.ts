@@ -22,6 +22,11 @@ describe('group monitor URL state', () => {
 		expect(state).toEqual({ range: '30d', query: 'openai', platform: 'openai', groupStatus: 'all', callStatus: 'partial_failure', page: 3, pageSize: 1000, selectedGroupID: 7 })
 		expect(serializeGroupMonitorQuery(state)).toEqual({ range: '30d', query: 'openai', platform: 'openai', group_status: 'all', call_status: 'partial_failure', page: '3', page_size: '1000', group: '7' })
   })
+
+	it('normalizes removed one-hour and twelve-hour ranges to six hours', () => {
+		expect(parseGroupMonitorQuery({ range: '1h' }).range).toBe('6h')
+		expect(parseGroupMonitorQuery({ range: '12h' }).range).toBe('6h')
+	})
 })
 
 describe('GroupMonitorPanel', () => {

@@ -107,49 +107,50 @@ func TestPostgresMigrationAggregationRebuildAndRetention(t *testing.T) {
 		t.Fatalf("cross-zone group card = %+v, want 2 requests split 1/1", groupCard)
 	}
 
-	hourlyFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	sixHourFrom := hourlyFrom.Add(24 * time.Hour)
+	fifteenMinuteFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	thirtyHourFrom := fifteenMinuteFrom.Add(24 * time.Hour)
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO account_monitor_group_dimensions(group_id,name,platform,status,synced_at)
-		VALUES (70,'Hourly','openai','active',$1),(80,'Six Hour','openai','active',$1)
+		VALUES (70,'Fifteen Minute','openai','active',$1),(80,'Thirty Hour','openai','active',$1)
 		ON CONFLICT (group_id) DO NOTHING`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO account_monitor_group_model_10m
-		(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
-		SELECT $1::timestamptz + step * interval '10 minutes',70,'hourly-model',1,1,0,1,0
-		FROM generate_series(0,5) AS step`, hourlyFrom); err != nil {
+		INSERT INTO account_monitor_request_facts
+		(request_key,occurred_at,group_id,platform,actual_model,model_attribution,result,source_kind,source_id)
+		SELECT 'fifteen-'||step,$1::timestamptz + step * interval '15 minutes',70,'openai','fifteen-model','exact','succeeded','usage',step
+		FROM generate_series(0,23) AS step`, fifteenMinuteFrom); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO account_monitor_group_model_10m
-		(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
-		SELECT $1::timestamptz + step * interval '10 minutes',80,'six-hour-model',1,
-		       CASE WHEN step < 30 THEN 1 ELSE 0 END,CASE WHEN step < 30 THEN 0 ELSE 1 END,
-		       CASE WHEN step < 30 THEN 1 ELSE 0 END,CASE WHEN step < 30 THEN 0 ELSE 1 END
-		FROM generate_series(0,35) AS step`, sixHourFrom); err != nil {
+		INSERT INTO account_monitor_request_facts
+		(request_key,occurred_at,group_id,platform,actual_model,model_attribution,result,source_kind,source_id)
+		SELECT 'thirty-'||step,$1::timestamptz + step * interval '30 hours',80,'openai','thirty-model',
+		       CASE WHEN step < 12 THEN 'exact' ELSE 'estimated' END,
+		       CASE WHEN step < 12 THEN 'succeeded' ELSE 'failed' END,'usage',step
+		FROM generate_series(0,23) AS step`, thirtyHourFrom); err != nil {
 		t.Fatal(err)
 	}
 	adaptiveService := NewAdminService(repository, nil, time.Second)
-	hourlyBuckets, err := adaptiveService.loadGroupBuckets(ctx, hourlyFrom, hourlyFrom.Add(time.Hour), []int64{70}, 3600)
+	fifteenMinuteBuckets, err := adaptiveService.loadGroupBuckets(ctx, fifteenMinuteFrom, fifteenMinuteFrom.Add(6*time.Hour), []int64{70}, 900)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hourlyCard := buildGroupCard(GroupDimension{ID: 70}, hourlyFrom, hourlyFrom.Add(time.Hour), hourlyBuckets[70], 3600)
-	if len(hourlyCard.Timeline) != 1 || hourlyCard.TotalRequests != 6 || !hourlyCard.Timeline[0].BucketAt.Equal(hourlyFrom) {
-		t.Fatalf("hourly adaptive card = %+v", hourlyCard)
+	fifteenMinuteCard := buildGroupCard(GroupDimension{ID: 70}, fifteenMinuteFrom, fifteenMinuteFrom.Add(6*time.Hour), fifteenMinuteBuckets[70], 900)
+	if len(fifteenMinuteCard.Timeline) != 24 || fifteenMinuteCard.TotalRequests != 24 || !fifteenMinuteCard.Timeline[0].BucketAt.Equal(fifteenMinuteFrom) {
+		t.Fatalf("fifteen-minute fixed card = %+v", fifteenMinuteCard)
 	}
-	sixHourResult, err := adaptiveService.groupMonitorGroup(ctx, AdminRequest{
-		GroupID: 80, From: sixHourFrom, To: sixHourFrom.Add(6 * time.Hour), BucketSeconds: 21600,
+	thirtyHourResult, err := adaptiveService.groupMonitorGroup(ctx, AdminRequest{
+		GroupID: 80, From: thirtyHourFrom, To: thirtyHourFrom.Add(30 * 24 * time.Hour), BucketSeconds: 108000,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sixHourResult.Models) != 1 || len(sixHourResult.Models[0].Timeline) != 1 ||
-		sixHourResult.Group.TotalRequests != 36 || sixHourResult.Models[0].Successes != 30 ||
-		!sixHourResult.Models[0].Timeline[0].BucketAt.Equal(sixHourFrom) {
-		t.Fatalf("six-hour adaptive detail = %+v", sixHourResult)
+	if len(thirtyHourResult.Models) != 1 || len(thirtyHourResult.Models[0].Timeline) != 24 ||
+		thirtyHourResult.Group.TotalRequests != 24 || thirtyHourResult.Models[0].Successes != 12 ||
+		thirtyHourResult.Models[0].ExactModelRequests != 12 || thirtyHourResult.Models[0].EstimatedModelRequests != 12 ||
+		!thirtyHourResult.Models[0].Timeline[0].BucketAt.Equal(thirtyHourFrom) {
+		t.Fatalf("thirty-hour fixed detail = %+v", thirtyHourResult)
 	}
 
 	var bucketDate string

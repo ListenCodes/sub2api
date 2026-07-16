@@ -24,7 +24,7 @@ watch(() => props.state, (value) => Object.assign(draft, value), { deep: true })
 const platformOptions = computed(() => [{ value: '', label: '全部平台' }, ...SUPPORTED_PLATFORM_OPTIONS])
 const groupStatusOptions = [{ value: 'active', label: '有效分组' }, { value: 'inactive', label: '停用分组' }, { value: 'all', label: '全部未删除分组' }]
 const callStatusOptions = [{ value: '', label: '全部调用状态' }, { value: 'normal', label: '正常' }, { value: 'partial_failure', label: '部分失败' }, { value: 'all_failed', label: '全部失败' }, { value: 'recently_idle', label: '近期空闲' }, { value: 'no_data', label: '无调用' }]
-const rangeOptions = [{ value: '1h', label: '近 1 小时' }, { value: '6h', label: '近 6 小时' }, { value: '12h', label: '近 12 小时' }, { value: '24h', label: '近 24 小时' }, { value: '7d', label: '近 1 周' }, { value: '30d', label: '近 1 个月' }]
+const rangeOptions = [{ value: '6h', label: '近 6 小时' }, { value: '24h', label: '近 24 小时' }, { value: '7d', label: '近 7 天' }, { value: '30d', label: '近 30 天' }]
 function apply() { emit('apply', { ...draft }) }
 const { schedule, runNow } = useDebouncedAction(apply, 300)
 function updateQuery(value: string) { draft.query = value; schedule() }

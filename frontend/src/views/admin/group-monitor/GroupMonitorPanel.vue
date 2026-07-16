@@ -30,13 +30,13 @@ const dataAsOf = ref('')
 const quality = ref<GroupMonitorQuality>({ data_as_of: null, collection_lag_seconds: null, usage_cursor: { cursor_time: null, cursor_id: 0, last_success_at: null }, error_cursor: { cursor_time: null, cursor_id: 0, last_success_at: null }, available_from: null, available_to: null, missing_group_requests: 0, exact_model_requests: 0, estimated_model_requests: 0 })
 const loading = ref(false)
 const error = ref('')
-const bucketSeconds = ref(600)
+const bucketSeconds = ref(900)
 const pageSizeOptions = getConfiguredTablePageSizeOptions()
 const selectedGroup = ref<GroupCard | null>(null)
 let requestID = 0
 const { state, setFilters, resetFilters, setPage, setPageSize, selectGroup } = useGroupMonitorFilters(load)
 const message = (value: unknown) => value instanceof Error ? value.message : typeof value === 'object' && value && 'message' in value ? String(value.message) : '分组监控加载失败'
-async function load() { const id = ++requestID; loading.value = true; error.value = ''; try { const result = await accountMonitorAPI.listGroups({ page: state.page, pageSize: state.pageSize, range: state.range, query: state.query, platform: state.platform, groupStatus: state.groupStatus, callStatus: state.callStatus }); if (id !== requestID) return; groups.value = result.items; total.value = result.total; bucketSeconds.value = result.bucket_seconds || 600; platforms.value = result.platforms; dataAsOf.value = result.data_as_of || ''; quality.value = result.data_quality; if (state.selectedGroupID) selectedGroup.value = groups.value.find((item) => item.group_id === state.selectedGroupID) || selectedGroup.value } catch (value) { if (id === requestID) error.value = message(value) } finally { if (id === requestID) loading.value = false } }
+async function load() { const id = ++requestID; loading.value = true; error.value = ''; try { const result = await accountMonitorAPI.listGroups({ page: state.page, pageSize: state.pageSize, range: state.range, query: state.query, platform: state.platform, groupStatus: state.groupStatus, callStatus: state.callStatus }); if (id !== requestID) return; groups.value = result.items; total.value = result.total; bucketSeconds.value = result.bucket_seconds || 900; platforms.value = result.platforms; dataAsOf.value = result.data_as_of || ''; quality.value = result.data_quality; if (state.selectedGroupID) selectedGroup.value = groups.value.find((item) => item.group_id === state.selectedGroupID) || selectedGroup.value } catch (value) { if (id === requestID) error.value = message(value) } finally { if (id === requestID) loading.value = false } }
 async function openGroup(group: GroupCard) { selectedGroup.value = group; await selectGroup(group.group_id) }
 async function closeGroup() { selectedGroup.value = null; await selectGroup(undefined) }
 async function handleRemoved() { await closeGroup(); await load() }

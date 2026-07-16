@@ -16,7 +16,7 @@ export interface GroupMonitorFilterState {
 
 function text(query: LocationQuery | Record<string, unknown>, key: string) { const value = query[key]; return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '') }
 function positive(raw: string) { const value = Number(raw); return Number.isInteger(value) && value > 0 ? value : undefined }
-const ranges: GroupRange[] = ['1h', '6h', '12h', '24h', '7d', '30d']
+const ranges: GroupRange[] = ['6h', '24h', '7d', '30d']
 const sizes = () => getConfiguredTablePageSizeOptions()
 const statuses: GroupCallStatus[] = ['normal', 'partial_failure', 'all_failed', 'recently_idle', 'no_data']
 

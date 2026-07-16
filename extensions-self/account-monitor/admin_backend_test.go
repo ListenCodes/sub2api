@@ -14,7 +14,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestGroupMonitorQueriesUseOnlyDimensionsAndTenMinuteAggregates(t *testing.T) {
+func TestGroupMonitorQueriesUseOnlyDimensionsAndRequestFacts(t *testing.T) {
 	raw, err := os.ReadFile("admin_backend.go")
 	if err != nil {
 		t.Fatal(err)
@@ -22,12 +22,21 @@ func TestGroupMonitorQueriesUseOnlyDimensionsAndTenMinuteAggregates(t *testing.T
 	content := strings.ToLower(string(raw))
 	for _, required := range []string{
 		"account_monitor_group_dimensions",
-		"account_monitor_group_model_10m",
+		"account_monitor_request_facts",
 		"lower(platform),lower(name),group_id",
 		"group_id=any",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("group monitor query missing %q", required)
+		}
+	}
+	for name, query := range map[string]string{"list": groupTimelineSQL, "detail": groupModelTimelineSQL} {
+		lower := strings.ToLower(query)
+		if !strings.Contains(lower, "account_monitor_request_facts") {
+			t.Fatalf("%s query does not use request facts: %s", name, query)
+		}
+		if strings.Contains(lower, "account_monitor_group_model_10m") {
+			t.Fatalf("%s query still uses incompatible ten-minute aggregates: %s", name, query)
 		}
 	}
 }
@@ -49,7 +58,7 @@ func TestAccountTrendQueryReturnsNewestBucketFirst(t *testing.T) {
 	}
 }
 
-func TestGroupMonitorListAggregatesHourlyBuckets(t *testing.T) {
+func TestGroupMonitorListReturnsTwentyFourSevenHourBuckets(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
 	to := from.Add(7 * 24 * time.Hour)
@@ -57,7 +66,7 @@ func TestGroupMonitorListAggregatesHourlyBuckets(t *testing.T) {
 		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).
 			AddRow(int64(7), "Primary", "openai", "active", nil),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg(), 3600).WillReturnRows(
+	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg(), 25200).WillReturnRows(
 		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
 			AddRow(int64(7), from.In(time.FixedZone("Asia/Shanghai", 8*60*60)), int64(6), int64(4), int64(2)),
 	)
@@ -71,14 +80,14 @@ func TestGroupMonitorListAggregatesHourlyBuckets(t *testing.T) {
 
 	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
 		Resource: ResourceGroupMonitorGroups, From: from, To: to, Page: 1, PageSize: 12,
-		BucketSeconds: 3600, Query: map[string]string{},
+		BucketSeconds: 25200, Query: map[string]string{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	page := result.(GroupMonitorGroupsResponse)
-	if groupResponseBucketSeconds(t, page) != 3600 || len(page.Items) != 1 || len(page.Items[0].Timeline) != 168 {
-		t.Fatalf("hourly page = %+v", page)
+	if groupResponseBucketSeconds(t, page) != 25200 || len(page.Items) != 1 || len(page.Items[0].Timeline) != 24 {
+		t.Fatalf("seven-hour page = %+v", page)
 	}
 	if page.Items[0].TotalRequests != 6 || page.Items[0].Successes != 4 || page.Items[0].Failures != 2 || page.Items[0].Timeline[0].Total != 6 {
 		t.Fatalf("hourly card = %+v", page.Items[0])
@@ -88,7 +97,7 @@ func TestGroupMonitorListAggregatesHourlyBuckets(t *testing.T) {
 	}
 }
 
-func TestGroupMonitorDetailAggregatesSixHourBuckets(t *testing.T) {
+func TestGroupMonitorDetailReturnsTwentyFourThirtyHourBuckets(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 	to := from.Add(30 * 24 * time.Hour)
@@ -96,21 +105,21 @@ func TestGroupMonitorDetailAggregatesSixHourBuckets(t *testing.T) {
 		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).
 			AddRow(int64(7), "Primary", "openai", "active", nil),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to, 21600).WillReturnRows(
+	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to, 108000).WillReturnRows(
 		sqlmock.NewRows([]string{"model", "bucket", "total", "successes", "failures", "exact", "estimated"}).
 			AddRow("gpt-5", from.In(time.FixedZone("Asia/Shanghai", 8*60*60)), int64(36), int64(30), int64(6), int64(30), int64(6)),
 	)
 
 	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{
 		Resource: ResourceGroupMonitorGroup, GroupID: 7, From: from, To: to,
-		BucketSeconds: 21600, Query: map[string]string{},
+		BucketSeconds: 108000, Query: map[string]string{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	detail := result.(GroupMonitorDetailResponse)
-	if groupResponseBucketSeconds(t, detail) != 21600 || len(detail.Models) != 1 || len(detail.Models[0].Timeline) != 120 {
-		t.Fatalf("six-hour detail = %+v", detail)
+	if groupResponseBucketSeconds(t, detail) != 108000 || len(detail.Models) != 1 || len(detail.Models[0].Timeline) != 24 {
+		t.Fatalf("thirty-hour detail = %+v", detail)
 	}
 	if detail.Group.TotalRequests != 36 || detail.Models[0].TotalRequests != 36 || detail.Group.Failures != 6 || detail.Models[0].Failures != 6 {
 		t.Fatalf("six-hour totals = group:%+v model:%+v", detail.Group, detail.Models[0])
@@ -131,14 +140,14 @@ func TestGroupMonitorCardDistinguishesBucketAndIdleStates(t *testing.T) {
 	}{
 		{name: "no data", buckets: nil, status: "no_data"},
 		{name: "recently idle", buckets: map[time.Time]GroupMonitorBucket{from: {Total: 1, Successes: 1}}, status: "recently_idle"},
-		{name: "normal", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Successes: 2}}, status: "normal"},
-		{name: "partial failure", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Successes: 1, Failures: 1}}, status: "partial_failure"},
-		{name: "all failed", buckets: map[time.Time]GroupMonitorBucket{to.Add(-10 * time.Minute): {Total: 2, Failures: 2}}, status: "all_failed"},
+		{name: "normal", buckets: map[time.Time]GroupMonitorBucket{to.Add(-15 * time.Minute): {Total: 2, Successes: 2}}, status: "normal"},
+		{name: "partial failure", buckets: map[time.Time]GroupMonitorBucket{to.Add(-15 * time.Minute): {Total: 2, Successes: 1, Failures: 1}}, status: "partial_failure"},
+		{name: "all failed", buckets: map[time.Time]GroupMonitorBucket{to.Add(-15 * time.Minute): {Total: 2, Failures: 2}}, status: "all_failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			card := buildGroupCard(dimension, from, to, test.buckets)
-			if len(card.Timeline) != 3 || card.CallStatus != test.status {
+			card := buildGroupCard(dimension, from, to, test.buckets, 900)
+			if len(card.Timeline) != 2 || card.CallStatus != test.status {
 				t.Fatalf("card = %+v", card)
 			}
 		})
@@ -177,9 +186,9 @@ func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
 			AddRow(int64(1), "Alpha", "openai", "active", nil).
 			AddRow(int64(2), "Beta", "openai", "inactive", nil),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg(), 600).WillReturnRows(
+	mock.ExpectQuery(regexp.QuoteMeta(groupTimelineSQL)).WithArgs(from, to, sqlmock.AnyArg(), 900).WillReturnRows(
 		sqlmock.NewRows([]string{"group_id", "bucket_at", "total", "successes", "failures"}).
-			AddRow(int64(1), to.Add(-10*time.Minute), int64(4), int64(3), int64(1)),
+			AddRow(int64(1), to.Add(-15*time.Minute), int64(4), int64(3), int64(1)),
 	)
 	mock.ExpectQuery(regexp.QuoteMeta(syncQualitySQL)).WillReturnRows(
 		sqlmock.NewRows([]string{"source", "cursor_time", "cursor_id", "last_success_at", "last_error", "updated_at"}),
@@ -210,14 +219,14 @@ func TestAdminServiceGroupMonitorDefaultsToActiveGroups(t *testing.T) {
 func TestAdminServiceGroupDetailBuildsModelTimelines(t *testing.T) {
 	db, mock := newSourceMock(t)
 	from := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
-	to := from.Add(20 * time.Minute)
+	to := from.Add(30 * time.Minute)
 	mock.ExpectQuery(regexp.QuoteMeta(groupDimensionByIDSQL)).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"group_id", "name", "platform", "status", "deleted_at"}).AddRow(int64(7), "Primary", "openai", "active", nil),
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to, 600).WillReturnRows(
+	mock.ExpectQuery(regexp.QuoteMeta(groupModelTimelineSQL)).WithArgs(int64(7), from, to, 900).WillReturnRows(
 		sqlmock.NewRows([]string{"model", "bucket", "total", "successes", "failures", "exact", "estimated"}).
 			AddRow("gpt-5", from, int64(2), int64(2), int64(0), int64(2), int64(0)).
-			AddRow("gpt-5", from.Add(10*time.Minute), int64(1), int64(0), int64(1), int64(0), int64(1)),
+			AddRow("gpt-5", from.Add(15*time.Minute), int64(1), int64(0), int64(1), int64(0), int64(1)),
 	)
 
 	result, err := NewAdminService(NewRepository(db), nil, time.Second).ExecuteAdmin(context.Background(), AdminRequest{

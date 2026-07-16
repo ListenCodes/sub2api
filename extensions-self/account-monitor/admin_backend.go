@@ -251,20 +251,25 @@ WHERE group_id=$1 AND deleted_at IS NULL`
 
 const groupTimelineSQL = `
 SELECT group_id,
-       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
-       SUM(total_requests),SUM(successes),SUM(failures)
-FROM account_monitor_group_model_10m
-WHERE bucket_at >= $1 AND bucket_at < $2 AND group_id=ANY($3)
+	   date_bin(make_interval(secs => $4),occurred_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+	   COUNT(*),
+	   COUNT(*) FILTER (WHERE result='succeeded'),
+	   COUNT(*) FILTER (WHERE result='failed')
+FROM account_monitor_request_facts
+WHERE occurred_at >= $1 AND occurred_at < $2 AND group_id=ANY($3)
 GROUP BY group_id,display_bucket
 ORDER BY group_id,display_bucket`
 
 const groupModelTimelineSQL = `
 SELECT actual_model,
-       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
-       SUM(total_requests),SUM(successes),SUM(failures),
-       SUM(exact_model_requests),SUM(estimated_model_requests)
-FROM account_monitor_group_model_10m
-WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
+	   date_bin(make_interval(secs => $4),occurred_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+	   COUNT(*),
+	   COUNT(*) FILTER (WHERE result='succeeded'),
+	   COUNT(*) FILTER (WHERE result='failed'),
+	   COUNT(*) FILTER (WHERE model_attribution='exact'),
+	   COUNT(*) FILTER (WHERE model_attribution<>'exact')
+FROM account_monitor_request_facts
+WHERE group_id=$1 AND occurred_at >= $2 AND occurred_at < $3
 GROUP BY actual_model,display_bucket
 ORDER BY LOWER(actual_model),actual_model,display_bucket`
 
@@ -611,7 +616,7 @@ func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time,
 	if len(groupIDs) == 0 {
 		return result, nil
 	}
-	bucketSeconds := 600
+	bucketSeconds := 900
 	if len(requestedBucketSeconds) > 0 {
 		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
 	}
@@ -659,7 +664,7 @@ func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[ti
 }
 
 func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket, requestedBucketSeconds ...int) []GroupMonitorBucket {
-	bucketSeconds := 600
+	bucketSeconds := 900
 	if len(requestedBucketSeconds) > 0 {
 		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
 	}
@@ -680,10 +685,10 @@ func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonito
 
 func normalizedGroupBucketSeconds(value int) int {
 	switch value {
-	case 600, 3600, 21600:
+	case 900, 3600, 25200, 108000:
 		return value
 	default:
-		return 600
+		return 900
 	}
 }
 
