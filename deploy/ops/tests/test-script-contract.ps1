@@ -1,49 +1,35 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$syncScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-upstream.sh')
-$triggerScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\sync-trigger.sh')
-$syncPublishPath = Join-Path $repoRoot 'deploy\ops\sync-and-publish.sh'
-$syncPublishScript = if (Test-Path -LiteralPath $syncPublishPath) {
-    Get-Content -Raw -LiteralPath $syncPublishPath
-} else {
-    ''
+
+function Read-RepoFile {
+    param([string]$RelativePath)
+    Get-Content -Raw -LiteralPath (Join-Path $repoRoot $RelativePath)
 }
-$autoUpdateScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\auto-update.sh')
-$publishScript = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'deploy\ops\publish-custom.sh')
+
+function Assert-True {
+    param([bool]$Condition, [string]$Message)
+    if (-not $Condition) {
+        throw "ASSERTION FAILED: $Message"
+    }
+}
 
 function Assert-Matches {
-    param(
-        [string]$Text,
-        [string]$Pattern,
-        [string]$Message
-    )
-
+    param([string]$Text, [string]$Pattern, [string]$Message)
     if ($Text -notmatch $Pattern) {
         throw "ASSERTION FAILED: $Message"
     }
 }
 
 function Assert-NotMatches {
-    param(
-        [string]$Text,
-        [string]$Pattern,
-        [string]$Message
-    )
-
+    param([string]$Text, [string]$Pattern, [string]$Message)
     if ($Text -match $Pattern) {
         throw "ASSERTION FAILED: $Message"
     }
 }
 
 function Assert-Before {
-    param(
-        [string]$Text,
-        [string]$Earlier,
-        [string]$Later,
-        [string]$Message
-    )
-
+    param([string]$Text, [string]$Earlier, [string]$Later, [string]$Message)
     $earlierIndex = $Text.IndexOf($Earlier, [System.StringComparison]::Ordinal)
     $laterIndex = $Text.IndexOf($Later, [System.StringComparison]::Ordinal)
     if ($earlierIndex -lt 0 -or $laterIndex -lt 0 -or $earlierIndex -ge $laterIndex) {
@@ -51,80 +37,110 @@ function Assert-Before {
     }
 }
 
-# Stable Release preparation must be isolated from custom and production.
-Assert-Matches $syncScript 'resolve-stable-release\.sh' 'sync resolves the latest stable Release'
-Assert-Matches $syncScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'sync rejects non-approved publication branches'
-Assert-Matches $syncScript 'integration/release-' 'sync publishes a Release integration branch'
-Assert-Matches $syncScript 'release_tag' 'sync records the stable Release tag'
-Assert-Matches $syncScript 'release_commit' 'sync records the peeled Release commit'
-Assert-Matches $syncScript 'release_published_at' 'sync records the Release publication time'
-Assert-Matches $syncScript 'git\s+-C\s+"?\$WORKTREE"?\s+merge' 'sync merges upstream in a temporary worktree'
-Assert-Matches $syncScript 'refs/tags/' 'sync fetches the verified Release tag'
-Assert-Matches $syncScript 'need_restart:false' 'sync reports preparation-only status'
-Assert-NotMatches $syncScript 'merge[^\r\n]*upstream/main' 'stable sync never merges upstream/main'
-Assert-NotMatches $syncScript 'fetch[^\r\n]*main' 'stable sync never fetches main for publication'
-Assert-NotMatches $syncScript 'git\s+rebase' 'sync must not rebase'
-Assert-NotMatches $syncScript 'docker\s+(build|compose\s+up)' 'sync must not build or deploy'
-Assert-NotMatches $syncScript 'git\s+push\s+[^\r\n]*\bcustom\b' 'sync must not push custom'
-Assert-NotMatches $syncScript '--force' 'sync must not force-update refs'
-Assert-Matches $syncScript 'SUB2API_SYNC_DEFER_RESULT' 'sync supports deferred trigger results'
-Assert-Matches $syncScript 'trap\s+[^\r\n]*ERR' 'sync converts unexpected shell errors into terminal status'
-Assert-Matches $syncScript '"\$RESOLVER"' 'sync quotes the configured Release resolver path'
-Assert-Matches $syncScript 'BASELINE_RELATIVE[^\r\n]*BASELINE_FILE' 'sync derives a repository-relative baseline path'
-Assert-Matches $syncScript 'baseline metadata path must stay inside' 'sync rejects baseline metadata outside the repository'
-Assert-Matches $syncScript 'base_commit' 'sync records the approved branch base commit'
-Assert-Matches $syncScript 'SCHEDULED_RUN' 'scheduled syncs use an independent run mode'
-Assert-Matches $syncScript 'CONFLICT_DIR' 'sync stores conflict artifacts under a configured directory'
-Assert-Matches $syncScript 'conflict_files' 'sync records conflicted files'
-Assert-Matches $syncScript 'conflict_log' 'sync records the conflict artifact path'
-Assert-Matches $syncScript 'conflict_release' 'sync records the conflicting Release identity'
-Assert-Matches $triggerScript 'conflict_files' 'admin trigger initializes conflict metadata fields'
-Assert-Matches $triggerScript 'release_tag' 'admin trigger initializes Release metadata fields'
-Assert-Matches $triggerScript 'release_commit' 'admin trigger initializes Release commit field'
-Assert-Matches $triggerScript 'release_published_at' 'admin trigger initializes Release timestamp field'
-Assert-Matches $triggerScript 'conflict_release' 'admin trigger initializes Release conflict field'
+$sync = Read-RepoFile 'deploy\ops\sync-upstream.sh'
+$orchestrator = Read-RepoFile 'deploy\ops\sync-and-publish.sh'
+$trigger = Read-RepoFile 'deploy\ops\sync-trigger.sh'
+$promoter = Read-RepoFile 'deploy\ops\promote-release.sh'
+$publisher = Read-RepoFile 'deploy\ops\publish-custom.sh'
+$state = Read-RepoFile 'deploy\ops\release-state.sh'
+$imageVerifier = Read-RepoFile 'deploy\ops\verify-release-images.sh'
+$actionsWaiter = Read-RepoFile 'deploy\ops\wait-for-actions.sh'
 
-# Both the scheduled and admin-triggered paths must use the same auto-publish wrapper.
-Assert-Matches $autoUpdateScript 'sync-and-publish\.sh' 'scheduled updates use the unified wrapper'
-Assert-Matches $syncPublishScript 'publish-custom\.sh' 'unified flow invokes the production publisher'
-Assert-Matches $syncPublishScript 'git\s+merge\s+--ff-only' 'unified flow promotes only by fast-forward'
-Assert-Matches $syncPublishScript 'BRANCH="\$\{SUB2API_BRANCH:-custom-release\}"' 'unified flow defaults to custom-release'
-Assert-Matches $syncPublishScript 'ORIGIN_REMOTE="\$\{SUB2API_ORIGIN_REMOTE:-origin\}"' 'unified flow parameterizes the origin remote'
-Assert-Matches $syncPublishScript 'ORIGIN_REF="\$ORIGIN_REMOTE/\$BRANCH"' 'unified flow derives the approved origin ref'
-Assert-Matches $syncPublishScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'unified flow rejects non-approved publication branches'
-Assert-Matches $syncPublishScript 'SUB2API_SYNC_PUBLISH_LOCK' 'unified flow has an end-to-end lock'
-Assert-Matches $syncPublishScript 'published_commit' 'unified flow records the published commit'
-Assert-Matches $syncPublishScript 'sync-pending-publish' 'unified flow preserves a failed publish for retry'
-Assert-Matches $syncPublishScript 'prepare_scheduled_status' 'scheduled runs initialize independent status metadata'
-Assert-NotMatches $syncPublishScript 'origin/custom' 'unified flow must not hardcode origin/custom'
-Assert-NotMatches $syncPublishScript 'git\s+fetch\s+origin\s+custom' 'unified flow must not hardcode fetching custom'
-Assert-NotMatches $syncPublishScript 'git\s+push\s+origin\s+custom' 'unified flow must not hardcode pushing custom'
-Assert-NotMatches $syncPublishScript 'git\s+push\s+[^\r\n]*--force' 'unified flow must not force-push'
+# Stable Release integration is exact, isolated, and preparation-only.
+Assert-Matches $sync 'resolve-stable-release\.sh' 'sync resolves the latest official stable Release'
+Assert-Matches $sync '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'sync rejects non-production branches'
+Assert-Matches $sync 'refs/tags/\$RELEASE_TAG:refs/tags/\$RELEASE_TAG' 'sync fetches only the exact verified tag'
+Assert-Matches $sync 'integration/release-' 'sync creates a Release candidate branch'
+Assert-Matches $sync 'git\s+-C\s+"\$WORKTREE"\s+merge' 'sync merges in a temporary worktree'
+Assert-Matches $sync 'release_job_update\s+"\$JOB_ID"\s+conflict' 'sync persists conflicts separately from failures'
+Assert-Matches $sync 'conflict_files' 'sync persists exact conflict files'
+Assert-Matches $sync 'artifact_path' 'sync persists conflict evidence paths'
+Assert-NotMatches $sync 'upstream/main|fetch[^\r\n]*\bmain\b' 'sync never publishes upstream/main'
+Assert-NotMatches $sync 'git\s+rebase|--force' 'sync never rewrites history'
+Assert-NotMatches $sync 'docker\s+(build|compose\s+up)' 'sync never builds or deploys'
 
-# Production publishing must require the configured approved branch commit and preserve rollback data.
-Assert-Matches $publishScript -- '--commit' 'publish requires an explicit commit argument'
-Assert-Matches $publishScript 'BRANCH="\$\{SUB2API_BRANCH:-custom-release\}"' 'publish defaults to custom-release'
-Assert-Matches $publishScript 'ORIGIN_REMOTE="\$\{SUB2API_ORIGIN_REMOTE:-origin\}"' 'publish parameterizes the origin remote'
-Assert-Matches $publishScript 'ORIGIN_REF="\$ORIGIN_REMOTE/\$BRANCH"' 'publish derives the approved origin ref'
-Assert-Matches $publishScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'publish rejects non-approved publication branches'
-Assert-Matches $publishScript 'BACKUP_ROOT' 'publish creates a backup under the configured backup root'
-Assert-Matches $publishScript 'pg_dump' 'publish backs up PostgreSQL before deployment'
-Assert-Matches $publishScript 'stable-release-baseline\.json' 'publish reads the verified stable Release metadata'
-Assert-Matches $publishScript 'SUB2API_UPSTREAM_REMOTE' 'publish parameterizes the upstream Release remote'
-Assert-Matches $publishScript 'refs/tags/\$release_tag:refs/tags/\$release_tag' 'publish fetches only the recorded stable Release tag'
-Assert-Matches $publishScript 'tag_object_sha' 'publish verifies the recorded Release tag object'
-Assert-NotMatches $publishScript 'fetch[^\r\n]*upstream/main' 'publish never fetches upstream/main'
-Assert-Matches $publishScript '--build-arg\s+VERSION=' 'publish injects the stable Release version into the main image'
-Assert-Matches $publishScript '--build-arg\s+COMMIT=' 'publish injects the approved custom commit into the main image'
-Assert-Matches $publishScript 'built image version probe failed' 'publish reports a failed image version probe'
-Assert-Matches $publishScript 'built image version mismatch' 'publish rejects a main image with incorrect Release metadata'
-Assert-Before $publishScript 'built image version mismatch' 'up -d --no-deps --force-recreate sub2api extensions-self' 'publish validates the built version before recreating services'
-Assert-Matches $publishScript 'docker\s+compose\s+--project-name\s+deploy' 'publish uses the stable Compose project name'
-Assert-Matches $publishScript '--no-deps\s+--force-recreate\s+sub2api\s+extensions-self' 'publish recreates only the affected services'
-Assert-NotMatches $publishScript 'origin/custom' 'publish must not hardcode origin/custom'
-Assert-NotMatches $publishScript 'git\s+fetch\s+origin\s+custom' 'publish must not hardcode fetching custom'
-Assert-NotMatches $publishScript 'git\s+push\s+origin\s+custom' 'publish must not hardcode pushing custom'
-Assert-NotMatches $publishScript 'git\s+reset\s+--hard' 'publish must not discard source changes'
-Assert-NotMatches $publishScript 'git\s+push\s+[^\r\n]*--force' 'publish must not force-push'
+# The host orchestrator owns the durable state machine and one-at-a-time trigger.
+foreach ($marker in @(
+    'release-trigger', 'flock -n', 'waiting_actions', 'waiting_images',
+    'promoting_release', 'publish-custom.sh', '--main-digest', '--extensions-digest'
+)) {
+    Assert-Matches $orchestrator ([regex]::Escape($marker)) "orchestrator is missing $marker"
+}
+Assert-Before $orchestrator 'waiting_actions' 'waiting_images' 'Actions must finish before image verification'
+Assert-Before $orchestrator 'waiting_images' 'promoting_release' 'images must be verified before branch promotion'
+Assert-Before $orchestrator 'promoting_release' 'Publishing commit' 'promotion must precede publication'
+Assert-NotMatches $orchestrator 'git\s+(merge|rebase)|--force' 'orchestrator delegates guarded promotion and never rewrites history'
+
+# Promotion advances only the already-tested remote ref; publisher moves local source after backup.
+Assert-Matches $promoter 'refs/remotes/' 'promoter pushes an immutable remote-tracking candidate ref'
+Assert-Matches $promoter 'refs/heads/\$BRANCH' 'promoter targets only the approved remote branch'
+Assert-NotMatches $promoter 'git\s+merge(?:\s|$)|git\s+reset|--force' 'promoter must not move local source or rewrite history'
+Assert-Before $publisher 'job_update backing_up' 'git merge --ff-only' 'publisher backs up before local source fast-forward'
+
+# Publisher validates immutable images, creates complete rollback evidence, and stages both services.
+foreach ($marker in @(
+    '--commit', '--main-digest', '--extensions-digest', 'verify-release-images.sh',
+    'release-state.json', 'docker exec sub2api-postgres pg_dump',
+    'docker exec risk-control-postgres pg_dump', 'pg_restore --list',
+    'certificate-metadata.tsv', 'container-metadata.json', 'image-metadata.json',
+    'MAIN_ROLLBACK_TAG', 'EXTENSIONS_ROLLBACK_TAG', 'SHA256SUMS',
+    'deploying_extensions', 'deploying_main', 'health_checking',
+    'rolling_back', 'perform_rollback', 'artifact_path', 'LEGACY_BOOTSTRAP'
+)) {
+    Assert-Matches $publisher ([regex]::Escape($marker)) "publisher is missing $marker"
+}
+Assert-Matches $publisher 'SUB2API_IMAGE="\$TARGET_MAIN_REF"' 'publisher validates the target main digest in Compose'
+Assert-Matches $publisher 'EXTENSIONS_SELF_IMAGE="\$TARGET_EXTENSIONS_REF"' 'publisher validates the target extensions digest in Compose'
+Assert-Matches $publisher 'force-recreate\s+extensions-self' 'publisher deploys extensions first'
+Assert-Matches $publisher 'force-recreate\s+sub2api' 'publisher deploys main separately'
+Assert-NotMatches $publisher 'force-recreate\s+sub2api\s+extensions-self' 'publisher must not recreate both services in one command'
+Assert-NotMatches $publisher 'docker\s+build|compose[^\r\n]*\bbuild\b' 'publisher never builds on the VPS'
+Assert-NotMatches $publisher 'up[^\r\n]*risk-control-postgres|(?:rm|down)[^\r\n]*risk-control-postgres' 'publisher never recreates or removes risk-control-postgres'
+Assert-NotMatches $publisher 'pg_restore[^\r\n]*(?:--clean|--if-exists|-d\s)' 'publisher never restores a database automatically'
+Assert-NotMatches $publisher 'git\s+reset|git\s+push[^\r\n]*--force' 'publisher never discards source changes or force-pushes'
+
+foreach ($marker in @(
+    'org.opencontainers.image.revision', 'org.opencontainers.image.version',
+    'org.opencontainers.image.source', 'linux/amd64', '.RepoDigests', 'docker pull',
+    'DOCKER_CONFIG'
+)) {
+    Assert-Matches $imageVerifier ([regex]::Escape($marker)) "image verifier is missing $marker"
+}
+foreach ($status in @(
+    'checking_release', 'validating_tag', 'merging_release', 'waiting_actions',
+    'waiting_images', 'promoting_release', 'backing_up', 'deploying_extensions',
+    'deploying_main', 'health_checking', 'rolling_back', 'success', 'failed', 'conflict'
+)) {
+    Assert-Matches $state ([regex]::Escape($status)) "durable state helper is missing $status"
+}
+Assert-Matches $actionsWaiter 'EXPECTED_CHECKS' 'Actions waiter requires the complete validation suite'
+Assert-Matches $actionsWaiter 'TIMEOUT_SECONDS' 'Actions waiter has a bounded long-running wait'
+
+# The application helper only creates an atomic trigger and returns.
+Assert-Matches $trigger 'release-trigger' 'container helper writes the systemd path trigger'
+Assert-Matches $trigger 'mv -f' 'container helper writes the trigger atomically'
+Assert-NotMatches $trigger '\b(?:sleep|while|until)\b' 'container helper must return immediately'
+
+# Scheduled code is forbidden; systemd.path is the only host consumer.
+$autoUpdatePath = Join-Path $repoRoot 'deploy\ops\auto-update.sh'
+Assert-True (-not (Test-Path -LiteralPath $autoUpdatePath)) 'auto-update.sh must be deleted'
+$pathUnitPath = Join-Path $repoRoot 'deploy\ops\sub2api-release.path'
+$serviceUnitPath = Join-Path $repoRoot 'deploy\ops\sub2api-release.service'
+Assert-True (Test-Path -LiteralPath $pathUnitPath) 'sub2api-release.path is missing'
+Assert-True (Test-Path -LiteralPath $serviceUnitPath) 'sub2api-release.service is missing'
+$pathUnit = Get-Content -Raw -LiteralPath $pathUnitPath
+$serviceUnit = Get-Content -Raw -LiteralPath $serviceUnitPath
+Assert-Matches $pathUnit 'PathExists=/var/lib/docker/volumes/deploy_sub2api_data/_data/release-trigger' 'path unit watches the persistent trigger'
+Assert-Matches $pathUnit 'Unit=sub2api-release\.service' 'path unit starts the release service'
+Assert-Matches $serviceUnit 'Type=oneshot' 'release service is one-shot'
+Assert-Matches $serviceUnit 'Environment=SUB2API_DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data' 'release service uses the persistent data directory'
+Assert-Matches $serviceUnit 'ExecStart=/opt/sub2api-custom/sync-and-publish\.sh' 'release service calls only the unified orchestrator'
+Assert-NotMatches $serviceUnit 'sync-upstream\.sh|publish-custom\.sh' 'systemd service must not bypass the orchestrator'
+
+$opsSources = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'deploy\ops') -File -Recurse |
+    Where-Object { $_.Extension -in @('.sh', '.service', '.path') } |
+    ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }
+$allOpsText = $opsSources -join "`n"
+Assert-NotMatches $allOpsText '(?i)--scheduled|scheduled-|SCHEDULED_RUN|prepare_scheduled_status|auto-update\.sh' 'scheduled release behavior remains in deploy/ops'
 
 Write-Output 'script-contract=PASS'

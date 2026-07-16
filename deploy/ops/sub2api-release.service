@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Sub2API digest release orchestrator
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=SUB2API_DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data
+ExecStart=/opt/sub2api-custom/sync-and-publish.sh
+
+[Install]
+WantedBy=multi-user.target

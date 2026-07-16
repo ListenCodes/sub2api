@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+
+SUB2API_DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
+RELEASE_JOBS_DIR="${SUB2API_RELEASE_JOBS_DIR:-$SUB2API_DATA_DIR/release-jobs}"
+CURRENT_RELEASE_JOB_FILE="${SUB2API_CURRENT_RELEASE_JOB_FILE:-$SUB2API_DATA_DIR/release-current-job-id}"
+PRODUCTION_RELEASE_STATE_FILE="${SUB2API_RELEASE_STATE_FILE:-$SUB2API_DATA_DIR/release-state.json}"
+
+release_valid_job_id() {
+  [[ "${1:-}" =~ ^update-[A-Za-z0-9-]{1,121}$ ]]
+}
+
+release_valid_status() {
+  case "${1:-}" in
+    checking_release|validating_tag|merging_release|waiting_actions|waiting_images|promoting_release|backing_up|deploying_extensions|deploying_main|health_checking|rolling_back|success|failed|conflict)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+release_terminal_status() {
+  case "${1:-}" in
+    success|failed|conflict) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+release_atomic_write() {
+  local path="$1"
+  local content="$2"
+  local directory temporary
+  directory="$(dirname "$path")"
+  mkdir -p "$directory"
+  temporary="$(mktemp "$directory/.release-state.XXXXXX")"
+  printf '%s\n' "$content" > "$temporary"
+  chmod 0644 "$temporary"
+  mv -f "$temporary" "$path"
+}
+
+release_job_path() {
+  local job_id="$1"
+  release_valid_job_id "$job_id" || return 1
+  printf '%s/%s.json\n' "$RELEASE_JOBS_DIR" "$job_id"
+}
+
+release_current_job_id() {
+  local job_id
+  job_id="$(tr -d '[:space:]' < "$CURRENT_RELEASE_JOB_FILE" 2>/dev/null || true)"
+  release_valid_job_id "$job_id" || return 1
+  printf '%s\n' "$job_id"
+}
+
+release_job_init() {
+  local job_id="$1"
+  local now job_path payload
+  release_valid_job_id "$job_id" || return 1
+  now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  job_path="$(release_job_path "$job_id")"
+  payload="$(jq -n \
+    --arg job_id "$job_id" \
+    --arg now "$now" \
+    '{
+      job_id:$job_id,
+      status:"checking_release",
+      message:"release job queued",
+      ts:$now,
+      updated_at:$now,
+      started_at:$now,
+      finished_at:null,
+      integration_branch:"",
+      base_commit:"",
+      target_commit:"",
+      release_tag:"",
+      release_commit:"",
+      release_published_at:"",
+      workflow_url:"",
+      main_digest:"",
+      extensions_digest:"",
+      conflict_files:[],
+      conflict_base:"",
+      conflict_upstream:"",
+      conflict_release:"",
+      conflict_log:"",
+      resolution_hint:"",
+      artifact_path:"",
+      need_restart:false,
+      published:false,
+      published_commit:"",
+      production_changed:false,
+      error_code:"",
+      rollback:{attempted:false,succeeded:false,message:""}
+    }')"
+  release_atomic_write "$job_path" "$payload"
+  release_atomic_write "$CURRENT_RELEASE_JOB_FILE" "$job_id"
+}
+
+release_job_update() {
+  local job_id="$1"
+  local status="$2"
+  local message="$3"
+  local metadata="${4-}"
+  local job_path now finished payload
+  [[ -n "$metadata" ]] || metadata='{}'
+  release_valid_status "$status" || return 1
+  jq -e 'type == "object"' <<< "$metadata" >/dev/null || return 1
+  job_path="$(release_job_path "$job_id")" || return 1
+  [[ -r "$job_path" ]] || return 1
+  now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  finished=null
+  if release_terminal_status "$status"; then
+    finished="\"$now\""
+  fi
+  payload="$(jq \
+    --arg status "$status" \
+    --arg message "$message" \
+    --arg now "$now" \
+    --argjson finished_at "$finished" \
+    --argjson metadata "$metadata" \
+    '. * $metadata
+      | .status=$status
+      | .message=$message
+      | .ts=$now
+      | .updated_at=$now
+      | .finished_at=$finished_at' \
+    "$job_path")"
+  release_atomic_write "$job_path" "$payload"
+}
+
+release_job_read() {
+  local job_id="$1"
+  local job_path
+  job_path="$(release_job_path "$job_id")" || return 1
+  jq -e . "$job_path"
+}
+
+release_production_state_write() {
+  local payload="$1"
+  jq -e '
+    type == "object"
+    and (.production_commit | type == "string" and length == 40)
+    and (.stable_release_tag | type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+    and (.stable_release_commit | type == "string" and length == 40)
+    and (.main_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+    and (.extensions_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+    and (.published_at | type == "string" and length > 0)
+    and (.backup_dir | type == "string" and length > 0)
+  ' <<< "$payload" >/dev/null || return 1
+  release_atomic_write "$PRODUCTION_RELEASE_STATE_FILE" "$payload"
+}

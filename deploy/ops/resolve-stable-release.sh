@@ -33,6 +33,15 @@ ref_name="$(jq -er '.ref' <<<"$ref_json" 2>/dev/null)" || fail
 [[ "$ref_name" == "refs/tags/$tag" ]] || fail
 tag_object_sha="$(jq -er '.object.sha' <<<"$ref_json" 2>/dev/null)" || fail
 [[ "$tag_object_sha" =~ ^[0-9a-fA-F]{40}$ ]] || fail
+tag_object_type="$(jq -er '.object.type' <<<"$ref_json" 2>/dev/null)" || fail
+[[ "$tag_object_type" == tag ]] || fail
+tag_json="$(read_fixture_or_curl "${SUB2API_RELEASE_TAG_JSON_FILE:-}" "https://api.github.com/repos/Wei-Shaw/sub2api/git/tags/$tag_object_sha")" || fail
+tag_name="$(jq -er '.tag' <<<"$tag_json" 2>/dev/null)" || fail
+[[ "$tag_name" == "$tag" ]] || fail
+peeled_object_type="$(jq -er '.object.type' <<<"$tag_json" 2>/dev/null)" || fail
+[[ "$peeled_object_type" == commit ]] || fail
+release_commit="$(jq -er '.object.sha' <<<"$tag_json" 2>/dev/null)" || fail
+[[ "$release_commit" =~ ^[0-9a-fA-F]{40}$ ]] || fail
 
-printf 'release_tag=%s\nrelease_published_at=%s\nrelease_tag_object_sha=%s\n' \
-	"$tag" "$published_at" "$tag_object_sha"
+printf 'release_tag=%s\nrelease_published_at=%s\nrelease_tag_object_sha=%s\nrelease_tag_object_type=%s\nrelease_commit=%s\n' \
+	"$tag" "$published_at" "$tag_object_sha" "$tag_object_type" "$release_commit"

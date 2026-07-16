@@ -11,11 +11,11 @@ development conversations working in this repository.
 - Production-approved branch: `custom-release`
 - Legacy compatibility branch: `custom` (history and `upstream/main` testing only)
 - Production main source tree: `/root/sub2api`
-- Production main image: `sub2api:custom`
+- Production main image: `ghcr.io/listencodes/sub2api-custom@sha256:<digest>`
 - Versioned operations scripts: `deploy/ops/`
 - Custom extensions source: `/root/sub2api/extensions-self`
 - Extensions container and network hostname: `extensions-self`
-- Extensions image: `deploy-extensions-self`
+- Extensions image: `ghcr.io/listencodes/sub2api-extensions@sha256:<digest>`
 
 Risk control, account monitoring, and the custom homepage are versioned under `extensions-self/` and
 released in one container from the same approved `origin/custom-release` commit as the
@@ -86,6 +86,9 @@ records have been verified.
    without explicit user authorization.
 6. A dirty worktree is not an acceptable production deployment source. Stop and
    report the files before continuing.
+7. After a custom feature is stable in production, it may be selectively
+   `cherry-pick -x` into `custom` for `upstream/main` compatibility testing. The
+   entire `custom` branch is never merged back into `custom-release`.
 
 ## Normal Change Workflow
 
@@ -96,8 +99,11 @@ records have been verified.
 5. Review the diff and `git diff --check`.
 6. Commit to the feature branch, merge into `custom-release`, and push
    `origin/custom-release`.
-7. Do not publish to production automatically after a code task. Production
-   publishing requires explicit user authorization.
+7. Wait for the Custom Release Actions workflow and both public GHCR images:
+   `ghcr.io/listencodes/sub2api-custom:custom-<full-sha>` and
+   `ghcr.io/listencodes/sub2api-extensions:custom-<full-sha>`.
+8. Production changes only after an administrator explicitly uses the update
+   button. The host `sub2api-release.path` unit starts the durable release job.
 
 ## VPS Fallback Workflow
 
@@ -107,10 +113,11 @@ every emergency change must be traceable and recoverable.
 1. Connect and execute remote commands only through `ssh-skill`.
 2. Start from the deployed commit in `/root/sub2api`.
 3. Create an `emergency/vps-YYYYMMDD` branch before editing.
-4. Make the smallest possible change, test it, and build `sub2api:custom`.
-5. Run the health check before declaring success.
-6. Commit and push the emergency branch or approved commit to `origin`.
-7. Reconcile the change into the local `custom-release` branch at the next opportunity.
+4. Make the smallest possible change and run focused tests.
+5. Commit and push the emergency branch; reconcile it into `custom-release`
+   without rewriting history and wait for Actions plus both GHCR images.
+6. Use the same administrator-triggered digest release path and health gates.
+7. Reconcile the change into the local development worktree at the next opportunity.
 
 Do not edit a running container, edit a generated image, or leave uncommitted
 production changes as the only copy of a fix.
@@ -119,16 +126,20 @@ production changes as the only copy of a fix.
 
 Every production deployment must:
 
-- Record the source commit and image tags.
+- Record the source commit and both immutable image digests.
 - Back up the PostgreSQL database, Compose/configuration, and Nginx vhost.
 - Back up `risk-control-postgres` before publishing extensions schema or account-monitor changes.
-- Build and deploy the exact intended image tag.
+- Verify OCI revision/version/source labels and `linux/amd64`, then deploy the
+  exact `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE` digest references.
 - Check application, extensions-self, PostgreSQL, Redis, and public HTTP health.
-- Keep a previous image and configuration available for rollback.
+- Keep the previous digest pair, rollback tags, and matching configuration.
+- Automatically roll back both application services after a failed deployment
+  or health gate; database restore is never automatic.
 - Avoid touching PostgreSQL and Redis unless the change explicitly requires it.
 
-The main Compose file must build and deploy the same tag: `sub2api:custom`.
-Do not reintroduce date-specific application tags in production Compose.
+The production Compose file requires `SUB2API_IMAGE` and
+`EXTENSIONS_SELF_IMAGE`; both values are `ghcr.io/...@sha256:...`. Do not add a
+production build context or a mutable application tag.
 
 ## Agent Coordination
 
@@ -146,17 +157,18 @@ are the coordination mechanism.
 
 ## Release Boundary
 
-The admin update action and scheduled job use the unified
-`sync-and-publish.sh` flow. It resolves only the latest non-draft,
+The administrator update action is the only release trigger. It atomically
+writes `release-trigger`; `sub2api-release.path` starts
+`sub2api-release.service`, which invokes `sync-and-publish.sh`. The flow resolves only the latest non-draft,
 non-prerelease GitHub Release, verifies the tag object, fetches that exact tag,
 peels its commit, and tests the merge in a temporary worktree. It pushes only
-`origin/integration/release-*`. When the merge is conflict-free and the
-recorded `origin/custom-release` base has not changed, the flow may
-fast-forward `custom-release`, push `origin/custom-release`, and invoke
-`publish-custom.sh` for production.
+`origin/integration/release-*`. It waits for Actions and the two commit-addressed
+GHCR images before guarded promotion of `origin/custom-release`. If there is no
+new official Release, an undeployed custom-release commit is still publishable;
+if neither source nor production changed, the job ends without recreating containers.
 
-Any merge conflict, changed custom-release base, dirty VPS tree, failed push, failed
-backup, failed build, or failed health check stops the flow without publishing.
+Any merge conflict, changed custom-release base, dirty VPS tree, failed push,
+failed Actions/image validation, failed backup, or failed health check stops the flow.
 The integration branch and rollback artifacts remain available for manual
 resolution. No step may use a rebase, force-push, or an arbitrary commit.
 
@@ -166,9 +178,13 @@ data directory. The admin update panel must expose these details and state
 that production was not changed. Never hide a conflict behind a generic
 failure message or resolve it with a blanket `ours`/`theirs` strategy.
 
-`publish-custom.sh` remains the only production build/deploy entrypoint. It
-accepts only the exact approved `origin/custom-release` commit and must not
-fetch or merge `upstream/main` during a release. The first VPS branch switch
-from `custom` to `custom-release` requires separate explicit publication
-authorization. Code completion, branch push, and production publication are
-three separate states and must be reported separately.
+`publish-custom.sh` is the internal digest deployment entrypoint. It accepts
+only the exact approved `origin/custom-release` commit and verified digests,
+backs up before the local source fast-forward, deploys extensions before main,
+and automatically restores the previous pair after a failed health gate. It
+must not build images, fetch or merge `upstream/main`, recreate
+`risk-control-postgres`, or automatically restore either database.
+
+Implementation, local tests, branch push, Actions/GHCR results, production
+backup, deployment, health, scheduled-update removal, and rollback evidence are
+separate facts and must be reported separately.

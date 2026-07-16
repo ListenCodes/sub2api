@@ -34,6 +34,7 @@ test('custom-release workflow gates paired images on every required validation j
     'extensions-self/account-monitor',
     'extensions-self/risk-control',
     'node --test deploy/tests/*.test.mjs',
+    'bash deploy/ops/tests/test-release-pipeline.sh',
     'bash -n',
     'docker/build-push-action'
   ]) {
@@ -89,4 +90,74 @@ test('production compose requires immutable application image references', () =>
     envExample,
     /^EXTENSIONS_SELF_IMAGE=ghcr\.io\/listencodes\/sub2api-extensions@sha256:/m
   )
+})
+
+test('publisher validates, backs up, deploys, and rolls back an immutable image pair', () => {
+  const publisher = read('deploy/ops/publish-custom.sh')
+  for (const marker of [
+    '--main-digest',
+    '--extensions-digest',
+    'verify-release-images.sh',
+    'release-state.json',
+    'release_job_update',
+    'backing_up',
+    'deploying_extensions',
+    'deploying_main',
+    'health_checking',
+    'rolling_back',
+    'perform_rollback'
+  ]) {
+    assert.match(publisher, new RegExp(escapeRegExp(marker)), `publisher is missing ${marker}`)
+  }
+  assert.doesNotMatch(publisher, /docker\s+build/)
+  assert.doesNotMatch(publisher, /compose[^\n]*build/)
+  assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
+  assert.doesNotMatch(publisher, /(?:rm|down)[^\n]*risk-control-postgres/)
+
+  const verifyIndex = publisher.indexOf('verify-release-images.sh')
+  const backupIndex = publisher.indexOf('backing_up')
+  const extensionsIndex = publisher.indexOf('deploying_extensions')
+  const mainIndex = publisher.indexOf('deploying_main')
+  const healthIndex = publisher.indexOf('health_checking')
+  assert.ok(verifyIndex >= 0 && verifyIndex < backupIndex)
+  assert.ok(backupIndex < extensionsIndex)
+  assert.ok(extensionsIndex < mainIndex)
+  assert.ok(mainIndex < healthIndex)
+})
+
+test('release documentation defines only the administrator-triggered digest path', () => {
+  const documentation = [
+    'AGENTS.md',
+    'deploy/RELEASE-RUNBOOK.md',
+    'deploy/README.md',
+    'deploy/ops/README.md'
+  ].map((path) => ({ path, text: read(path) }))
+
+  for (const { path, text } of documentation) {
+    for (const marker of [
+      'custom-release',
+      'ghcr.io/listencodes/sub2api-custom',
+      'ghcr.io/listencodes/sub2api-extensions',
+      'sub2api-release.path',
+      'SUB2API_IMAGE',
+      'EXTENSIONS_SELF_IMAGE'
+    ]) {
+      assert.match(text, new RegExp(escapeRegExp(marker)), `${path} is missing ${marker}`)
+    }
+    assert.match(text, /administrator|管理员/i, `${path} is missing administrator-only triggering`)
+    assert.match(text, /automatic(?:ally)?[\s\S]{0,80}(?:rollback|rolls? back)|自动[^\n]*回退/i, `${path} is missing automatic paired rollback`)
+    assert.doesNotMatch(text, /auto-update\.sh/, `${path} still documents auto-update.sh`)
+    assert.doesNotMatch(text, /^\s*0\s+3\s+\*\s+\*\s+\*/m, `${path} still documents a daily release cron`)
+    assert.doesNotMatch(text, /^\s*\*\s+\*\s+\*\s+\*\s+\*[^\n]*(?:sync|release-trigger)/m, `${path} still documents a polling release cron`)
+  }
+
+  const agents = read('AGENTS.md')
+  assert.match(agents, /cherry-pick\s+-x[^\n]*custom/i)
+  assert.match(agents, /entire[^\n]*custom[^\n]*never merged|never merge[^\n]*entire[^\n]*custom/i)
+  assert.doesNotMatch(agents, /main Compose file must build|build and deploy the same tag/i)
+
+  const runbook = read('deploy/RELEASE-RUNBOOK.md')
+  assert.match(runbook, /feature[^\n]*custom-release[^\n]*Actions/i)
+  assert.match(runbook, /database restore[^\n]*not automatic|does not automatically restore[^\n]*database/i)
+  assert.match(runbook, /implementation[\s\S]{0,160}push[\s\S]{0,160}deployment/i)
 })

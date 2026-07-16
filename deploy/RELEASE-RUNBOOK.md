@@ -7,76 +7,86 @@ extensions service.
 
 | Unit | Source | Runtime image | Production path |
 |---|---|---|---|
-| Main application and risk hooks | `origin/custom-release` | `sub2api:custom` | `/root/sub2api` |
-| Risk control, account monitor, and homepage | `origin/custom-release:extensions-self/` | `deploy-extensions-self` | `/root/sub2api/extensions-self` |
+| Main application and risk hooks | `origin/custom-release` | `ghcr.io/listencodes/sub2api-custom@sha256:<digest>` | `/root/sub2api` |
+| Risk control, account monitor, and homepage | `origin/custom-release:extensions-self/` | `ghcr.io/listencodes/sub2api-extensions@sha256:<digest>` | `/root/sub2api/extensions-self` |
 
 Publish the two units as a recorded pair when either one changes. The main
 application's `RISK_CONTROL_URL` must point to the running risk service.
 
-## Normal Local Release
+## Normal Release
 
-Run from the local repository after the user authorizes a release:
+Custom code follows this path:
 
-```bash
-git status --short --branch
-git fetch upstream
-git fetch origin
-
-# Integrate only a verified stable Release in an integration branch.
-# Resolve conflicts locally and run tests before promotion.
-git switch custom-release
-git merge --ff-only integration/release-vX.Y.Z-YYYYMMDD
-git push origin custom-release
+```text
+feature -> custom-release -> Actions + public paired GHCR images
+-> administrator button -> systemd state machine -> digest deployment
 ```
+
+Merge a tested feature into `custom-release`, push `origin/custom-release`, and
+wait for the Custom Release workflow plus both full-SHA image tags. Pushing code
+does not publish production. An administrator must explicitly start the durable
+release job from the update button.
 
 The production deployment uses the approved `origin/custom-release` commit.
 The legacy `custom` branch is retained for history and `upstream/main`
 compatibility testing and cannot auto-publish. Do not deploy an uncommitted
 worktree or an arbitrary upstream commit. The VPS
-unified flow may promote a clean integration branch and publish it
-automatically, but only after the base commit, clean-tree, backup, build, and
-health checks pass.
+host flow may promote a clean official Release candidate only after exact tag
+validation, Actions, both image checks, and a base recheck.
 
 The first production branch switch from `custom` to `custom-release` is a
 manual migration and requires explicit publication authorization. Completing
 code, pushing `origin/custom-release`, and publishing production are separate
 states.
 
-## Versioned VPS Operations
+## Versioned Host Operations
 
 Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
-sync-trigger.sh    container-mounted trigger; waits for the cron result
+sync-trigger.sh    container-mounted trigger; writes a job ID and returns
 sync-upstream.sh   verifies a stable Release and prepares origin/integration/release-*
-sync-and-publish.sh shared trigger/scheduled sync-then-publish wrapper
-auto-update.sh     scheduled wrapper for sync-and-publish.sh
-publish-custom.sh  approved production release entrypoint
+wait-for-actions.sh / verify-release-images.sh  Actions and image gates
+promote-release.sh guarded remote-only branch promotion
+sync-and-publish.sh durable host orchestrator
+publish-custom.sh  internal backup/digest deploy/rollback component
+sub2api-release.path / .service  administrator trigger consumer
 ```
 
-The normal publish command is:
+Install scripts and units, then enable the path watcher:
 
 ```bash
-/opt/sub2api-custom/publish-custom.sh --commit "$(git rev-parse origin/custom-release)"
+install -m 0755 deploy/ops/*.sh /opt/sub2api-custom/
+install -m 0644 deploy/ops/sub2api-release.path /etc/systemd/system/
+install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now sub2api-release.path
 ```
 
-It backs up production, builds the approved source, recreates only the main
-and extensions-self services, and verifies health and the running version.
-The backup contains both `sub2api_db.dump` and `risk_control_db.dump`.
+`sub2api-release.path` watches the persistent `release-trigger` created by the
+administrator action. The one-shot service calls only `sync-and-publish.sh`.
+The health-monitor schedule remains independent.
 
-The admin trigger and the daily scheduled job both call
-`sync-and-publish.sh`. A conflict or changed custom-release base stops before
-`origin/custom-release` and production are changed. A clean merge promotes the
-integration branch and calls the same publish entrypoint automatically.
+The two public image repositories are:
 
-The production crontab must keep the per-minute admin-trigger consumer on the
-same wrapper; calling `sync-upstream.sh` there produces preparation-only
-behavior and will not deploy the result:
-
-```cron
-0 3 * * * /bin/bash /opt/sub2api-custom/auto-update.sh >> /var/log/sub2api-update.log 2>&1
-* * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
+```text
+ghcr.io/listencodes/sub2api-custom:custom-<full-sha>
+ghcr.io/listencodes/sub2api-extensions:custom-<full-sha>
 ```
+
+Production `.env` pins `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE` to the
+verified `ghcr.io/...@sha256:...` references. The VPS pulls them anonymously.
+There is no release polling job or automatic source update.
+
+For the one-time migration from legacy locally built images, a missing
+`release-state.json` makes the publisher record the clean local commit, current
+container image IDs, old Compose/environment, and rollback tags in the release
+backup. A healthy publish creates the first formal digest state. A failed
+migration restores the old Compose and local images and leaves formal state
+absent; this bootstrap is not used after a healthy digest release.
+
+Do not call `publish-custom.sh` directly for final acceptance. Trigger the same
+durable job used by the administrator UI and monitor its persisted states.
 
 If a stable Release merge conflicts, the update status reports the exact files,
 approved branch base, Release tag/commit, and diagnostic artifact path. The
@@ -93,27 +103,24 @@ production fix is required. Execute all remote commands through `ssh-skill`.
 Before changing the VPS:
 
 1. Confirm the current container image, Git commit, and worktree status.
-2. Create a database/configuration backup under `/root/backups/sub2api/`.
-3. Confirm no other deployment is running.
-4. Create `emergency/vps-YYYYMMDD` from the deployed `custom-release` branch.
+2. Confirm no other durable release job is running.
+3. Create `emergency/vps-YYYYMMDD` from the deployed `custom-release` commit.
 
 After an emergency change:
 
-1. Run focused tests or at minimum a successful image build.
-2. Build and publish with the versioned `publish-custom.sh` after committing
-   the emergency change and pushing the approved commit to `origin`.
-3. Do not run the upstream preparation script as a production release.
-4. Wait for the container health check and `http://127.0.0.1:8081/health`.
-5. Check the public HTTPS endpoint and the extensions-self container.
-6. Commit the change and push it to `origin`.
-7. Record the commit, image ID, backup path, and validation result.
+1. Run focused tests, commit, and push the emergency branch.
+2. Reconcile it into `custom-release` without rewriting history and wait for
+   the same Actions and paired GHCR images.
+3. Use the administrator-triggered durable release path.
+4. Wait for container and full internal/public health checks.
+5. Record the commit, both digests, backup path, and rollback evidence.
 
 Do not use a force reset to hide local changes. If the VPS worktree is dirty,
 stop and preserve the diff before proceeding.
 
 ## Extensions-Self Release
 
-The unified extension service is built from the approved main repository checkout:
+The unified extension service is sourced from the approved main repository checkout:
 
 ```text
 /root/sub2api/extensions-self/risk-control
@@ -137,7 +144,7 @@ must not appear in application `up`, `rm`, or `down` commands.
 
 For the one-time migration, keep the current `risk-control` container running,
 change `RISK_CONTROL_URL` in `/root/sub2api/deploy/.env` to the extensions URL,
-and run `publish-custom.sh`. The publisher starts and verifies
+and run the administrator release job. The publisher starts and verifies
 `extensions-self` before removing the old application container. It does not
 touch the risk database container or volume.
 
@@ -186,7 +193,7 @@ For the first enabled release, use this order:
 4. Verify the NOLOGIN role and TCP login can read `extensions_self_ro.usage_source`
    `extensions_self_ro.group_dimension`, and `extensions_self_ro.account_group_dimension`,
    while full keys and credentials are denied.
-5. Build both images and recreate only `sub2api` and `extensions-self`.
+5. Verify the paired GHCR digests and recreate only `extensions-self`, then `sub2api`.
 6. Verify `/admin/extensions/account-monitor`, `/admin/extensions/group-monitor`,
    signed `data-quality`, risk pages, and custom homepage.
 7. Reconcile sampled success, failure, retry-after-failure, model, cost, and
@@ -274,7 +281,7 @@ and closes when its backdrop is clicked.
 ## Verification Checklist
 
 - [ ] Git worktree is clean after commit.
-- [ ] Intended main commit and risk image tag are recorded.
+- [ ] Intended commit and both GHCR digests are recorded.
 - [ ] `sub2api` container is healthy.
 - [ ] `extensions-self` container is healthy.
 - [ ] Public extensions homepage returns success and is the configured iframe.
@@ -305,22 +312,23 @@ and closes when its backdrop is clicked.
 
 ## Rollback
 
-Rollback means restoring the previous Compose/image pair and restarting only
-the affected service. Do not roll back by deleting the Git repository or by
-resetting the production worktree without a backup.
+Deployment or health failure triggers automatic paired rollback. The publisher
+restores the backed-up `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE`, recreates
+`extensions-self` then `sub2api`, and runs the complete health suite. Do not
+roll back by deleting the Git repository or resetting the production worktree.
 
 The publisher records the previous images as
 `sub2api:rollback-<timestamp>` and `deploy-extensions-self:rollback-<timestamp>`.
-Retag the selected rollback image to its active Compose image name, restore
-the matching configuration and previous inline homepage setting, and recreate
-only the affected application service. Never delete the risk database during
-rollback.
+The rollback tags are additional recovery evidence; normal rollback uses the
+previous immutable digest pair and matching `.env`/Compose backup. Never delete
+or recreate the risk database during rollback.
 
 For an account-monitor-only rollback, set `ACCOUNT_MONITOR_ENABLED=false`,
 restore the matching application images and environment, and recreate only
 `sub2api` and `extensions-self`. Keep monitor tables and safe views for diagnosis.
-Restore `risk_control_db.dump` only for confirmed schema/data corruption; a
-normal code rollback must not discard newly collected risk or monitor data.
+Database restore is not automatic. Restore `risk_control_db.dump` only for
+separately confirmed schema/data corruption; a normal code rollback must not
+discard newly collected risk or monitor data.
 
 After rollback, verify the same health checklist and record the failed commit,
 the rollback target, and the reason.
@@ -333,3 +341,6 @@ the rollback target, and the reason.
 - Other agents must read the repository `AGENTS.md` before editing.
 - Report implementation commit, tests, deployment status, and rollback status
   as separate facts.
+- Report implementation, local tests, `origin/custom-release` push,
+  Actions/GHCR, production backup, deployment, health, trigger migration, and
+  rollback material separately.

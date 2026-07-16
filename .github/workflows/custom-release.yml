@@ -106,6 +106,8 @@ jobs:
         run: ./deploy/ops/tests/test-script-contract.ps1
       - name: Stable Release resolver tests
         run: bash deploy/ops/tests/test-release-resolver.sh
+      - name: Release pipeline fixtures
+        run: bash deploy/ops/tests/test-release-pipeline.sh
       - name: Shell syntax
         run: find deploy/ops -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 

@@ -1,89 +1,120 @@
 # Release Operations
 
-These scripts are the versioned source for the VPS operations under
-`/opt/sub2api-custom/`.
+These files are the versioned source for `/opt/sub2api-custom/` and the host
+systemd units that publish Sub2API on US-RN-66.
 
-## Unified Stable Release Flow
+## Production Path
 
-`sync-and-publish.sh` is the entrypoint used by both the admin trigger and the
-scheduled job. It runs `sync-upstream.sh` in a temporary worktree first. A
-conflict, changed `origin/custom-release` base, or dirty VPS tree stops the flow and
-leaves the integration branch for manual resolution.
+The only normal production path is:
 
-`sync-upstream.sh` resolves only the latest non-draft, non-prerelease GitHub
-Release, verifies and fetches its exact tag, and merges the peeled commit.
-It never fetches or publishes `upstream/main`.
-
-When the merge is clean and the base is unchanged, it fast-forwards
-`custom-release`, pushes `origin/custom-release` without force, and invokes `publish-custom.sh` with the
-exact new commit. The publish script backs up production, builds the main and
-extensions-self images, recreates only the affected services, and verifies
-health. A publish failure is terminal for that run. The exact promoted commit
-is retained in `sync-pending-publish` so a later run can retry that same
-approved commit before attempting another upstream merge.
-
-`sync-upstream.sh` is the preparation component. It never builds an image or
-restarts a container by itself. `sync-trigger.sh` is the container-mounted
-admin trigger and waits until the unified host flow has completed.
-
-When Git cannot safely merge the Release, the status includes `conflict_files`,
-`conflict_base`, `conflict_release`, `release_tag`, `release_commit`,
-`release_published_at`, `conflict_log`, and `resolution_hint`.
-The host stores a diagnostic snapshot under
-`/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/<job-id>/`;
-`conflict_log` points to that host-side `metadata.json` path, not the container
-mount path. The admin panel shows the conflicted files and states that production was not
-changed. The script never resolves conflicts with `ours` or `theirs` silently.
-
-## Production Publish
-
-`publish-custom.sh --commit <sha>` is the only normal VPS release entrypoint.
-The SHA must equal the current `origin/custom-release` head. The script backs up the
-database and production configuration, builds from `/root/sub2api`, recreates
-only `sub2api` and the unified `extensions-self` service, then verifies the
-main API, risk API, public homepage proxy, and running binary version.
-
-When `ACCOUNT_MONITOR_ENABLED=true`, the publisher additionally:
-
-1. parses the rendered `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` and requires the
-   `extensions_self_monitor` login on the `postgres` service;
-2. backs up and verifies both databases plus Compose, `.env`, Nginx certificates,
-   container/image metadata, checksums, and rollback tags before changes;
-3. runs `install-account-monitor-source.sql` and verifies
-   `SET ROLE extensions_self_monitor_ro` can read `usage_source` and `group_dimension`;
-4. proves the login cannot read `public.api_keys.key` or
-   `public.accounts.credentials`;
-5. checks the signed account-monitor `data-quality` API and main authenticated
-   admin proxy route after recreation.
-
-Any failure stops publication. The script never prints the source password and
-never manages the `risk-control-postgres` lifecycle.
-
-The first VPS branch switch from `custom` to `custom-release` is not automatic.
-It requires explicit publication authorization after the new branch is pushed
-and validated. Code completion, branch push, and production publication remain
-separate states.
-
-`backfill-account-monitor.sh` is the post-publish operator command. It requires
-an explicit RFC3339 range and matching release backup directory, splits the range
-into non-overlapping segments of at most 31 days, submits signed rebuild jobs one
-at a time, polls to completion, and writes `backfill-jobs.tsv` plus the final
-`data-quality-after-backfill.json`. A failed or timed-out job terminates the run.
-
-The retired standalone `/root/sub2api-risk-control` deployment must not be
-reintroduced. The canonical source is `/root/sub2api/extensions-self`; its
-single Go process serves both risk APIs and `/homepage/`. The publisher removes
-the previous `risk-control` application container only after `extensions-self`
-and the public homepage proxy are healthy. It never removes or recreates
-`risk-control-postgres`.
-
-## Cron Installation
-
-The daily job and the per-minute admin-trigger consumer must both use the
-unified wrapper. The per-minute job removes the trigger marker only when it is
-about to start a run; the wrapper lock prevents overlapping publish attempts.
-
-```cron
-0 3 * * * /bin/bash /opt/sub2api-custom/auto-update.sh >> /var/log/sub2api-update.log 2>&1
-* * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
+```text
+feature -> custom-release -> Custom Release Actions
+-> public paired GHCR images -> administrator update button
+-> sub2api-release.path -> durable host state machine -> digest deployment
 ```
+
+The paired images are built from one full commit SHA:
+
+```text
+ghcr.io/listencodes/sub2api-custom:custom-<full-sha>
+ghcr.io/listencodes/sub2api-extensions:custom-<full-sha>
+```
+
+Production Compose requires immutable values:
+
+```dotenv
+SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@sha256:<digest>
+EXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@sha256:<digest>
+```
+
+The packages are public and the VPS pulls anonymously. GitHub credentials are
+not production image credentials.
+
+## Script Ownership
+
+- `sync-trigger.sh` atomically writes the durable job ID to `release-trigger`
+  and returns immediately.
+- `sub2api-release.path` watches that file and starts the one-shot
+  `sub2api-release.service`.
+- `sync-and-publish.sh` claims the trigger under `flock` and owns all release
+  state transitions.
+- `sync-upstream.sh` verifies `Wei-Shaw/sub2api /releases/latest`, fetches the
+  exact annotated tag, and creates `origin/integration/release-*` when needed.
+- `wait-for-actions.sh` requires the complete Custom Release validation suite.
+- `verify-release-images.sh` checks public pull, `linux/amd64`, digest identity,
+  and OCI revision/version/source labels for both images.
+- `promote-release.sh` advances only the tested remote candidate after a base
+  recheck. It does not move the local production source.
+- `publish-custom.sh` backs up, fast-forwards local source after the backup,
+  stages extensions then main by digest, runs health checks, and automatically
+  rolls back the previous pair on failure.
+
+There is no daily updater, polling cron consumer, scheduled mode, or VPS-local
+image build. The independent health-monitor schedule remains.
+
+## Release Scenarios
+
+For a new official stable Release, the orchestrator validates the annotated tag,
+merges only its peeled commit in a temporary worktree, waits for Actions and
+images, rechecks the base, promotes `origin/custom-release`, and publishes.
+
+When no new official Release exists but `origin/custom-release` has an
+undeployed custom commit, the same administrator action waits for that commit's
+Actions/images and publishes it without a Release merge. When neither changed,
+the job returns `success` without pulling or recreating services.
+
+Conflicts are terminal `conflict` jobs with the exact files, both source
+identities, a resolution hint, and an artifact under
+`release-jobs/` / `sync-conflicts/`. All other pre-deployment validation errors
+fail closed before production mutation.
+
+## Backup And Rollback
+
+Before local source or Compose state changes, the publisher verifies both
+custom-format database dumps and backs up Compose, `.env`, Nginx, certificate
+and key files, old digests, rollback tags, container/image metadata, and
+checksums. It never recreates or replaces `risk-control-postgres`.
+
+If the legacy deployment has no `release-state.json`, the first administrator
+job uses a one-time bootstrap: it records the clean local commit and current
+image IDs, tags both local images for rollback, and keeps the old Compose. It
+writes the first formal digest state only after the new pair is healthy; a
+failed bootstrap restores the old deployment and leaves formal state absent.
+
+A failed deployment or full health gate enters `rolling_back`, restores the
+previous `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE`, recreates
+`extensions-self` then `sub2api`, and reruns health checks. Database restore is
+not automatic; `risk_control_db.dump` is used only for separately authorized
+schema or data corruption recovery.
+
+`release-state.json` is updated only after a healthy release and records the
+production commit, stable Release tag/commit, both digests, publication time,
+and backup directory. Backfill starts only after health and only across the
+`data-quality` `available_from/to` range.
+
+## Installation
+
+Install scripts with mode `0755`, units with mode `0644`, then enable the path:
+
+```bash
+install -m 0755 deploy/ops/*.sh /opt/sub2api-custom/
+install -m 0644 deploy/ops/sub2api-release.path /etc/systemd/system/
+install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now sub2api-release.path
+```
+
+Do not call `sync-upstream.sh` or `publish-custom.sh` directly for final
+acceptance. Trigger and monitor the same durable job path used by the
+administrator button.
+
+## Branch Contract
+
+`custom-release` is the only production branch. `custom` is only for
+`upstream/main` forward-compatibility testing. A stable custom feature may be
+selectively `cherry-pick -x` into `custom`; never merge the entire `custom`
+branch into `custom-release`.
+
+Report implementation, tests, `origin/custom-release` push, Actions/GHCR,
+backup, deployment, health, trigger migration, and rollback material as
+separate results.

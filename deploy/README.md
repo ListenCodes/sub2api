@@ -185,8 +185,8 @@ ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000
 Use only `deploy/ops/publish-custom.sh` for the first enabled release. After
 backing up both databases, it runs `install-account-monitor-source.sql`, checks
 `SET ROLE extensions_self_monitor_ro`, proves that the login cannot read full
-keys or credentials, builds, and verifies the signed `data-quality` API. A failed
-permission probe stops before build.
+keys or credentials, deploys the verified paired digests, and checks the signed
+`data-quality` API. A failed permission probe stops before production mutation.
 
 The publisher also verifies both dump archives, captures the Nginx origin
 certificate/key and container/image metadata, and writes exact rollback tags to
@@ -209,37 +209,54 @@ each job, stops on the first failure, and records results in the release backup:
 
 ### Custom fork update and release
 
-For this deployment, `upstream/main` is only an input to local integration.
-The approved release branch is `origin/custom` on the user's fork. Do not use
-`git pull`, a direct upstream rebase, or `docker compose up` as a production
-update procedure.
+The only production path for this fork is:
+
+```text
+feature -> custom-release -> Custom Release Actions
+-> public paired GHCR images -> administrator update button
+-> sub2api-release.path -> digest deployment
+```
+
+`origin/custom-release` is the only production branch. `custom` is limited to
+`upstream/main` forward-compatibility testing; stable custom features may be
+selectively `cherry-pick -x` into it, but the entire branch is never merged back.
+
+Actions publishes one immutable pair from the same full SHA:
+
+```text
+ghcr.io/listencodes/sub2api-custom:custom-<full-sha>
+ghcr.io/listencodes/sub2api-extensions:custom-<full-sha>
+```
+
+Production Compose requires anonymous, digest-pinned values:
+
+```dotenv
+SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@sha256:<digest>
+EXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@sha256:<digest>
+```
 
 The versioned scripts in `deploy/ops/` are installed on the VPS as follows:
 
 ```bash
-install -m 0755 deploy/ops/sync-upstream.sh /opt/sub2api-custom/sync-upstream.sh
-install -m 0755 deploy/ops/sync-trigger.sh /opt/sub2api-custom/sync-trigger.sh
-install -m 0755 deploy/ops/sync-and-publish.sh /opt/sub2api-custom/sync-and-publish.sh
-install -m 0755 deploy/ops/auto-update.sh /opt/sub2api-custom/auto-update.sh
-install -m 0755 deploy/ops/publish-custom.sh /opt/sub2api-custom/publish-custom.sh
+install -m 0755 deploy/ops/*.sh /opt/sub2api-custom/
+install -m 0644 deploy/ops/sub2api-release.path /etc/systemd/system/
+install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now sub2api-release.path
 ```
 
-Install these two root crontab entries as part of the same change. Do not
-point the per-minute trigger consumer at `sync-upstream.sh`; that script only
-prepares an integration branch and does not publish it.
+The administrator action writes a durable job and `release-trigger` immediately.
+The path unit starts the one-shot host orchestrator, which validates only the
+latest official stable Release, waits for Actions and both images, rechecks the
+branch base, and publishes. There is no release polling consumer or automatic
+source update; the independent health-monitor schedule remains.
 
-```cron
-0 3 * * * /bin/bash /opt/sub2api-custom/auto-update.sh >> /var/log/sub2api-update.log 2>&1
-* * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
-```
-
-The admin trigger and daily job use `sync-and-publish.sh`. It prepares an
-`origin/integration/upstream-*` branch, stops on conflicts or base drift, and
-automatically promotes and publishes only a clean integration. The publish
-step still uses the exact `origin/custom` commit, creates a production backup,
-and runs the normal health checks. A failed publish remains stopped for that
-run, retains the exact pending commit, and is retried by the next unified
-wrapper invocation only after the origin/custom and local-branch checks pass.
+Before changing source or Compose state, the publisher verifies both database
+dumps and backs up Compose, `.env`, Nginx, origin certificates/keys, previous
+digests, rollback tags, container/image metadata, and checksums. It deploys
+`extensions-self` before `sub2api`. A failed deployment or health gate performs
+automatic paired rollback. Database restore is not automatic, and
+`risk-control-postgres` is never recreated or replaced.
 
 When a merge conflict occurs, the update status and admin panel list the exact
 conflicted files, both commit IDs, the resolution hint, and the diagnostic
@@ -247,6 +264,10 @@ artifact path. The snapshot is stored under
 `/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/<job-id>/`;
 production remains unchanged until the conflict is resolved and a new update
 is approved.
+
+Implementation, tests, `origin/custom-release` push, Actions/GHCR, backup,
+deployment, health, trigger migration, and rollback evidence are reported as
+separate results.
 
 ### Database Migration Notes (PostgreSQL)
 

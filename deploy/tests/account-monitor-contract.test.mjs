@@ -66,19 +66,19 @@ test('the extensions image contains both modules without monitor web assets', ()
 
 test('the publisher gates enabled monitoring on source privileges and readiness', () => {
   const publisher = read('deploy/ops/publish-custom.sh')
-  const backupIndex = publisher.indexOf("log \"Backing up approved release")
+  const backupIndex = publisher.indexOf('job_update backing_up')
   const installIndex = publisher.indexOf('install-account-monitor-source.sql')
-  const buildIndex = publisher.indexOf("log 'Building main application image'")
+  const pullIndex = publisher.indexOf('docker pull "$TARGET_EXTENSIONS_REF"')
 
-  assert.ok(backupIndex >= 0 && installIndex > backupIndex && buildIndex > installIndex)
+  assert.ok(backupIndex >= 0 && installIndex > backupIndex && pullIndex > installIndex)
   assert.match(publisher, /ACCOUNT_MONITOR_ENABLED/)
   assert.match(publisher, /docker exec risk-control-postgres pg_dump/)
   assert.match(publisher, /risk_control_db\.dump/)
   assert.match(publisher, /pg_restore[^\n]*--list/)
   assert.match(publisher, /ssl_certificate/)
   assert.match(publisher, /certificate-metadata|certificates/)
-  assert.match(publisher, /rollback-main-image|ROLLBACK_MAIN_IMAGE/)
-  assert.match(publisher, /rollback-extension-image|ROLLBACK_EXTENSION_IMAGE/)
+  assert.match(publisher, /MAIN_ROLLBACK_TAG/)
+  assert.match(publisher, /EXTENSIONS_ROLLBACK_TAG/)
   assert.match(publisher, /backfill.*pending|BACKFILL_STATUS.*pending/i)
 	assert.match(publisher, /extensions_self_monitor/)
 	assert.match(publisher, /SET ROLE extensions_self_monitor_ro/)
@@ -93,6 +93,7 @@ test('the publisher gates enabled monitoring on source privileges and readiness'
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
+  assert.doesNotMatch(publisher, /docker\s+build|compose[^\n]*build/)
 })
 
 test('the segmented backfill command bounds, polls, stops, and records every job', () => {
