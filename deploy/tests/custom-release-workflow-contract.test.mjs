@@ -44,6 +44,11 @@ test('custom-release workflow gates paired images on every required validation j
   assert.match(workflow, /needs:\s*\[[^\]]*backend[^\]]*golangci[^\]]*frontend[^\]]*extensions[^\]]*deployment[^\]]*\]/)
   assert.match(
     workflow,
+    /images:\s*\n\s+needs:[^\n]+\n\s+if:\s*github\.event_name\s*==\s*'push'/,
+    'manual workflow runs must not publish release images'
+  )
+  assert.match(
+    workflow,
     /ghcr\.io\/listencodes\/sub2api-custom:custom-\$\{\{\s*github\.sha\s*\}\}/
   )
   assert.match(

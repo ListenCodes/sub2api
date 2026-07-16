@@ -126,6 +126,7 @@ jobs:
 
   images:
     needs: [backend, golangci, frontend, extensions, deployment, metadata]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
