@@ -255,6 +255,9 @@ func TestPostgresSourceViewsAndRestrictedRole(t *testing.T) {
 	if _, err := ownerDB.ExecContext(ctx, sourceIntegrationLegacyViewsSQL); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ownerDB.ExecContext(ctx, sourceIntegrationLegacyAccountGroupViewSQL); err != nil {
+		t.Fatal(err)
+	}
 	viewSQL, err := os.ReadFile("sql/main_source_views.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -377,6 +380,13 @@ SELECT o.id,o.created_at,o.request_id,o.client_request_id,o.user_id,o.api_key_id
                WITH ORDINALITY AS event(value, ordinality)
        ), '[]'::jsonb) AS upstream_errors
 FROM public.ops_error_logs AS o;`
+
+const sourceIntegrationLegacyAccountGroupViewSQL = `
+CREATE VIEW extensions_self_ro.account_group_dimension WITH (security_barrier = true) AS
+SELECT ag.account_id,g.id AS group_id,g.name AS group_name,g.platform AS group_platform,
+       g.status AS group_status,g.deleted_at AS group_deleted_at
+FROM public.account_groups AS ag
+JOIN public.groups AS g ON g.id = ag.group_id;`
 
 const sourceIntegrationSeedSQL = `
 INSERT INTO public.accounts VALUES (101,NULL,'OpenAI Primary','openai','active',TRUE,NULL,'{"access_token":"secret"}'::jsonb);
