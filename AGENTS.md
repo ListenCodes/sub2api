@@ -8,7 +8,8 @@ development conversations working in this repository.
 - Local source of truth: `E:\Code\sub2api`
 - Fork remote: `origin` -> `ListenCodes/sub2api`
 - Upstream remote: `upstream` -> `Wei-Shaw/sub2api`
-- Integration branch: `custom`
+- Production-approved branch: `custom-release`
+- Legacy compatibility branch: `custom` (history and `upstream/main` testing only)
 - Production main source tree: `/root/sub2api`
 - Production main image: `sub2api:custom`
 - Versioned operations scripts: `deploy/ops/`
@@ -17,7 +18,7 @@ development conversations working in this repository.
 - Extensions image: `deploy-extensions-self`
 
 Risk control, account monitoring, and the custom homepage are versioned under `extensions-self/` and
-released in one container from the same approved `origin/custom` commit as the
+released in one container from the same approved `origin/custom-release` commit as the
 main application. The dedicated `risk-control-postgres` service and volume stay
 independent. Production secrets remain in `deploy/.env` and must never be
 committed.
@@ -76,10 +77,11 @@ records have been verified.
 1. Read this file and `deploy/RELEASE-RUNBOOK.md` before changing code or
    deployment files.
 2. Use a feature branch or an isolated worktree for feature work. Do not use
-   `custom` as a personal working branch.
+   `custom-release` as a personal working branch.
 3. Use `upstream` only to fetch and integrate upstream changes locally.
 4. Resolve conflicts locally, run the relevant tests, then merge or fast-forward
-   the validated result into `custom` and push it to `origin/custom`.
+   the validated result into `custom-release` and push it to `origin/custom-release`.
+   The legacy `custom` branch cannot be auto-published.
 5. Never use `git reset --hard`, force-push, or discard another agent's changes
    without explicit user authorization.
 6. A dirty worktree is not an acceptable production deployment source. Stop and
@@ -92,7 +94,8 @@ records have been verified.
 3. Implement the change and add focused tests.
 4. Run the required backend, frontend, extensions-self, and deployment checks.
 5. Review the diff and `git diff --check`.
-6. Commit to the feature branch, merge into `custom`, and push `origin/custom`.
+6. Commit to the feature branch, merge into `custom-release`, and push
+   `origin/custom-release`.
 7. Do not publish to production automatically after a code task. Production
    publishing requires explicit user authorization.
 
@@ -107,7 +110,7 @@ every emergency change must be traceable and recoverable.
 4. Make the smallest possible change, test it, and build `sub2api:custom`.
 5. Run the health check before declaring success.
 6. Commit and push the emergency branch or approved commit to `origin`.
-7. Reconcile the change into the local `custom` branch at the next opportunity.
+7. Reconcile the change into the local `custom-release` branch at the next opportunity.
 
 Do not edit a running container, edit a generated image, or leave uncommitted
 production changes as the only copy of a fix.
@@ -143,24 +146,29 @@ are the coordination mechanism.
 
 ## Release Boundary
 
-The admin upstream action and the scheduled upstream job use the unified
-`sync-and-publish.sh` flow. It fetches `upstream/main`, tests a merge in a
-temporary worktree, and pushes `origin/integration/upstream-*`. When the merge
-is conflict-free and the recorded `origin/custom` base has not changed, the
-flow may fast-forward `custom` to that integration branch, push `origin/custom`,
-and invoke `publish-custom.sh` for production.
+The admin update action and scheduled job use the unified
+`sync-and-publish.sh` flow. It resolves only the latest non-draft,
+non-prerelease GitHub Release, verifies the tag object, fetches that exact tag,
+peels its commit, and tests the merge in a temporary worktree. It pushes only
+`origin/integration/release-*`. When the merge is conflict-free and the
+recorded `origin/custom-release` base has not changed, the flow may
+fast-forward `custom-release`, push `origin/custom-release`, and invoke
+`publish-custom.sh` for production.
 
-Any merge conflict, changed custom base, dirty VPS tree, failed push, failed
+Any merge conflict, changed custom-release base, dirty VPS tree, failed push, failed
 backup, failed build, or failed health check stops the flow without publishing.
 The integration branch and rollback artifacts remain available for manual
 resolution. No step may use a rebase, force-push, or an arbitrary commit.
 
 For merge conflicts, `sync-upstream.sh` also records the conflicted files,
-both commit IDs, a resolution hint, and a diagnostic snapshot under the sync
+the approved branch base, verified Release identity, a resolution hint, and a diagnostic snapshot under the sync
 data directory. The admin update panel must expose these details and state
 that production was not changed. Never hide a conflict behind a generic
 failure message or resolve it with a blanket `ours`/`theirs` strategy.
 
 `publish-custom.sh` remains the only production build/deploy entrypoint. It
-accepts only the exact approved `origin/custom` commit and must not fetch or
-merge `upstream/main` during a release.
+accepts only the exact approved `origin/custom-release` commit and must not
+fetch or merge `upstream/main` during a release. The first VPS branch switch
+from `custom` to `custom-release` requires separate explicit publication
+authorization. Code completion, branch push, and production publication are
+three separate states and must be reported separately.

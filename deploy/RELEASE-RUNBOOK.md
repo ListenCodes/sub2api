@@ -7,8 +7,8 @@ extensions service.
 
 | Unit | Source | Runtime image | Production path |
 |---|---|---|---|
-| Main application and risk hooks | `origin/custom` | `sub2api:custom` | `/root/sub2api` |
-| Risk control, account monitor, and homepage | `origin/custom:extensions-self/` | `deploy-extensions-self` | `/root/sub2api/extensions-self` |
+| Main application and risk hooks | `origin/custom-release` | `sub2api:custom` | `/root/sub2api` |
+| Risk control, account monitor, and homepage | `origin/custom-release:extensions-self/` | `deploy-extensions-self` | `/root/sub2api/extensions-self` |
 
 Publish the two units as a recorded pair when either one changes. The main
 application's `RISK_CONTROL_URL` must point to the running risk service.
@@ -22,18 +22,25 @@ git status --short --branch
 git fetch upstream
 git fetch origin
 
-# Integrate upstream in a feature or integration branch.
-# Resolve conflicts locally and run tests before merging to custom.
-git switch custom
-git merge --ff-only integration/upstream-YYYYMMDD
-git push origin custom
+# Integrate only a verified stable Release in an integration branch.
+# Resolve conflicts locally and run tests before promotion.
+git switch custom-release
+git merge --ff-only integration/release-vX.Y.Z-YYYYMMDD
+git push origin custom-release
 ```
 
-The production deployment uses the approved `origin/custom` commit. Do not
-deploy an uncommitted worktree or an arbitrary upstream commit. The VPS
+The production deployment uses the approved `origin/custom-release` commit.
+The legacy `custom` branch is retained for history and `upstream/main`
+compatibility testing and cannot auto-publish. Do not deploy an uncommitted
+worktree or an arbitrary upstream commit. The VPS
 unified flow may promote a clean integration branch and publish it
 automatically, but only after the base commit, clean-tree, backup, build, and
 health checks pass.
+
+The first production branch switch from `custom` to `custom-release` is a
+manual migration and requires explicit publication authorization. Completing
+code, pushing `origin/custom-release`, and publishing production are separate
+states.
 
 ## Versioned VPS Operations
 
@@ -41,7 +48,7 @@ Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
 sync-trigger.sh    container-mounted trigger; waits for the cron result
-sync-upstream.sh   fetches upstream and prepares origin/integration/*
+sync-upstream.sh   verifies a stable Release and prepares origin/integration/release-*
 sync-and-publish.sh shared trigger/scheduled sync-then-publish wrapper
 auto-update.sh     scheduled wrapper for sync-and-publish.sh
 publish-custom.sh  approved production release entrypoint
@@ -50,7 +57,7 @@ publish-custom.sh  approved production release entrypoint
 The normal publish command is:
 
 ```bash
-/opt/sub2api-custom/publish-custom.sh --commit "$(git rev-parse origin/custom)"
+/opt/sub2api-custom/publish-custom.sh --commit "$(git rev-parse origin/custom-release)"
 ```
 
 It backs up production, builds the approved source, recreates only the main
@@ -58,8 +65,8 @@ and extensions-self services, and verifies health and the running version.
 The backup contains both `sub2api_db.dump` and `risk_control_db.dump`.
 
 The admin trigger and the daily scheduled job both call
-`sync-and-publish.sh`. A conflict or changed custom base stops before
-`origin/custom` and production are changed. A clean merge promotes the
+`sync-and-publish.sh`. A conflict or changed custom-release base stops before
+`origin/custom-release` and production are changed. A clean merge promotes the
 integration branch and calls the same publish entrypoint automatically.
 
 The production crontab must keep the per-minute admin-trigger consumer on the
@@ -71,10 +78,11 @@ behavior and will not deploy the result:
 * * * * * DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data; [ -f "$DATA_DIR/sync-trigger" ] && rm "$DATA_DIR/sync-trigger" && /bin/bash /opt/sub2api-custom/sync-and-publish.sh >> /var/log/sub2api-sync.log 2>&1
 ```
 
-If an upstream merge conflicts, the update status reports the exact files,
-both commit IDs, and the diagnostic artifact path. The admin panel must show
-that production was not changed. Resolve the conflict in a local `custom`
-worktree, run the normal tests, push `origin/custom`, and retry the update;
+If a stable Release merge conflicts, the update status reports the exact files,
+approved branch base, Release tag/commit, and diagnostic artifact path. The
+admin panel must show that production was not changed. Resolve the conflict in
+a local `custom-release` worktree, run the normal tests, push
+`origin/custom-release`, and retry the update;
 do not use `git reset --hard` or a forced `ours`/`theirs` merge.
 
 ## VPS Fallback Release
@@ -87,7 +95,7 @@ Before changing the VPS:
 1. Confirm the current container image, Git commit, and worktree status.
 2. Create a database/configuration backup under `/root/backups/sub2api/`.
 3. Confirm no other deployment is running.
-4. Create `emergency/vps-YYYYMMDD` from the deployed `custom` branch.
+4. Create `emergency/vps-YYYYMMDD` from the deployed `custom-release` branch.
 
 After an emergency change:
 

@@ -1,11 +1,12 @@
-# Stable Release v0.1.157 Migration Evidence
+# Stable Release v0.1.157 Reconstruction and v0.1.158 Integration Evidence
 
 ## Scope
 
 - Production publication: false
 - Source branch preserved: `origin/custom`
 - Target branch: `custom-release`
-- Stable Release: `v0.1.157`
+- Reconstruction Release: `v0.1.157`
+- Current stable Release: `v0.1.158`
 
 ## Immutable References
 
@@ -15,6 +16,22 @@
 | Release peeled commit | `a2779cd5f30d6d3904a9d59088aed09507678dfe` |
 | Custom upstream base | `09c6c6d74050cf49ed2fb864be6c11647798ef53` |
 | Preserved custom source | `8b4901991f976e39d1aab76b74eb67fb771543ee` |
+
+## Current Stable Release
+
+| Reference | Value |
+|---|---|
+| Release | `v0.1.158` |
+| Release tag object | `c6ece7d092843c19a2d14d1264669c6416969f6d` |
+| Release peeled commit | `26abd19a2812edba02bbef93c3e2a620141cc257` |
+| Published at | `2026-07-16T12:37:06Z` |
+| Local merge commit | `fd0c15896` |
+
+`v0.1.158` is a descendant of `v0.1.157`. It was merged after the custom
+reconstruction with no conflicts. The only explicit merge-side metadata edit
+was `deploy/stable-release-baseline.json`; high-risk official/custom overlap
+kept both the official v0.1.158 constructor changes and the self-hosted risk
+wiring.
 
 ## Custom Delta
 
@@ -26,7 +43,7 @@
 
 ## Ownership Boundary
 
-- Official baseline: the peeled `v0.1.157` commit, including its upstream
+- Official baseline: the peeled `v0.1.158` commit, including its upstream
   routing, scheduler, audit, step-up, asynchronous image, and cooldown behavior.
 - Self-hosted extensions: risk control, account/group monitoring, the custom
   homepage, their native UI/proxy routes, and the `riskEvents` gateway wiring.
@@ -74,11 +91,19 @@ these overlaps.
 | `git diff --cached --check` after custom transplant | PASS | No whitespace errors |
 | Stable Release ancestry check | PASS | Peeled `v0.1.157` commit is an ancestor of the reconstruction branch |
 | Backend handler/service/routes focused Go tests | PASS | Portable verified Go 1.26.5; custom constructor compatibility fixed and focused packages passed |
+| v0.1.158 ancestry and tag verification | PASS | `v0.1.157` is an ancestor; tag object and peeled commit match GitHub Release metadata |
+| v0.1.158 backend handler/service/routes tests | PASS | All focused packages passed after the Release merge |
+| v0.1.158 frontend typecheck | PASS | `vue-tsc --noEmit` exited 0 |
+| v0.1.158 frontend full test suite | PASS | `pnpm test:run` exited 0 |
+| Self-hosted risk-control tests | PASS | `go test ./... -count=1` exited 0 |
+| Self-hosted account-monitor tests | PASS | `go test ./... -count=1` exited 0 |
+| Release operations contracts | PASS | PowerShell contract, resolver fixtures, conflict artifact contract, and Bash syntax checks passed |
 | Docker baseline validation | NOT RUN | Docker CLI is not installed in the local PowerShell environment |
 
 ## Final State
 
 - Reconstruction commit: recorded by the custom transplant commit containing this evidence
+- Current stable baseline: `v0.1.158`
 - `origin/custom-release`: not pushed
 - Production published: false
 - Rollback performed: false
