@@ -8,7 +8,6 @@ UPSTREAM_REMOTE="${SUB2API_UPSTREAM_REMOTE:-upstream}"
 ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
 RESOLVER="${SUB2API_RELEASE_RESOLVER:-$SCRIPT_DIR/resolve-stable-release.sh}"
 BASELINE_FILE="${SUB2API_STABLE_BASELINE_FILE:-$REPO/deploy/stable-release-baseline.json}"
-BASELINE_RELATIVE="${BASELINE_FILE#"$REPO"/}"
 DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 LOG="${SUB2API_SYNC_LOG:-/var/log/sub2api-sync.log}"
 LOCK_FILE="${SUB2API_SYNC_LOCK:-/var/lock/sub2api-sync.lock}"
@@ -19,9 +18,6 @@ RESULT_FILE="$DATA_DIR/sync-result"
 JOB_ID_FILE="$DATA_DIR/sync-job-id"
 DEFER_RESULT="${SUB2API_SYNC_DEFER_RESULT:-0}"
 SCHEDULED_RUN="${1:-}"
-
-mkdir -p "$DATA_DIR" "$WORKTREE_ROOT" "$(dirname "$LOG")" "$(dirname "$LOCK_FILE")"
-touch "$LOG" "$LOCK_FILE"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG"
@@ -89,7 +85,6 @@ cleanup() {
     git -C "$REPO" worktree remove "$WORKTREE" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
 
 result() {
   local message="$1"
@@ -104,6 +99,14 @@ result() {
   fi
   log "RESULT: $message"
   exit "$code"
+}
+
+on_error() {
+  local code="$?"
+  local line="${1:-unknown}"
+  trap - ERR
+  set +e
+  result "FAILED: unexpected stable Release sync error at line $line" "$code"
 }
 
 parse_release_output() {
@@ -140,12 +143,28 @@ parse_release_output() {
   [[ "$seen_tag" -eq 1 && "$seen_published" -eq 1 && "$seen_sha" -eq 1 ]]
 }
 
+trap cleanup EXIT
+trap 'on_error "$LINENO"' ERR
+mkdir -p "$DATA_DIR" "$WORKTREE_ROOT" "$(dirname "$LOG")" "$(dirname "$LOCK_FILE")"
+touch "$LOG" "$LOCK_FILE"
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   result 'FAILED: another stable Release sync is already running' 1
 fi
 
 cd "$REPO"
+repo_root="$(realpath -m "$REPO")"
+baseline_path="$(realpath -m "$BASELINE_FILE")"
+case "$baseline_path" in
+  "$repo_root"/*)
+    BASELINE_FILE="$baseline_path"
+    BASELINE_RELATIVE="${BASELINE_FILE#"$repo_root"/}"
+    ;;
+  *)
+    result 'FAILED: baseline metadata path must stay inside the repository' 1
+    ;;
+esac
 if [[ "$(git branch --show-current)" != "$BRANCH" ]]; then
   result "FAILED: VPS source branch is not $BRANCH" 1
 fi
@@ -154,7 +173,7 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
 fi
 
 write_status running 'resolving the latest stable Release'
-release_output="$($RESOLVER 2>>"$LOG")" || result 'FAILED: stable Release resolution failed' 1
+release_output="$("$RESOLVER" 2>>"$LOG")" || result 'FAILED: stable Release resolution failed' 1
 parse_release_output "$release_output" || result 'FAILED: stable Release resolver output was invalid' 1
 
 write_status running "fetching approved branch and Release tag $RELEASE_TAG"
