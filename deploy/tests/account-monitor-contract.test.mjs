@@ -205,3 +205,19 @@ test('monitor correction documentation defines inventory, grouping, range, and r
   assert.doesNotMatch(`${checklist}\n${runbook}`, /账号详情.{0,20}(?:六|6).{0,5}页签/)
   assert.doesNotMatch(`${checklist}\n${runbook}`, /(?:周期|定时|自动).{0,8}刷新/)
 })
+
+test('monitor documentation defines the fixed twenty-four-bucket release contract', () => {
+  const documents = `${read('docs/ACCOUNT-MONITOR-CHECKLIST.md')}\n${read('deploy/RELEASE-RUNBOOK.md')}`
+  for (const marker of [
+    '6h/24h/7d/30d',
+    '24 个时间桶',
+    '15 分钟',
+    '1 小时',
+    '7 小时',
+    '30 小时',
+    'account_monitor_request_facts',
+  ]) {
+    assert.match(documents, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+  assert.doesNotMatch(documents, /7d\/30d[^\n]*account_monitor_group_model_10m/)
+})

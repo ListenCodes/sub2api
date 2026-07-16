@@ -249,10 +249,12 @@ HAVING count(DISTINCT ag.group_id) > 1
 LIMIT 10;
 ```
 
-For group monitoring, reconcile both `7d/30d` API ranges against the same
-`[from,to)` complete-bucket interval in `account_monitor_group_model_10m`.
-Verify `total_requests=successes+failures` for each group and that card/detail
-totals agree. Keep the exact UTC boundaries with the release evidence.
+For group monitoring, exercise `6h/24h/7d/30d`. Every list card and model detail
+must return exactly 24 个时间桶, using 15 分钟, 1 小时, 7 小时, and 30 小时
+respectively. Reconcile every API range against the same `[from,to)` interval in
+`account_monitor_request_facts`; verify `total_requests=successes+failures` for
+each group and that card/detail totals agree. Keep the exact UTC boundaries with
+the release evidence.
 
 Browser acceptance must select `page_size=1000`, exercise platform/group/text
 filters, and use the “手动刷新” button on account and group monitor. Exercise
@@ -272,7 +274,7 @@ and closes when its backdrop is clicked.
 - [ ] `extensions_self_ro.account_group_dimension` allow probe and raw key/credential deny probes passed.
 - [ ] “全量非删除账号数” equals account-monitor total; “事实活跃账号数” is recorded separately.
 - [ ] A “多分组账号样本” displays all memberships and matches every applicable group filter.
-- [ ] `page_size=1000`, `7d/30d`, and “手动刷新” browser checks passed without background polling.
+- [ ] `page_size=1000`, `6h/24h/7d/30d` fixed 24-bucket views, and “手动刷新” browser checks passed without background polling.
 - [ ] Signed account-monitor `data-quality` reports a recent sync or an explicit source error.
 - [ ] `data_as_of`, both cursors, available history, missing-group and exact/estimated counts are recorded.
 - [ ] Segmented backfill covers only the available interval and every recorded job completed.
