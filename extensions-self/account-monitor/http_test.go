@@ -144,7 +144,7 @@ func TestHandlerRejectsUnknownEndpoint(t *testing.T) {
 	}
 }
 
-func TestHandlerRoutesGroupMonitorUsingCompleteTenMinuteRange(t *testing.T) {
+func TestHandlerRoutesGroupMonitorUsingCompleteFixedBucketRange(t *testing.T) {
 	now := time.Date(2026, 7, 15, 12, 7, 30, 0, time.UTC)
 	tests := []struct {
 		path     string
@@ -191,12 +191,10 @@ func TestHandlerRoutesGroupMonitorRanges(t *testing.T) {
 		duration      time.Duration
 		bucketSeconds int64
 	}{
-		{rangeValue: "1h", duration: time.Hour, bucketSeconds: 600},
-		{rangeValue: "6h", duration: 6 * time.Hour, bucketSeconds: 600},
-		{rangeValue: "12h", duration: 12 * time.Hour, bucketSeconds: 600},
-		{rangeValue: "24h", duration: 24 * time.Hour, bucketSeconds: 600},
-		{rangeValue: "7d", duration: 7 * 24 * time.Hour, bucketSeconds: 3600},
-		{rangeValue: "30d", duration: 30 * 24 * time.Hour, bucketSeconds: 21600},
+		{rangeValue: "6h", duration: 6 * time.Hour, bucketSeconds: 900},
+		{rangeValue: "24h", duration: 24 * time.Hour, bucketSeconds: 3600},
+		{rangeValue: "7d", duration: 7 * 24 * time.Hour, bucketSeconds: 25200},
+		{rangeValue: "30d", duration: 30 * 24 * time.Hour, bucketSeconds: 108000},
 	}
 	for _, test := range tests {
 		t.Run(test.rangeValue, func(t *testing.T) {
@@ -243,6 +241,8 @@ func adminRequestBucketSeconds(t *testing.T, request AdminRequest) int64 {
 func TestHandlerRejectsInvalidGroupMonitorOptions(t *testing.T) {
 	for _, path := range []string{
 		"/group-monitor/groups?range=2h",
+		"/group-monitor/groups?range=1h",
+		"/group-monitor/groups?range=12h",
 		"/group-monitor/groups/no?range=6h",
 	} {
 		backend := &fakeAdminBackend{}

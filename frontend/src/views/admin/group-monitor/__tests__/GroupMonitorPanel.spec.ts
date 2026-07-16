@@ -22,6 +22,15 @@ describe('group monitor URL state', () => {
 		expect(state).toEqual({ range: '30d', query: 'openai', platform: 'openai', groupStatus: 'all', callStatus: 'partial_failure', page: 3, pageSize: 1000, selectedGroupID: 7 })
 		expect(serializeGroupMonitorQuery(state)).toEqual({ range: '30d', query: 'openai', platform: 'openai', group_status: 'all', call_status: 'partial_failure', page: '3', page_size: '1000', group: '7' })
   })
+
+	it('normalizes removed one-hour and twelve-hour ranges to six hours', () => {
+		expect(parseGroupMonitorQuery({ range: '1h' }).range).toBe('6h')
+		expect(parseGroupMonitorQuery({ range: '12h' }).range).toBe('6h')
+	})
+
+	it('restores the has-calls filter', () => {
+		expect(parseGroupMonitorQuery({ call_status: 'has_calls' }).callStatus).toBe('has_calls')
+	})
 })
 
 describe('GroupMonitorPanel', () => {
@@ -40,6 +49,15 @@ describe('GroupMonitorPanel', () => {
 		expect(wrapper.text()).toContain('采集已延迟 900 秒')
 		expect(wrapper.text()).not.toContain('自动刷新')
 		expect(wrapper.find('[data-testid="group-filter-apply"]').exists()).toBe(false)
+		for (const [testID, label] of [
+			['group-filter-query-label', '分组名称'],
+			['group-filter-platform-label', '平台'],
+			['group-filter-status-label', '分组状态'],
+			['group-filter-call-status-label', '调用状态'],
+			['group-filter-range-label', '时间范围'],
+		] as const) {
+			expect(wrapper.get(`[data-testid="${testID}"]`).text()).toBe(label)
+		}
 
     vi.mocked(accountMonitorAPI.listGroups).mockRejectedValueOnce(new Error('分组聚合暂不可用'))
     await wrapper.get('[data-testid="group-monitor-refresh"]').trigger('click')

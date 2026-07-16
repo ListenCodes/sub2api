@@ -85,6 +85,7 @@ func TestSourceContractsIncludeAccountInventoryGroups(t *testing.T) {
 		"group_name",
 		"group_platform",
 		"group_status",
+		"group_rate_multiplier",
 		"group_deleted_at",
 	} {
 		if !strings.Contains(lower, required) {

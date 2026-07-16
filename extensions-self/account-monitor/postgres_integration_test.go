@@ -93,63 +93,68 @@ func TestPostgresMigrationAggregationRebuildAndRetention(t *testing.T) {
 	assertDatabaseCount(t, db, "SELECT COUNT(*) FROM account_monitor_request_facts", 4)
 	assertGroupAggregate(t, db, completedBucket, groupID, "gpt-5", 2, 1, 1, 1, 1)
 	assertDatabaseCount(t, db, "SELECT COUNT(*) FROM account_monitor_group_model_10m WHERE bucket_at=$1", 0, currentBucket)
+	displayFrom := time.Unix(completedAt.Unix()-completedAt.Unix()%900, 0).UTC()
+	displayTo := displayFrom.Add(15 * time.Minute)
 	groupBuckets, err := NewAdminService(repository, nil, time.Second).loadGroupBuckets(
 		ctx,
-		completedBucket,
-		currentBucket,
+		displayFrom,
+		displayTo,
 		[]int64{groupID},
+		900,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	groupCard := buildGroupCard(batch.GroupDimensions[0], completedBucket, currentBucket, groupBuckets[groupID])
+	groupCard := buildGroupCard(batch.GroupDimensions[0], displayFrom, displayTo, groupBuckets[groupID], 900)
 	if groupCard.TotalRequests != 2 || groupCard.Successes != 1 || groupCard.Failures != 1 {
 		t.Fatalf("cross-zone group card = %+v, want 2 requests split 1/1", groupCard)
 	}
 
-	hourlyFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	sixHourFrom := hourlyFrom.Add(24 * time.Hour)
+	fifteenMinuteFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	thirtyHourCandidate := fifteenMinuteFrom.Add(24 * time.Hour)
+	thirtyHourFrom := time.Unix(thirtyHourCandidate.Unix()-thirtyHourCandidate.Unix()%108000, 0).UTC()
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO account_monitor_group_dimensions(group_id,name,platform,status,synced_at)
-		VALUES (70,'Hourly','openai','active',$1),(80,'Six Hour','openai','active',$1)
+		VALUES (70,'Fifteen Minute','openai','active',$1),(80,'Thirty Hour','openai','active',$1)
 		ON CONFLICT (group_id) DO NOTHING`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO account_monitor_group_model_10m
-		(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
-		SELECT $1::timestamptz + step * interval '10 minutes',70,'hourly-model',1,1,0,1,0
-		FROM generate_series(0,5) AS step`, hourlyFrom); err != nil {
+		INSERT INTO account_monitor_request_facts
+		(request_key,occurred_at,group_id,platform,actual_model,model_attribution,result,source_kind,source_id)
+		SELECT 'fifteen-'||step,$1::timestamptz + step * interval '15 minutes',70,'openai','fifteen-model','exact','succeeded','usage',step
+		FROM generate_series(0,23) AS step`, fifteenMinuteFrom); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO account_monitor_group_model_10m
-		(bucket_at,group_id,actual_model,total_requests,successes,failures,exact_model_requests,estimated_model_requests)
-		SELECT $1::timestamptz + step * interval '10 minutes',80,'six-hour-model',1,
-		       CASE WHEN step < 30 THEN 1 ELSE 0 END,CASE WHEN step < 30 THEN 0 ELSE 1 END,
-		       CASE WHEN step < 30 THEN 1 ELSE 0 END,CASE WHEN step < 30 THEN 0 ELSE 1 END
-		FROM generate_series(0,35) AS step`, sixHourFrom); err != nil {
+		INSERT INTO account_monitor_request_facts
+		(request_key,occurred_at,group_id,platform,actual_model,model_attribution,result,source_kind,source_id)
+		SELECT 'thirty-'||step,$1::timestamptz + step * interval '30 hours',80,'openai','thirty-model',
+		       CASE WHEN step < 12 THEN 'exact' ELSE 'estimated' END,
+		       CASE WHEN step < 12 THEN 'succeeded' ELSE 'failed' END,'usage',step
+		FROM generate_series(0,23) AS step`, thirtyHourFrom); err != nil {
 		t.Fatal(err)
 	}
 	adaptiveService := NewAdminService(repository, nil, time.Second)
-	hourlyBuckets, err := adaptiveService.loadGroupBuckets(ctx, hourlyFrom, hourlyFrom.Add(time.Hour), []int64{70}, 3600)
+	fifteenMinuteBuckets, err := adaptiveService.loadGroupBuckets(ctx, fifteenMinuteFrom, fifteenMinuteFrom.Add(6*time.Hour), []int64{70}, 900)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hourlyCard := buildGroupCard(GroupDimension{ID: 70}, hourlyFrom, hourlyFrom.Add(time.Hour), hourlyBuckets[70], 3600)
-	if len(hourlyCard.Timeline) != 1 || hourlyCard.TotalRequests != 6 || !hourlyCard.Timeline[0].BucketAt.Equal(hourlyFrom) {
-		t.Fatalf("hourly adaptive card = %+v", hourlyCard)
+	fifteenMinuteCard := buildGroupCard(GroupDimension{ID: 70}, fifteenMinuteFrom, fifteenMinuteFrom.Add(6*time.Hour), fifteenMinuteBuckets[70], 900)
+	if len(fifteenMinuteCard.Timeline) != 24 || fifteenMinuteCard.TotalRequests != 24 || !fifteenMinuteCard.Timeline[0].BucketAt.Equal(fifteenMinuteFrom) {
+		t.Fatalf("fifteen-minute fixed card = %+v", fifteenMinuteCard)
 	}
-	sixHourResult, err := adaptiveService.groupMonitorGroup(ctx, AdminRequest{
-		GroupID: 80, From: sixHourFrom, To: sixHourFrom.Add(6 * time.Hour), BucketSeconds: 21600,
+	thirtyHourResult, err := adaptiveService.groupMonitorGroup(ctx, AdminRequest{
+		GroupID: 80, From: thirtyHourFrom, To: thirtyHourFrom.Add(30 * 24 * time.Hour), BucketSeconds: 108000,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sixHourResult.Models) != 1 || len(sixHourResult.Models[0].Timeline) != 1 ||
-		sixHourResult.Group.TotalRequests != 36 || sixHourResult.Models[0].Successes != 30 ||
-		!sixHourResult.Models[0].Timeline[0].BucketAt.Equal(sixHourFrom) {
-		t.Fatalf("six-hour adaptive detail = %+v", sixHourResult)
+	if len(thirtyHourResult.Models) != 1 || len(thirtyHourResult.Models[0].Timeline) != 24 ||
+		thirtyHourResult.Group.TotalRequests != 24 || thirtyHourResult.Models[0].Successes != 12 ||
+		thirtyHourResult.Models[0].ExactModelRequests != 12 || thirtyHourResult.Models[0].EstimatedModelRequests != 12 ||
+		!thirtyHourResult.Models[0].Timeline[0].BucketAt.Equal(thirtyHourFrom) {
+		t.Fatalf("thirty-hour fixed detail = %+v", thirtyHourResult)
 	}
 
 	var bucketDate string
@@ -287,6 +292,7 @@ func TestPostgresSourceViewsAndRestrictedRole(t *testing.T) {
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.error_source WHERE group_id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.group_dimension WHERE id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_id=7", 1)
+	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_rate_multiplier=1.5", 1)
 
 	var maskedPrefix string
 	if err := restrictedDB.QueryRowContext(ctx, "SELECT masked_prefix FROM extensions_self_ro.api_key_dimension WHERE id=70").Scan(&maskedPrefix); err != nil {
@@ -331,7 +337,7 @@ CREATE TABLE public.usage_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,use
 CREATE TABLE public.ops_error_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,request_id TEXT,client_request_id TEXT,user_id BIGINT,api_key_id BIGINT,account_id BIGINT,group_id BIGINT,platform TEXT,model TEXT,requested_model TEXT,upstream_model TEXT,request_type SMALLINT,stream BOOLEAN,error_phase TEXT,error_type TEXT,error_source TEXT,error_owner TEXT,status_code INT,upstream_status_code INT,provider_error_code TEXT,provider_error_type TEXT,network_error_type TEXT,duration_ms BIGINT,error_message TEXT,upstream_error_message TEXT,upstream_errors JSONB);
 CREATE TABLE public.users (id BIGINT PRIMARY KEY,email TEXT,username TEXT,status TEXT,deleted_at TIMESTAMPTZ);
 CREATE TABLE public.api_keys (id BIGINT PRIMARY KEY,user_id BIGINT,name TEXT,key TEXT,status TEXT,deleted_at TIMESTAMPTZ);
-CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,deleted_at TIMESTAMPTZ);
+CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,rate_multiplier NUMERIC,deleted_at TIMESTAMPTZ);
 CREATE TABLE public.account_groups (account_id BIGINT NOT NULL,group_id BIGINT NOT NULL,PRIMARY KEY(account_id,group_id));`
 
 const sourceIntegrationLegacyViewsSQL = `
@@ -378,7 +384,7 @@ INSERT INTO public.usage_logs (id,created_at,user_id,api_key_id,account_id,group
 INSERT INTO public.ops_error_logs (id,created_at,request_id,user_id,api_key_id,account_id,group_id,platform,error_message,upstream_error_message,upstream_errors) VALUES (44,NOW(),'request-1',7,70,101,7,'openai',repeat('e',600),repeat('u',600),jsonb_build_array(jsonb_build_object('message',repeat('m',600),'detail',repeat('d',600))));
 INSERT INTO public.users VALUES (7,'alice@example.test','alice','active',NULL);
 INSERT INTO public.api_keys VALUES (70,7,'QA Key','secret-abcdef','active',NULL);
-INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',NULL);
+INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',1.5,NULL);
 INSERT INTO public.account_groups VALUES (101,7);`
 
 func integrationDatabaseURL(t *testing.T, databaseURL, databaseName, username, password string) string {

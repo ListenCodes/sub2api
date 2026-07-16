@@ -1,7 +1,7 @@
 import apiClient from '@/api/client'
 
 const BASE_PATH = '/admin/extensions-self/account-monitor'
-const GROUP_RANGES = ['1h', '6h', '12h', '24h', '7d', '30d'] as const
+const GROUP_RANGES = ['6h', '24h', '7d', '30d'] as const
 
 export type AccountPageSize = number
 export type GroupPageSize = number
@@ -9,6 +9,7 @@ export type GroupRange = typeof GROUP_RANGES[number]
 export type SortOrder = 'asc' | 'desc'
 export type HealthLevel = 'normal' | 'attention' | 'abnormal' | 'critical'
 export type GroupCallStatus = 'normal' | 'partial_failure' | 'all_failed' | 'recently_idle' | 'no_data'
+export type GroupCallFilter = 'has_calls' | GroupCallStatus
 
 export interface TimeRange {
   from?: string
@@ -72,6 +73,7 @@ export interface AccountGroupSummary {
   name: string
   platform: string
   status: string
+  rate_multiplier: number
 }
 
 export interface PageResponse<T> {
@@ -290,7 +292,7 @@ export interface GroupFilters {
   query?: string
   platform?: string
   groupStatus?: 'active' | 'inactive' | 'all'
-  callStatus?: GroupCallStatus | 'all'
+  callStatus?: GroupCallFilter | 'all'
 }
 
 type QueryValue = string | number | boolean | undefined | null
@@ -454,7 +456,7 @@ class AccountMonitorAPI {
     const pageSize = filters.pageSize ?? 12
     validatePageSize(pageSize, 'group')
     const range = filters.range ?? '6h'
-    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 1h, 6h, 12h, 24h, 7d, or 30d')
+    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 6h, 24h, 7d, or 30d')
     const params = compact({ page: filters.page ?? 1, page_size: pageSize, range, query: filters.query, platform: filters.platform, group_status: filters.groupStatus, call_status: filters.callStatus })
     const { data } = await apiClient.get<GroupMonitorGroupsResponse>(`${BASE_PATH}/group-monitor/groups`, { params, signal: this.nextSignal('groups') })
     return data
@@ -463,7 +465,7 @@ class AccountMonitorAPI {
   async getGroup(groupID: number, filters: Pick<GroupFilters, 'range'> = {}) {
     validatePositiveID(groupID, 'group ID')
     const range = filters.range ?? '6h'
-    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 1h, 6h, 12h, 24h, 7d, or 30d')
+    if (!GROUP_RANGES.includes(range)) throw new Error('group range must be one of 6h, 24h, 7d, or 30d')
     const { data } = await apiClient.get<GroupMonitorDetailResponse>(`${BASE_PATH}/group-monitor/groups/${groupID}`, { params: { range }, signal: this.nextSignal(`group-${groupID}`) })
     return data
   }

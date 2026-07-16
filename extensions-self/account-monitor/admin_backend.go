@@ -115,7 +115,7 @@ SELECT date_trunc($4,attempted_at) AS bucket,COUNT(*),
        COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL),0)
 FROM account_monitor_attempt_facts
 WHERE attempted_at >= $1 AND attempted_at < $2 AND (account_id=$3 OR parent_account_id=$3)` + trendDetailFiltersSQL + `
-GROUP BY 1 ORDER BY 1`
+GROUP BY 1 ORDER BY 1 DESC`
 
 const attemptsSQL = `
 SELECT event_key,request_key,attempted_at,account_id,platform,actual_model,model_attribution,
@@ -251,22 +251,28 @@ WHERE group_id=$1 AND deleted_at IS NULL`
 
 const groupTimelineSQL = `
 SELECT group_id,
-       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
-       SUM(total_requests),SUM(successes),SUM(failures)
-FROM account_monitor_group_model_10m
-WHERE bucket_at >= $1 AND bucket_at < $2 AND group_id=ANY($3)
+	   date_bin(make_interval(secs => $4),occurred_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+	   COUNT(*),
+	   COUNT(*) FILTER (WHERE result='succeeded'),
+	   COUNT(*) FILTER (WHERE result='failed')
+FROM account_monitor_request_facts
+WHERE occurred_at >= $1 AND occurred_at < $2 AND group_id=ANY($3)
 GROUP BY group_id,display_bucket
 ORDER BY group_id,display_bucket`
 
 const groupModelTimelineSQL = `
-SELECT actual_model,
-       date_bin(make_interval(secs => $4),bucket_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
-       SUM(total_requests),SUM(successes),SUM(failures),
-       SUM(exact_model_requests),SUM(estimated_model_requests)
-FROM account_monitor_group_model_10m
-WHERE group_id=$1 AND bucket_at >= $2 AND bucket_at < $3
-GROUP BY actual_model,display_bucket
-ORDER BY LOWER(actual_model),actual_model,display_bucket`
+SELECT COALESCE(NULLIF(actual_model,''),'未知实际模型') AS actual_model,
+	   date_bin(make_interval(secs => $4),occurred_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
+	   COUNT(*),
+	   COUNT(*) FILTER (WHERE result='succeeded'),
+	   COUNT(*) FILTER (WHERE result='failed'),
+	   COUNT(*) FILTER (WHERE model_attribution='exact'),
+	   COUNT(*) FILTER (WHERE model_attribution<>'exact')
+FROM account_monitor_request_facts
+WHERE group_id=$1 AND occurred_at >= $2 AND occurred_at < $3
+GROUP BY COALESCE(NULLIF(actual_model,''),'未知实际模型'),display_bucket
+ORDER BY LOWER(COALESCE(NULLIF(actual_model,''),'未知实际模型')),
+	     COALESCE(NULLIF(actual_model,''),'未知实际模型'),display_bucket`
 
 type AdminService struct {
 	repo         *Repository
@@ -333,10 +339,11 @@ type AccountSummary struct {
 }
 
 type AccountGroupSummary struct {
-	GroupID  int64  `json:"group_id"`
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Status   string `json:"status"`
+	GroupID        int64   `json:"group_id"`
+	Name           string  `json:"name"`
+	Platform       string  `json:"platform"`
+	Status         string  `json:"status"`
+	RateMultiplier float64 `json:"rate_multiplier"`
 }
 
 type accountInventory struct {
@@ -511,11 +518,9 @@ func (s *AdminService) groupMonitorGroups(ctx context.Context, request AdminRequ
 	callStatus := strings.TrimSpace(request.Query["call_status"])
 	for _, dimension := range filteredDimensions {
 		card := buildGroupCard(dimension, request.From, request.To, buckets[dimension.ID], bucketSeconds)
-		if callStatus != "" && card.CallStatus != callStatus {
-			continue
-		}
 		result.Items = append(result.Items, card)
 	}
+	result.Items = filterAndPrioritizeGroupCards(result.Items, callStatus)
 	result.Total = int64(len(result.Items))
 	result.Items = pageGroupCards(result.Items, request.Page, request.PageSize)
 	quality, err := s.qualitySnapshot(ctx, request.From, request.To)
@@ -610,7 +615,7 @@ func (s *AdminService) loadGroupBuckets(ctx context.Context, from, to time.Time,
 	if len(groupIDs) == 0 {
 		return result, nil
 	}
-	bucketSeconds := 600
+	bucketSeconds := 900
 	if len(requestedBucketSeconds) > 0 {
 		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
 	}
@@ -658,7 +663,7 @@ func buildGroupCard(dimension GroupDimension, from, to time.Time, buckets map[ti
 }
 
 func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonitorBucket, requestedBucketSeconds ...int) []GroupMonitorBucket {
-	bucketSeconds := 600
+	bucketSeconds := 900
 	if len(requestedBucketSeconds) > 0 {
 		bucketSeconds = normalizedGroupBucketSeconds(requestedBucketSeconds[0])
 	}
@@ -679,10 +684,10 @@ func completeGroupTimeline(from, to time.Time, buckets map[time.Time]GroupMonito
 
 func normalizedGroupBucketSeconds(value int) int {
 	switch value {
-	case 600, 3600, 21600:
+	case 900, 3600, 25200, 108000:
 		return value
 	default:
-		return 600
+		return 900
 	}
 }
 
@@ -717,6 +722,23 @@ func pageGroupCards(items []GroupMonitorCard, page, pageSize int) []GroupMonitor
 		end = len(items)
 	}
 	return items[start:end]
+}
+
+func filterAndPrioritizeGroupCards(items []GroupMonitorCard, callStatus string) []GroupMonitorCard {
+	filtered := make([]GroupMonitorCard, 0, len(items))
+	for _, card := range items {
+		if callStatus == "has_calls" && card.TotalRequests == 0 {
+			continue
+		}
+		if callStatus != "" && callStatus != "has_calls" && card.CallStatus != callStatus {
+			continue
+		}
+		filtered = append(filtered, card)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].TotalRequests > 0 && filtered[j].TotalRequests == 0
+	})
+	return filtered
 }
 
 func (s *AdminService) overview(ctx context.Context, request AdminRequest) (OverviewResponse, error) {
@@ -805,6 +827,7 @@ func (s *AdminService) loadAccountInventory(ctx context.Context, rollup string) 
 		groupsByAccount[membership.AccountID] = append(groupsByAccount[membership.AccountID], AccountGroupSummary{
 			GroupID: membership.Group.ID, Name: membership.Group.Name,
 			Platform: membership.Group.Platform, Status: membership.Group.Status,
+			RateMultiplier: membership.Group.RateMultiplier,
 		})
 	}
 

@@ -1,6 +1,6 @@
 import { inject, reactive, watch } from 'vue'
 import { routeLocationKey, routerKey, type LocationQuery, type LocationQueryRaw } from 'vue-router'
-import type { GroupCallStatus, GroupPageSize, GroupRange } from '@/api/admin/accountMonitor'
+import type { GroupCallFilter, GroupPageSize, GroupRange } from '@/api/admin/accountMonitor'
 import { getConfiguredTablePageSizeOptions, normalizeTablePageSize } from '@/utils/tablePreferences'
 
 export interface GroupMonitorFilterState {
@@ -8,7 +8,7 @@ export interface GroupMonitorFilterState {
   query: string
   platform: string
   groupStatus: 'active' | 'inactive' | 'all'
-  callStatus?: GroupCallStatus
+  callStatus?: GroupCallFilter
   page: number
   pageSize: GroupPageSize
   selectedGroupID?: number
@@ -16,15 +16,15 @@ export interface GroupMonitorFilterState {
 
 function text(query: LocationQuery | Record<string, unknown>, key: string) { const value = query[key]; return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '') }
 function positive(raw: string) { const value = Number(raw); return Number.isInteger(value) && value > 0 ? value : undefined }
-const ranges: GroupRange[] = ['1h', '6h', '12h', '24h', '7d', '30d']
+const ranges: GroupRange[] = ['6h', '24h', '7d', '30d']
 const sizes = () => getConfiguredTablePageSizeOptions()
-const statuses: GroupCallStatus[] = ['normal', 'partial_failure', 'all_failed', 'recently_idle', 'no_data']
+const statuses: GroupCallFilter[] = ['has_calls', 'normal', 'partial_failure', 'all_failed', 'recently_idle', 'no_data']
 
 export function parseGroupMonitorQuery(query: LocationQuery | Record<string, unknown>): GroupMonitorFilterState {
   const range = text(query, 'range') as GroupRange
   const size = positive(text(query, 'page_size')) as GroupPageSize | undefined
   const groupStatus = text(query, 'group_status')
-  const callStatus = text(query, 'call_status') as GroupCallStatus
+  const callStatus = text(query, 'call_status') as GroupCallFilter
 	return { range: ranges.includes(range) ? range : '6h', query: text(query, 'query'), platform: text(query, 'platform'), groupStatus: groupStatus === 'inactive' || groupStatus === 'all' ? groupStatus : 'active', callStatus: statuses.includes(callStatus) ? callStatus : undefined, page: positive(text(query, 'page')) || 1, pageSize: size && sizes().includes(size) ? size : normalizeTablePageSize(size), selectedGroupID: positive(text(query, 'group')) }
 }
 

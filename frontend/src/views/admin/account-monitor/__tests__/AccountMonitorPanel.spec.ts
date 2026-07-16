@@ -57,8 +57,8 @@ const account = {
   video_count: 1,
   video_duration_seconds: 12,
 	groups: [
-		{ group_id: 11, name: 'GPT Pro', platform: 'openai', status: 'active' },
-		{ group_id: 12, name: 'Shared Pool', platform: 'openai', status: 'active' },
+		{ group_id: 11, name: 'GPT Pro', platform: 'openai', status: 'active', rate_multiplier: 1.5 },
+		{ group_id: 12, name: 'Shared Pool', platform: 'openai', status: 'active', rate_multiplier: 2 },
 	],
   health: { risk_score: 72, risk_score_available: true, level: 'critical' as const, reasons: ['认证错误增多'] },
 }
@@ -95,9 +95,9 @@ function seed() {
 	vi.mocked(accountMonitorAPI.listAccounts).mockResolvedValue({
 		items: [account, idleAccount], total: 895, page: 1, page_size: 20,
 		groups: [
-			{ group_id: 11, name: 'GPT Pro', platform: 'openai', status: 'active' },
-			{ group_id: 12, name: 'Shared Pool', platform: 'openai', status: 'active' },
-			{ group_id: 99, name: 'Archive Only', platform: 'gemini', status: 'active' },
+			{ group_id: 11, name: 'GPT Pro', platform: 'openai', status: 'active', rate_multiplier: 1.5 },
+			{ group_id: 12, name: 'Shared Pool', platform: 'openai', status: 'active', rate_multiplier: 2 },
+			{ group_id: 99, name: 'Archive Only', platform: 'gemini', status: 'active', rate_multiplier: 1 },
 		],
 	})
   vi.mocked(accountMonitorAPI.getModels).mockResolvedValue({ items: [{ actual_model: 'gpt-5', model_attribution: 'exact', attempts: 100, successes: 91, failures: 9, tokens: 12345, user_cost: 4.2, account_cost: 2.1, average_duration_ms: 220, p95_duration_ms: 480 }], total: 1, page: 1, page_size: 20 })
@@ -125,6 +125,9 @@ describe('AccountMonitorPanel', () => {
 		expect(wrapper.text()).toContain('Idle Grok')
 		expect(wrapper.text()).toContain('GPT Pro')
 		expect(wrapper.text()).toContain('Shared Pool')
+		expect(wrapper.get('[data-testid="account-group-11"]').text()).toBe('GPT Pro · 1.5x')
+		expect(wrapper.get('[data-testid="account-group-12"]').text()).toBe('Shared Pool · 2x')
+		expect(wrapper.get('[data-testid="account-group-11"]').find('[data-platform]').exists()).toBe(false)
 		expect(wrapper.text()).toContain('未分组')
 		expect(wrapper.find('[data-platform="openai"]').exists()).toBe(true)
 		expect(wrapper.find('[data-platform="grok"]').exists()).toBe(true)

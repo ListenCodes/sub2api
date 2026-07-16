@@ -104,6 +104,7 @@ SELECT
     g.name AS group_name,
     g.platform AS group_platform,
     g.status AS group_status,
+    g.rate_multiplier AS group_rate_multiplier,
     g.deleted_at AS group_deleted_at
 FROM public.account_groups AS ag
 JOIN public.groups AS g ON g.id = ag.group_id;

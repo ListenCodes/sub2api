@@ -68,7 +68,8 @@ SELECT credentials FROM public.accounts LIMIT 1;
 - [ ] 抽样核对分组总数满足 `total_requests=successes+failures`，缺失分组只进入数据质量。
 - [ ] 记录主库“全量非删除账号数”和扩展库近 30 天“事实活跃账号数”；账号监控总数必须等于前者，不能再以存在事实的账号数代替。
 - [ ] 记录至少一个“多分组账号样本”，核对账号卡片显示全部有效分组，按任一所属分组筛选均能命中且不重复账号。
-- [ ] 分别选择 `7d/30d`，将分组卡片与详情总数和相同完整桶范围内的 `account_monitor_group_model_10m` 汇总对账。
+- [ ] 分别选择 `6h/24h/7d/30d`，确认卡片与详情始终返回 24 个时间桶，粒度依次为 15 分钟、1 小时、7 小时、30 小时。
+- [ ] 将分组卡片与详情总数和相同 `[from,to)` 范围内的 `account_monitor_request_facts` 汇总对账。
 
 对账查询示例：
 
@@ -91,11 +92,12 @@ SELECT count(DISTINCT account_id) AS fact_active_accounts
 FROM account_monitor_attempt_facts
 WHERE attempted_at >= now() - interval '30 days';
 
-SELECT group_id, sum(total_requests) AS total_requests,
-       sum(successes) AS successes, sum(failures) AS failures
-FROM account_monitor_group_model_10m
-WHERE bucket_at >= :'from_utc'::timestamptz
-  AND bucket_at < :'to_utc'::timestamptz
+SELECT group_id, count(*) AS total_requests,
+       count(*) FILTER (WHERE result='succeeded') AS successes,
+       count(*) FILTER (WHERE result='failed') AS failures
+FROM account_monitor_request_facts
+WHERE occurred_at >= :'from_utc'::timestamptz
+  AND occurred_at < :'to_utc'::timestamptz
 GROUP BY group_id;
 ```
 
