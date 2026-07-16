@@ -40,15 +40,41 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
   return data
 }
 
+export type UpdateJobStatus =
+  | 'checking_release'
+  | 'validating_tag'
+  | 'merging_release'
+  | 'waiting_actions'
+  | 'waiting_images'
+  | 'promoting_release'
+  | 'backing_up'
+  | 'deploying_extensions'
+  | 'deploying_main'
+  | 'health_checking'
+  | 'rolling_back'
+  | 'success'
+  | 'failed'
+  | 'conflict'
+
+export interface UpdateRollback {
+  attempted: boolean
+  succeeded: boolean
+  message: string
+}
+
 export interface UpdateJob {
   job_id: string
-  status: 'running' | 'success' | 'failed'
+  status: UpdateJobStatus
   message: string
   integration_branch?: string
   base_commit?: string
+  target_commit?: string
   release_tag?: string
   release_commit?: string
   release_published_at?: string
+  workflow_url?: string
+  main_digest?: string
+  extensions_digest?: string
   conflict_files?: string[]
   conflict_base?: string
   conflict_upstream?: string
@@ -58,8 +84,17 @@ export interface UpdateJob {
   need_restart: boolean
   published?: boolean
   published_commit?: string
+  production_changed?: boolean
+  error_code?: string
+  artifact_path?: string
+  rollback?: UpdateRollback
+  updated_at?: string
   started_at?: string | null
   finished_at?: string | null
+}
+
+export function isTerminalUpdateStatus(status: UpdateJobStatus): boolean {
+  return status === 'success' || status === 'failed' || status === 'conflict'
 }
 
 export function updateNeedsRestart(job: Pick<UpdateJob, 'need_restart'>): boolean {
@@ -107,9 +142,9 @@ export async function performUpdate(): Promise<UpdateJob> {
 /**
  * Get the current status of an asynchronous system update.
  */
-export async function getUpdateStatus(jobID: string): Promise<UpdateJob> {
+export async function getUpdateStatus(jobID?: string): Promise<UpdateJob> {
   const { data } = await apiClient.get<UpdateJob>('/admin/system/update/status', {
-    params: { job_id: jobID }
+    params: jobID ? { job_id: jobID } : undefined
   })
   return data
 }

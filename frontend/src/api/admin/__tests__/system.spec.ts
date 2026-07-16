@@ -1,7 +1,34 @@
 import { describe, expect, it } from 'vitest'
-import { updateNeedsRestart, updateWasPublished, type UpdateJob } from '@/api/admin/system'
+import {
+  isTerminalUpdateStatus,
+  updateNeedsRestart,
+  updateWasPublished,
+  type UpdateJob,
+  type UpdateJobStatus
+} from '@/api/admin/system'
 
 describe('upstream preparation jobs', () => {
+  it('treats every release phase as non-terminal until success, failure, or conflict', () => {
+    const phases: UpdateJobStatus[] = [
+      'checking_release',
+      'validating_tag',
+      'merging_release',
+      'waiting_actions',
+      'waiting_images',
+      'promoting_release',
+      'backing_up',
+      'deploying_extensions',
+      'deploying_main',
+      'health_checking',
+      'rolling_back'
+    ]
+
+    for (const phase of phases) expect(isTerminalUpdateStatus(phase)).toBe(false)
+    for (const phase of ['success', 'failed', 'conflict'] as const) {
+      expect(isTerminalUpdateStatus(phase)).toBe(true)
+    }
+  })
+
   it('does not request a restart when the job only prepares an integration branch', () => {
     const job: UpdateJob = {
       job_id: 'update-1',

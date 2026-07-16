@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -36,6 +36,8 @@ vi.mock('@/api/admin/system', () => ({
   getRollbackVersions: mocks.getRollbackVersions,
   rollback: mocks.rollback,
   restartService: mocks.restartService,
+  isTerminalUpdateStatus: (status: string) =>
+    status === 'success' || status === 'failed' || status === 'conflict',
   updateNeedsRestart: (job: { need_restart: boolean }) => job.need_restart,
   updateWasPublished: (job: { published?: boolean }) => job.published === true
 }))
@@ -45,11 +47,23 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 describe('VersionBadge conflict reporting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    mocks.appStore.hasUpdate = true
+    mocks.appStore.buildType = 'release'
+    mocks.getUpdateStatus.mockRejectedValueOnce({ response: { status: 404 } })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('shows conflicted files and production safety state after a failed update', async () => {
     mocks.performUpdate.mockResolvedValue({ job_id: 'update-conflict' })
     mocks.getUpdateStatus.mockResolvedValue({
       job_id: 'update-conflict',
-      status: 'failed',
+      status: 'conflict',
       message: 'upstream merge conflict',
       need_restart: false,
       published: false,
@@ -69,6 +83,8 @@ describe('VersionBadge conflict reporting', () => {
       props: { version: '0.1.152' },
       global: { stubs: { Icon: true } }
     })
+
+    await flushPromises()
 
     await wrapper.find('button').trigger('click')
     const updateButton = wrapper
@@ -108,6 +124,8 @@ describe('VersionBadge conflict reporting', () => {
       global: { stubs: { Icon: true } }
     })
 
+    await flushPromises()
+
     await wrapper.find('button').trigger('click')
     const updateButton = wrapper
       .findAll('button')
@@ -119,6 +137,70 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).toContain('version.updatePublished')
     expect(wrapper.text()).toContain('v0.1.158')
     expect(wrapper.text()).toContain('commit 26abd19a2812')
+
+    wrapper.unmount()
+  })
+
+  it('resumes a persisted non-terminal release job after refresh', async () => {
+    localStorage.setItem('sub2api-release-job-id', 'update-resume')
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-resume',
+      status: 'waiting_actions',
+      message: 'Waiting for GitHub Actions',
+      need_restart: false,
+      published: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.158' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button').trigger('click')
+
+    expect(mocks.getUpdateStatus).toHaveBeenCalledWith('update-resume')
+    expect(wrapper.text()).toContain('version.releaseState.waiting_actions')
+    expect(wrapper.text()).toContain('Waiting for GitHub Actions')
+
+    wrapper.unmount()
+  })
+
+  it('allows a release check with no newer upstream version and keeps polling past 15 minutes', async () => {
+    vi.useFakeTimers()
+    mocks.appStore.hasUpdate = false
+    mocks.performUpdate.mockResolvedValue({
+      job_id: 'update-custom',
+      status: 'checking_release',
+      message: 'Release job queued',
+      need_restart: false
+    })
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-custom',
+      status: 'waiting_images',
+      message: 'Waiting for paired images',
+      need_restart: false,
+      published: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.158' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button').trigger('click')
+    const updateButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('version.updateNow'))
+    expect(updateButton).toBeDefined()
+
+    await updateButton!.trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(16 * 60 * 1000)
+
+    expect(wrapper.text()).toContain('version.releaseState.waiting_images')
+    expect(wrapper.text()).not.toContain('status polling timed out')
+    expect(mocks.getUpdateStatus).toHaveBeenCalled()
 
     wrapper.unmount()
   })

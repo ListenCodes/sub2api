@@ -114,8 +114,43 @@
                 </p>
               </div>
 
-              <!-- Priority 1: Update error (must check before hasUpdate) -->
-              <div v-if="updateError" class="space-y-2">
+              <!-- Priority 1: Durable release job progress -->
+              <div v-if="updating" class="space-y-2">
+                <div
+                  class="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800/50 dark:bg-blue-900/20"
+                >
+                  <svg
+                    class="h-5 w-5 flex-shrink-0 animate-spin text-blue-600 dark:text-blue-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="4"
+                    ></circle>
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-medium text-blue-700 dark:text-blue-300">
+                      {{ t(`version.releaseState.${updateStage || 'checking_release'}`) }}
+                    </p>
+                    <p class="break-words text-xs text-blue-600/70 dark:text-blue-400/70">
+                      {{ updateStageMessage }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Priority 2: Update error -->
+              <div v-else-if="updateError" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800/50 dark:bg-red-900/20"
                 >
@@ -135,6 +170,12 @@
                     </p>
                     <p class="truncate text-xs text-red-600/70 dark:text-red-400/70">
                       {{ updateError }}
+                    </p>
+                    <p
+                      v-if="rollbackMessage"
+                      class="mt-1 break-words text-xs text-red-600/70 dark:text-red-400/70"
+                    >
+                      {{ rollbackMessage }}
                     </p>
                     <div
                       v-if="conflictFiles.length"
@@ -169,7 +210,7 @@
                 </button>
               </div>
 
-              <!-- Priority 2: Update/preparation success -->
+              <!-- Priority 3: Update/preparation success -->
               <div v-else-if="updateSuccess" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800/50 dark:bg-green-900/20"
@@ -267,7 +308,7 @@
                 </button>
               </div>
 
-              <!-- Priority 3: Update available for source/custom build - show sync button -->
+              <!-- Priority 4: Update available for source/custom build - show sync button -->
               <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
@@ -329,7 +370,7 @@
                 </div>
               </div>
 
-              <!-- Priority 4: Update available for release build - show update button -->
+              <!-- Priority 5: Update available for release build - show update button -->
               <div v-else-if="hasUpdate && isReleaseBuild" class="space-y-2">
                 <!-- Update info card -->
                 <div
@@ -393,8 +434,16 @@
                 </a>
               </div>
 
-              <!-- Priority 5: Up to date - GitHub link + version rollback -->
+              <!-- Priority 6: No upstream version change; custom commits may still be pending -->
               <div v-else class="space-y-2">
+                <button
+                  @click="handleUpdate"
+                  :disabled="updating"
+                  class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Icon name="refresh" size="sm" :stroke-width="2" />
+                  {{ t('version.updateNow') }}
+                </button>
                 <a
                   v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
                   :href="releaseInfo.html_url"
@@ -682,12 +731,14 @@ import { useAuthStore, useAppStore } from '@/stores'
 import {
   performUpdate,
   getUpdateStatus,
+  isTerminalUpdateStatus,
   updateNeedsRestart,
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
   type RollbackVersionInfo,
   type UpdateJob,
+  type UpdateJobStatus,
   updateWasPublished
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
@@ -696,6 +747,9 @@ import Icon from '@/components/icons/Icon.vue'
 const GITHUB_REPO = 'Wei-Shaw/sub2api'
 // Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
 const DOCKER_IMAGE = 'weishaw/sub2api'
+const RELEASE_JOB_STORAGE_KEY = 'sub2api-release-job-id'
+const UPDATE_POLL_INTERVAL_MS = 5000
+const UPDATE_POLL_DEADLINE_MS = 90 * 60 * 1000
 
 const { t } = useI18n()
 
@@ -726,6 +780,8 @@ const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
 const updateSuccessMessage = ref('')
+const updateStage = ref<UpdateJobStatus | ''>('')
+const updateStageMessage = ref('')
 const published = ref(false)
 const publishedCommit = ref('')
 const releaseTag = ref('')
@@ -737,6 +793,7 @@ const conflictUpstream = ref('')
 const conflictRelease = ref('')
 const conflictLog = ref('')
 const resolutionHint = ref('')
+const rollbackMessage = ref('')
 const restartCountdown = ref(0)
 const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -803,6 +860,8 @@ async function refreshVersion(force = true) {
   updateError.value = ''
   updateSuccess.value = false
   updateSuccessMessage.value = ''
+  updateStage.value = ''
+  updateStageMessage.value = ''
   published.value = false
   publishedCommit.value = ''
   releaseTag.value = ''
@@ -814,6 +873,7 @@ async function refreshVersion(force = true) {
   conflictRelease.value = ''
   conflictLog.value = ''
   resolutionHint.value = ''
+  rollbackMessage.value = ''
   needRestart.value = false
   stopUpdatePolling()
   resetRollbackState()
@@ -828,6 +888,8 @@ async function handleUpdate() {
   updateError.value = ''
   updateSuccess.value = false
   updateSuccessMessage.value = ''
+  updateStage.value = 'checking_release'
+  updateStageMessage.value = ''
   published.value = false
   publishedCommit.value = ''
   releaseTag.value = ''
@@ -839,10 +901,11 @@ async function handleUpdate() {
   conflictRelease.value = ''
   conflictLog.value = ''
   resolutionHint.value = ''
+  rollbackMessage.value = ''
 
   try {
     const job = await performUpdate()
-    startUpdatePolling(job.job_id)
+    startUpdatePolling(job.job_id, job)
   } catch (error: unknown) {
     stopUpdatePolling()
     const err = error as { response?: { data?: { message?: string } }; message?: string }
@@ -876,6 +939,7 @@ function finishUpdateSuccess(
   >
 ) {
   stopUpdatePolling()
+  localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   successKind.value = 'update'
   updateSuccess.value = true
   needRestart.value = updateNeedsRestart({ need_restart: status.need_restart })
@@ -885,6 +949,8 @@ function finishUpdateSuccess(
   releaseCommit.value = status.release_commit || ''
   releasePublishedAt.value = status.release_published_at || ''
   updateSuccessMessage.value = status.message
+  updateStage.value = 'success'
+  updateStageMessage.value = status.message
   updating.value = false
   appStore.clearVersionCache()
 }
@@ -901,9 +967,11 @@ function finishUpdateFailure(
     | 'release_commit'
     | 'conflict_log'
     | 'resolution_hint'
+    | 'rollback'
   >
 ) {
   stopUpdatePolling()
+  localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   updateError.value = status.message || t('version.updateFailed')
   conflictFiles.value = status.conflict_files || []
   conflictBase.value = status.conflict_base || ''
@@ -913,6 +981,9 @@ function finishUpdateFailure(
   conflictRelease.value = status.conflict_release || ''
   conflictLog.value = status.conflict_log || ''
   resolutionHint.value = status.resolution_hint || ''
+  rollbackMessage.value = status.rollback?.attempted ? status.rollback.message : ''
+  updateStage.value = 'failed'
+  updateStageMessage.value = status.message
   updating.value = false
 }
 
@@ -921,28 +992,55 @@ async function pollUpdateStatus(jobID: string) {
   updatePollInFlight = true
   try {
     const status = await getUpdateStatus(jobID)
+    updateStage.value = status.status
+    updateStageMessage.value = status.message
     if (status.status === 'success') {
       finishUpdateSuccess(status)
-    } else if (status.status === 'failed') {
+    } else if (status.status === 'failed' || status.status === 'conflict') {
       finishUpdateFailure(status)
     }
   } catch {
-    // Keep polling transient request failures until the 15-minute deadline.
+    // Keep polling transient request failures until the long-running CI deadline.
   } finally {
     updatePollInFlight = false
   }
 }
 
-function startUpdatePolling(jobID: string) {
+function startUpdatePolling(jobID: string, initial?: UpdateJob) {
   stopUpdatePolling()
+  localStorage.setItem(RELEASE_JOB_STORAGE_KEY, jobID)
   updating.value = true
-  void pollUpdateStatus(jobID)
+  if (initial) {
+    updateStage.value = initial.status
+    updateStageMessage.value = initial.message
+  }
+  if (!initial || !isTerminalUpdateStatus(initial.status)) {
+    void pollUpdateStatus(jobID)
+  }
   updatePollTimer.value = setInterval(() => {
     void pollUpdateStatus(jobID)
-  }, 5000)
+  }, UPDATE_POLL_INTERVAL_MS)
   updatePollDeadlineTimer.value = setTimeout(() => {
     finishUpdateFailure({ message: `${t('version.updateFailed')}: status polling timed out` })
-  }, 15 * 60 * 1000)
+  }, UPDATE_POLL_DEADLINE_MS)
+}
+
+async function resumeUpdatePolling() {
+  const storedJobID = localStorage.getItem(RELEASE_JOB_STORAGE_KEY) || undefined
+  try {
+    const status = await getUpdateStatus(storedJobID)
+    if (status.status === 'success') {
+      finishUpdateSuccess(status)
+      return
+    }
+    if (status.status === 'failed' || status.status === 'conflict') {
+      finishUpdateFailure(status)
+      return
+    }
+    startUpdatePolling(status.job_id, status)
+  } catch {
+    if (storedJobID) localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  }
 }
 
 function resetRollbackState() {
@@ -1107,6 +1205,7 @@ onMounted(() => {
   if (isAdmin.value) {
     // Use cached version if available, otherwise fetch
     appStore.fetchVersion(false)
+    void resumeUpdatePolling()
   }
   document.addEventListener('click', handleClickOutside)
 })
