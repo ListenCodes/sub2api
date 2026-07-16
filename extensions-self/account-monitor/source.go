@@ -114,12 +114,13 @@ type APIKeyDimension struct {
 }
 
 type GroupDimension struct {
-	ID        int64
-	Name      string
-	Platform  string
-	Status    string
-	DeletedAt *time.Time
-	SyncedAt  time.Time
+	ID             int64
+	Name           string
+	Platform       string
+	Status         string
+	RateMultiplier float64
+	DeletedAt      *time.Time
+	SyncedAt       time.Time
 }
 
 type AccountGroupDimension struct {
@@ -371,6 +372,7 @@ func (s *PostgresSource) ReadAccountGroupDimensions(ctx context.Context) ([]Acco
 			&item.Group.Name,
 			&item.Group.Platform,
 			&item.Group.Status,
+			&item.Group.RateMultiplier,
 			&deleted,
 		); err != nil {
 			return nil, err
@@ -583,7 +585,7 @@ FROM extensions_self_ro.account_dimension
 ORDER BY id`
 
 const accountGroupDimensionsQuery = `
-SELECT account_id, group_id, group_name, group_platform, group_status, group_deleted_at
+SELECT account_id, group_id, group_name, group_platform, group_status, group_rate_multiplier, group_deleted_at
 FROM extensions_self_ro.account_group_dimension
 ORDER BY account_id, LOWER(group_platform), LOWER(group_name), group_id`
 

@@ -333,10 +333,11 @@ type AccountSummary struct {
 }
 
 type AccountGroupSummary struct {
-	GroupID  int64  `json:"group_id"`
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Status   string `json:"status"`
+	GroupID        int64   `json:"group_id"`
+	Name           string  `json:"name"`
+	Platform       string  `json:"platform"`
+	Status         string  `json:"status"`
+	RateMultiplier float64 `json:"rate_multiplier"`
 }
 
 type accountInventory struct {
@@ -805,6 +806,7 @@ func (s *AdminService) loadAccountInventory(ctx context.Context, rollup string) 
 		groupsByAccount[membership.AccountID] = append(groupsByAccount[membership.AccountID], AccountGroupSummary{
 			GroupID: membership.Group.ID, Name: membership.Group.Name,
 			Platform: membership.Group.Platform, Status: membership.Group.Status,
+			RateMultiplier: membership.Group.RateMultiplier,
 		})
 	}
 

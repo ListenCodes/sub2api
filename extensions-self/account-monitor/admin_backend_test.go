@@ -332,6 +332,9 @@ func TestAdminServiceAccountsUsesFullInventory(t *testing.T) {
 	if len(groups) != 2 || groups[0].GroupID != 11 || groups[1].GroupID != 12 {
 		t.Fatalf("multi-account groups = %+v", groups)
 	}
+	if groups[0].RateMultiplier != 1.5 || groups[1].RateMultiplier != 2 {
+		t.Fatalf("multi-account group rates = %+v, want 1.5 and 2", groups)
+	}
 	if err := repoMock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +629,7 @@ func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
 			AddRow(int64(10), nil, "inactive account", "openai", "inactive", false, nil),
 	)
 	sourceMock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_deleted_at"}),
+		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_rate_multiplier", "group_deleted_at"}),
 	)
 	repoMock.ExpectQuery(`SELECT stats\.\*`).WillReturnRows(sqlmock.NewRows(accountSummaryColumns()).
 		AddRow(int64(9), nil, "openai", int64(2), int64(2), int64(0), int64(10), 0.2, 0.1, 100.0, int64(120), to, time.Time{}, int64(1), int64(1), int64(0), int64(0), int64(0), int64(2), 1.0).
@@ -880,11 +883,11 @@ func expectAccountInventory(mock sqlmock.Sqlmock) {
 			AddRow(int64(3), nil, "multi", "anthropic", "active", true, nil),
 	)
 	mock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_deleted_at"}).
-			AddRow(int64(1), int64(99), "Retired", "grok", "inactive", deletedAt).
-			AddRow(int64(2), int64(10), "GPT", "openai", "active", nil).
-			AddRow(int64(3), int64(11), "Claude", "anthropic", "active", nil).
-			AddRow(int64(3), int64(12), "Shared", "anthropic", "active", nil),
+		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_rate_multiplier", "group_deleted_at"}).
+			AddRow(int64(1), int64(99), "Retired", "grok", "inactive", 1.0, deletedAt).
+			AddRow(int64(2), int64(10), "GPT", "openai", "active", 1.0, nil).
+			AddRow(int64(3), int64(11), "Claude", "anthropic", "active", 1.5, nil).
+			AddRow(int64(3), int64(12), "Shared", "anthropic", "active", 2.0, nil),
 	)
 }
 
@@ -914,10 +917,11 @@ func accountSummaryByID(t *testing.T, items []AccountSummary, accountID int64) A
 }
 
 type accountGroupContract struct {
-	GroupID  int64  `json:"group_id"`
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Status   string `json:"status"`
+	GroupID        int64   `json:"group_id"`
+	Name           string  `json:"name"`
+	Platform       string  `json:"platform"`
+	Status         string  `json:"status"`
+	RateMultiplier float64 `json:"rate_multiplier"`
 }
 
 func accountSummaryGroups(t *testing.T, item AccountSummary) []accountGroupContract {

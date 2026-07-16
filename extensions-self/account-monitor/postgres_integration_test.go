@@ -287,6 +287,7 @@ func TestPostgresSourceViewsAndRestrictedRole(t *testing.T) {
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.error_source WHERE group_id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.group_dimension WHERE id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_id=7", 1)
+	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_rate_multiplier=1.5", 1)
 
 	var maskedPrefix string
 	if err := restrictedDB.QueryRowContext(ctx, "SELECT masked_prefix FROM extensions_self_ro.api_key_dimension WHERE id=70").Scan(&maskedPrefix); err != nil {
@@ -331,7 +332,7 @@ CREATE TABLE public.usage_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,use
 CREATE TABLE public.ops_error_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,request_id TEXT,client_request_id TEXT,user_id BIGINT,api_key_id BIGINT,account_id BIGINT,group_id BIGINT,platform TEXT,model TEXT,requested_model TEXT,upstream_model TEXT,request_type SMALLINT,stream BOOLEAN,error_phase TEXT,error_type TEXT,error_source TEXT,error_owner TEXT,status_code INT,upstream_status_code INT,provider_error_code TEXT,provider_error_type TEXT,network_error_type TEXT,duration_ms BIGINT,error_message TEXT,upstream_error_message TEXT,upstream_errors JSONB);
 CREATE TABLE public.users (id BIGINT PRIMARY KEY,email TEXT,username TEXT,status TEXT,deleted_at TIMESTAMPTZ);
 CREATE TABLE public.api_keys (id BIGINT PRIMARY KEY,user_id BIGINT,name TEXT,key TEXT,status TEXT,deleted_at TIMESTAMPTZ);
-CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,deleted_at TIMESTAMPTZ);
+CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,rate_multiplier NUMERIC,deleted_at TIMESTAMPTZ);
 CREATE TABLE public.account_groups (account_id BIGINT NOT NULL,group_id BIGINT NOT NULL,PRIMARY KEY(account_id,group_id));`
 
 const sourceIntegrationLegacyViewsSQL = `
@@ -378,7 +379,7 @@ INSERT INTO public.usage_logs (id,created_at,user_id,api_key_id,account_id,group
 INSERT INTO public.ops_error_logs (id,created_at,request_id,user_id,api_key_id,account_id,group_id,platform,error_message,upstream_error_message,upstream_errors) VALUES (44,NOW(),'request-1',7,70,101,7,'openai',repeat('e',600),repeat('u',600),jsonb_build_array(jsonb_build_object('message',repeat('m',600),'detail',repeat('d',600))));
 INSERT INTO public.users VALUES (7,'alice@example.test','alice','active',NULL);
 INSERT INTO public.api_keys VALUES (70,7,'QA Key','secret-abcdef','active',NULL);
-INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',NULL);
+INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',1.5,NULL);
 INSERT INTO public.account_groups VALUES (101,7);`
 
 func integrationDatabaseURL(t *testing.T, databaseURL, databaseName, username, password string) string {

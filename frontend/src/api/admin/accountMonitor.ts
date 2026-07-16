@@ -72,6 +72,7 @@ export interface AccountGroupSummary {
   name: string
   platform: string
   status: string
+  rate_multiplier: number
 }
 
 export interface PageResponse<T> {

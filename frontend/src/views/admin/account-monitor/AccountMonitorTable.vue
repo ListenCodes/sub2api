@@ -3,7 +3,7 @@
     <template #header-risk><button type="button" data-testid="sort-risk-score" :aria-sort="sortBy === 'risk_score' ? sortOrder === 'desc' ? 'descending' : 'ascending' : 'none'" @click.stop="$emit('sort-risk')">风险分 {{ sortBy === 'risk_score' ? sortOrder === 'desc' ? '↓' : '↑' : '↕' }}</button></template>
     <template #cell-account="{ row }"><div :data-testid="`account-row-${row.account_id}`" class="min-w-0"><p class="truncate font-medium text-gray-950 dark:text-white">{{ row.account_name || `账号 ${row.account_id}` }}</p><p class="text-xs text-gray-500">ID {{ row.account_id }}<span v-if="row.parent_account_id"> · 母账号 {{ row.parent_account_id }}</span></p></div></template>
 		<template #cell-platform="{ row }"><PlatformBadge :platform="row.platform" /><p class="mt-1 text-xs text-gray-500">{{ statusLabel(row.status) }}</p></template>
-		<template #cell-groups="{ row }"><div v-if="row.groups?.length" class="flex max-w-72 flex-wrap gap-1.5"><span v-for="group in row.groups" :key="group.group_id" class="inline-flex items-center gap-1 text-xs text-gray-700 dark:text-gray-200"><PlatformBadge :platform="group.platform" />{{ group.name }}</span></div><span v-else class="text-xs text-gray-500">未分组</span></template>
+		<template #cell-groups="{ row }"><div v-if="row.groups?.length" class="flex max-w-72 flex-wrap gap-x-3 gap-y-1.5"><span v-for="group in row.groups" :key="group.group_id" :data-testid="`account-group-${group.group_id}`" class="inline-flex items-center text-xs text-gray-700 dark:text-gray-200">{{ group.name }} · {{ multiplier(group.rate_multiplier) }}x</span></div><span v-else class="text-xs text-gray-500">未分组</span></template>
     <template #cell-success="{ row }">{{ percent(row.successes, row.attempts) }}</template>
     <template #cell-cost="{ row }"><p>${{ number(row.user_cost) }}</p><p class="text-xs text-gray-500">账号 ${{ number(row.account_cost) }}</p></template>
     <template #cell-latency="{ row }"><p>{{ number(row.average_duration_ms) }} ms</p><p class="text-xs text-gray-500">P95 {{ number(row.p95_duration_ms) }} ms</p></template>
@@ -31,6 +31,7 @@ const columns: Column[] = [
 ]
 const formatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 })
 const number = (value: number) => formatter.format(Number(value || 0))
+const multiplier = (value: number) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(Number(value ?? 1))
 const percent = (successes: number, total: number) => total ? `${(successes * 100 / total).toFixed(1)}%` : '暂无'
 const statusLabel = (status: string) => ({ active: '正常', inactive: '停用', error: '错误' }[status] || status || '未知')
 </script>
