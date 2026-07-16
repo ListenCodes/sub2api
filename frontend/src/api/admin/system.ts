@@ -46,9 +46,13 @@ export interface UpdateJob {
   message: string
   integration_branch?: string
   base_commit?: string
+  release_tag?: string
+  release_commit?: string
+  release_published_at?: string
   conflict_files?: string[]
   conflict_base?: string
   conflict_upstream?: string
+  conflict_release?: string
   conflict_log?: string
   resolution_hint?: string
   need_restart: boolean

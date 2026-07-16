@@ -32,22 +32,26 @@ var (
 )
 
 type UpdateJob struct {
-	JobID             string     `json:"job_id"`
-	Status            string     `json:"status"`
-	Message           string     `json:"message"`
-	IntegrationBranch string     `json:"integration_branch,omitempty"`
-	BaseCommit        string     `json:"base_commit,omitempty"`
-	ConflictFiles     []string   `json:"conflict_files,omitempty"`
-	ConflictBase      string     `json:"conflict_base,omitempty"`
-	ConflictUpstream  string     `json:"conflict_upstream,omitempty"`
-	ConflictLog       string     `json:"conflict_log,omitempty"`
-	ResolutionHint    string     `json:"resolution_hint,omitempty"`
-	NeedRestart       bool       `json:"need_restart"`
-	Published         bool       `json:"published"`
-	PublishedCommit   string     `json:"published_commit,omitempty"`
-	Timestamp         time.Time  `json:"ts"`
-	StartedAt         *time.Time `json:"started_at"`
-	FinishedAt        *time.Time `json:"finished_at"`
+	JobID              string     `json:"job_id"`
+	Status             string     `json:"status"`
+	Message            string     `json:"message"`
+	IntegrationBranch  string     `json:"integration_branch,omitempty"`
+	BaseCommit         string     `json:"base_commit,omitempty"`
+	ReleaseTag         string     `json:"release_tag,omitempty"`
+	ReleaseCommit      string     `json:"release_commit,omitempty"`
+	ReleasePublishedAt string     `json:"release_published_at,omitempty"`
+	ConflictFiles      []string   `json:"conflict_files,omitempty"`
+	ConflictBase       string     `json:"conflict_base,omitempty"`
+	ConflictUpstream   string     `json:"conflict_upstream,omitempty"`
+	ConflictRelease    string     `json:"conflict_release,omitempty"`
+	ConflictLog        string     `json:"conflict_log,omitempty"`
+	ResolutionHint     string     `json:"resolution_hint,omitempty"`
+	NeedRestart        bool       `json:"need_restart"`
+	Published          bool       `json:"published"`
+	PublishedCommit    string     `json:"published_commit,omitempty"`
+	Timestamp          time.Time  `json:"ts"`
+	StartedAt          *time.Time `json:"started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
 }
 
 func newUpdateJobID() (string, error) {

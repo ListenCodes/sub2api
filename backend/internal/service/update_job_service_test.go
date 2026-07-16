@@ -60,12 +60,15 @@ func TestReadUpdateStatusIncludesPublishedMetadata(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-published","status":"success","message":"PUBLISH OK: commit=abc123","integration_branch":"integration/upstream-20260713","base_commit":"base123","need_restart":false,"published":true,"published_commit":"abc123","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-published","status":"success","message":"PUBLISH OK: commit=abc123","integration_branch":"integration/release-v0.1.158-20260716","base_commit":"base123","release_tag":"v0.1.158","release_commit":"26abd19a2812edba02bbef93c3e2a620141cc257","release_published_at":"2026-07-16T12:37:06Z","need_restart":false,"published":true,"published_commit":"abc123","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z"}`), 0644))
 
 	job, err := readUpdateStatus(statusPath, "update-published")
 
 	require.NoError(t, err)
 	require.Equal(t, "base123", job.BaseCommit)
+	require.Equal(t, "v0.1.158", job.ReleaseTag)
+	require.Equal(t, "26abd19a2812edba02bbef93c3e2a620141cc257", job.ReleaseCommit)
+	require.Equal(t, "2026-07-16T12:37:06Z", job.ReleasePublishedAt)
 	require.True(t, job.Published)
 	require.Equal(t, "abc123", job.PublishedCommit)
 	require.False(t, job.NeedRestart)
@@ -75,7 +78,7 @@ func TestReadUpdateStatusIncludesConflictMetadata(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-conflict","status":"failed","message":"upstream merge conflict","conflict_files":["backend/internal/server/routes/gateway.go","deploy/README.md"],"conflict_base":"custom123","conflict_upstream":"upstream456","conflict_log":"/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json","resolution_hint":"Resolve conflicts and retry.","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z","finished_at":"2026-07-13T00:01:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-conflict","status":"failed","message":"stable Release merge conflict","conflict_files":["backend/internal/server/routes/gateway.go","deploy/README.md"],"conflict_base":"custom123","conflict_upstream":"upstream456","release_tag":"v0.1.158","release_commit":"26abd19a2812edba02bbef93c3e2a620141cc257","release_published_at":"2026-07-16T12:37:06Z","conflict_release":"v0.1.158@26abd19a2812edba02bbef93c3e2a620141cc257","conflict_log":"/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json","resolution_hint":"Resolve conflicts and retry.","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z","finished_at":"2026-07-13T00:01:00Z"}`), 0644))
 
 	job, err := readUpdateStatus(statusPath, "update-conflict")
 
@@ -83,6 +86,10 @@ func TestReadUpdateStatusIncludesConflictMetadata(t *testing.T) {
 	require.Equal(t, []string{"backend/internal/server/routes/gateway.go", "deploy/README.md"}, job.ConflictFiles)
 	require.Equal(t, "custom123", job.ConflictBase)
 	require.Equal(t, "upstream456", job.ConflictUpstream)
+	require.Equal(t, "v0.1.158", job.ReleaseTag)
+	require.Equal(t, "26abd19a2812edba02bbef93c3e2a620141cc257", job.ReleaseCommit)
+	require.Equal(t, "2026-07-16T12:37:06Z", job.ReleasePublishedAt)
+	require.Equal(t, "v0.1.158@26abd19a2812edba02bbef93c3e2a620141cc257", job.ConflictRelease)
 	require.Equal(t, "/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json", job.ConflictLog)
 	require.Equal(t, "Resolve conflicts and retry.", job.ResolutionHint)
 }

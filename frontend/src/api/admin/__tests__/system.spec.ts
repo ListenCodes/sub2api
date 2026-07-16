@@ -22,12 +22,17 @@ describe('upstream preparation jobs', () => {
       message: 'PUBLISH OK: commit=abc123',
       need_restart: false,
       integration_branch: 'integration/upstream-20260713',
+      release_tag: 'v0.1.158',
+      release_commit: '26abd19a2812edba02bbef93c3e2a620141cc257',
+      release_published_at: '2026-07-16T12:37:06Z',
       published: true,
       published_commit: 'abc123'
     }
 
     expect(updateWasPublished(job)).toBe(true)
     expect(updateNeedsRestart(job)).toBe(false)
+    expect(job.release_tag).toBe('v0.1.158')
+    expect(job.release_commit).toBe('26abd19a2812edba02bbef93c3e2a620141cc257')
   })
 
   it('carries actionable conflict metadata without treating the job as published', () => {
@@ -39,6 +44,7 @@ describe('upstream preparation jobs', () => {
       conflict_files: ['backend/internal/server/routes/gateway.go', 'deploy/README.md'],
       conflict_base: 'custom123',
       conflict_upstream: 'upstream456',
+      conflict_release: 'v0.1.158@26abd19a2812edba02bbef93c3e2a620141cc257',
       conflict_log:
         '/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json',
       resolution_hint: 'Resolve conflicts and retry.'
@@ -50,5 +56,6 @@ describe('upstream preparation jobs', () => {
       'deploy/README.md'
     ])
     expect(job.resolution_hint).toBe('Resolve conflicts and retry.')
+    expect(job.conflict_release).toContain('v0.1.158')
   })
 })

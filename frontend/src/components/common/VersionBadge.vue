@@ -146,10 +146,10 @@
                       <ul class="mt-1 list-disc space-y-0.5 pl-4 break-words">
                         <li v-for="file in conflictFiles" :key="file">{{ file }}</li>
                       </ul>
-                      <p v-if="conflictBase || conflictUpstream" class="mt-2 break-all text-[11px] opacity-75">
+                      <p v-if="conflictBase || conflictRelease || conflictUpstream" class="mt-2 break-all text-[11px] opacity-75">
                         {{ t('version.updateConflictCommits') }}:
                         {{ conflictBase.slice(0, 12) || '-' }} ->
-                        {{ conflictUpstream.slice(0, 12) || '-' }}
+                        {{ formatConflictTarget(conflictRelease, releaseTag, releaseCommit, conflictUpstream) }}
                       </p>
                       <p v-if="resolutionHint" class="mt-2">{{ resolutionHint }}</p>
                       <p v-if="conflictLog" class="mt-2 break-all text-[11px] opacity-75">
@@ -203,10 +203,15 @@
                       {{ needRestart ? t('version.restartRequired') : updateSuccessMessage }}
                     </p>
                     <p
-                      v-if="published && publishedCommit"
+                      v-if="releaseTag || (published && publishedCommit)"
                       class="mt-1 text-[11px] text-green-600/60 dark:text-green-400/60"
                     >
-                      commit {{ publishedCommit.slice(0, 12) }}
+                      <template v-if="releaseTag">{{ releaseTag }}</template>
+                      <template v-if="releaseTag && (releaseCommit || publishedCommit)"> · </template>
+                      <template v-if="releaseCommit || publishedCommit">
+                        commit {{ (releaseCommit || publishedCommit).slice(0, 12) }}
+                      </template>
+                      <template v-if="releasePublishedAt"> · {{ releasePublishedAt }}</template>
                     </p>
                   </div>
                 </div>
@@ -723,9 +728,13 @@ const updateSuccess = ref(false)
 const updateSuccessMessage = ref('')
 const published = ref(false)
 const publishedCommit = ref('')
+const releaseTag = ref('')
+const releaseCommit = ref('')
+const releasePublishedAt = ref('')
 const conflictFiles = ref<string[]>([])
 const conflictBase = ref('')
 const conflictUpstream = ref('')
+const conflictRelease = ref('')
 const conflictLog = ref('')
 const resolutionHint = ref('')
 const restartCountdown = ref(0)
@@ -796,9 +805,13 @@ async function refreshVersion(force = true) {
   updateSuccessMessage.value = ''
   published.value = false
   publishedCommit.value = ''
+  releaseTag.value = ''
+  releaseCommit.value = ''
+  releasePublishedAt.value = ''
   conflictFiles.value = []
   conflictBase.value = ''
   conflictUpstream.value = ''
+  conflictRelease.value = ''
   conflictLog.value = ''
   resolutionHint.value = ''
   needRestart.value = false
@@ -817,9 +830,13 @@ async function handleUpdate() {
   updateSuccessMessage.value = ''
   published.value = false
   publishedCommit.value = ''
+  releaseTag.value = ''
+  releaseCommit.value = ''
+  releasePublishedAt.value = ''
   conflictFiles.value = []
   conflictBase.value = ''
   conflictUpstream.value = ''
+  conflictRelease.value = ''
   conflictLog.value = ''
   resolutionHint.value = ''
 
@@ -847,7 +864,16 @@ function stopUpdatePolling() {
 }
 
 function finishUpdateSuccess(
-  status: Pick<UpdateJob, 'need_restart' | 'published' | 'published_commit' | 'message'>
+  status: Pick<
+    UpdateJob,
+    | 'need_restart'
+    | 'published'
+    | 'published_commit'
+    | 'message'
+    | 'release_tag'
+    | 'release_commit'
+    | 'release_published_at'
+  >
 ) {
   stopUpdatePolling()
   successKind.value = 'update'
@@ -855,6 +881,9 @@ function finishUpdateSuccess(
   needRestart.value = updateNeedsRestart({ need_restart: status.need_restart })
   published.value = updateWasPublished(status)
   publishedCommit.value = status.published_commit || ''
+  releaseTag.value = status.release_tag || ''
+  releaseCommit.value = status.release_commit || ''
+  releasePublishedAt.value = status.release_published_at || ''
   updateSuccessMessage.value = status.message
   updating.value = false
   appStore.clearVersionCache()
@@ -867,6 +896,9 @@ function finishUpdateFailure(
     | 'conflict_files'
     | 'conflict_base'
     | 'conflict_upstream'
+    | 'conflict_release'
+    | 'release_tag'
+    | 'release_commit'
     | 'conflict_log'
     | 'resolution_hint'
   >
@@ -876,6 +908,9 @@ function finishUpdateFailure(
   conflictFiles.value = status.conflict_files || []
   conflictBase.value = status.conflict_base || ''
   conflictUpstream.value = status.conflict_upstream || ''
+  releaseTag.value = status.release_tag || ''
+  releaseCommit.value = status.release_commit || ''
+  conflictRelease.value = status.conflict_release || ''
   conflictLog.value = status.conflict_log || ''
   resolutionHint.value = status.resolution_hint || ''
   updating.value = false
@@ -960,6 +995,25 @@ function formatPublishedAt(publishedAt: string): string {
   const date = new Date(publishedAt)
   if (Number.isNaN(date.getTime())) return ''
   return date.toLocaleDateString()
+}
+
+function formatConflictTarget(
+  release: string,
+  tag: string,
+  commit: string,
+  legacyUpstream: string
+): string {
+  if (release) {
+    const separator = release.indexOf('@')
+    if (separator >= 0) {
+      return `${release.slice(0, separator)}@${release.slice(separator + 1, separator + 13)}`
+    }
+    return release
+  }
+  if (tag) {
+    return commit ? `${tag}@${commit.slice(0, 12)}` : tag
+  }
+  return legacyUpstream.slice(0, 12) || '-'
 }
 
 async function handleRollback() {

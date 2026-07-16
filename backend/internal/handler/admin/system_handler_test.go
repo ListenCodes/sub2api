@@ -175,10 +175,13 @@ func TestSystemHandlerPerformUpdateReturnsAcceptedJob(t *testing.T) {
 	started := time.Now().UTC()
 	updateSvc := &systemHandlerUpdateServiceStub{
 		performJob: &service.UpdateJob{
-			JobID:     "update-test",
-			Status:    service.UpdateStatusRunning,
-			Message:   "sync triggered",
-			StartedAt: &started,
+			JobID:              "update-test",
+			Status:             service.UpdateStatusRunning,
+			Message:            "sync triggered",
+			ReleaseTag:         "v0.1.158",
+			ReleaseCommit:      "26abd19a2812edba02bbef93c3e2a620141cc257",
+			ReleasePublishedAt: "2026-07-16T12:37:06Z",
+			StartedAt:          &started,
 		},
 	}
 	repo := newMemoryIdempotencyRepoStub()
@@ -196,6 +199,9 @@ func TestSystemHandlerPerformUpdateReturnsAcceptedJob(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "update-test", body.Data.JobID)
 	require.Equal(t, service.UpdateStatusRunning, body.Data.Status)
+	require.Equal(t, "v0.1.158", body.Data.ReleaseTag)
+	require.Equal(t, "26abd19a2812edba02bbef93c3e2a620141cc257", body.Data.ReleaseCommit)
+	require.Equal(t, "2026-07-16T12:37:06Z", body.Data.ReleasePublishedAt)
 	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
 }
 
