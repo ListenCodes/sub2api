@@ -1,3 +1,6 @@
+ARG IMAGE_REVISION=unknown
+ARG IMAGE_VERSION=unknown
+
 FROM golang:1.26.5-alpine AS builder
 
 WORKDIR /src
@@ -12,6 +15,13 @@ WORKDIR /src/risk-control
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/extensions-self .
 
 FROM alpine:3.22
+
+ARG IMAGE_REVISION
+ARG IMAGE_VERSION
+
+LABEL org.opencontainers.image.source="https://github.com/ListenCodes/sub2api"
+LABEL org.opencontainers.image.revision="${IMAGE_REVISION}"
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
 RUN adduser -D -H -u 10001 extensions-self
 WORKDIR /app

@@ -38,8 +38,16 @@ test('compose runs one extensions-self application container and preserves the r
     const compose = read(composeFile)
     assert.match(compose, /^  extensions-self:\s*$/m)
     assert.match(compose, /container_name: extensions-self/)
-    assert.match(compose, /image: deploy-extensions-self/)
-    assert.match(compose, /context: \.\.\/extensions-self/)
+    if (composeFile.endsWith('.local.yml')) {
+      assert.match(compose, /image: deploy-extensions-self/)
+      assert.match(compose, /context: \.\.\/extensions-self/)
+    } else {
+      assert.match(
+        compose,
+        /image: \$\{EXTENSIONS_SELF_IMAGE:\?EXTENSIONS_SELF_IMAGE is required\}/
+      )
+      assert.doesNotMatch(compose, /context: \.\.\/extensions-self/)
+    }
     assert.match(compose, /RISK_CONTROL_URL=\$\{RISK_CONTROL_URL:-http:\/\/extensions-self:8090\}/)
     assert.match(compose, /^  risk-control-postgres:\s*$/m)
     assert.doesNotMatch(compose, /^  risk-control:\s*$/m)

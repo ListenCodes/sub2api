@@ -14,6 +14,8 @@ ARG POSTGRES_IMAGE=postgres:18-alpine
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
+ARG IMAGE_REVISION=unknown
+ARG IMAGE_VERSION=unknown
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -94,10 +96,15 @@ FROM ${POSTGRES_IMAGE} AS pg-client
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
+ARG IMAGE_REVISION
+ARG IMAGE_VERSION
+
 # Labels
 LABEL maintainer="Wei-Shaw <github.com/Wei-Shaw>"
 LABEL description="Sub2API - AI API Gateway Platform"
-LABEL org.opencontainers.image.source="https://github.com/Wei-Shaw/sub2api"
+LABEL org.opencontainers.image.source="https://github.com/ListenCodes/sub2api"
+LABEL org.opencontainers.image.revision="${IMAGE_REVISION}"
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
 # Install runtime dependencies
 RUN apk add --no-cache \

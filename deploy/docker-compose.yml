@@ -16,7 +16,7 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: sub2api:custom
+    image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}
     container_name: sub2api
     restart: unless-stopped
     ulimits:
@@ -301,10 +301,7 @@ services:
   # Unified Custom Extensions Service
   # ===========================================================================
   extensions-self:
-    image: deploy-extensions-self
-    build:
-      context: ../extensions-self
-      dockerfile: Dockerfile
+    image: ${EXTENSIONS_SELF_IMAGE:?EXTENSIONS_SELF_IMAGE is required}
     container_name: extensions-self
     restart: unless-stopped
     init: true
