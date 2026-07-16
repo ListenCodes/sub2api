@@ -36,6 +36,21 @@ function Assert-NotMatches {
     }
 }
 
+function Assert-Before {
+    param(
+        [string]$Text,
+        [string]$Earlier,
+        [string]$Later,
+        [string]$Message
+    )
+
+    $earlierIndex = $Text.IndexOf($Earlier, [System.StringComparison]::Ordinal)
+    $laterIndex = $Text.IndexOf($Later, [System.StringComparison]::Ordinal)
+    if ($earlierIndex -lt 0 -or $laterIndex -lt 0 -or $earlierIndex -ge $laterIndex) {
+        throw "ASSERTION FAILED: $Message"
+    }
+}
+
 # Stable Release preparation must be isolated from custom and production.
 Assert-Matches $syncScript 'resolve-stable-release\.sh' 'sync resolves the latest stable Release'
 Assert-Matches $syncScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'sync rejects non-approved publication branches'
@@ -94,6 +109,12 @@ Assert-Matches $publishScript 'ORIGIN_REF="\$ORIGIN_REMOTE/\$BRANCH"' 'publish d
 Assert-Matches $publishScript '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'publish rejects non-approved publication branches'
 Assert-Matches $publishScript 'BACKUP_ROOT' 'publish creates a backup under the configured backup root'
 Assert-Matches $publishScript 'pg_dump' 'publish backs up PostgreSQL before deployment'
+Assert-Matches $publishScript 'stable-release-baseline\.json' 'publish reads the verified stable Release metadata'
+Assert-Matches $publishScript '--build-arg\s+VERSION=' 'publish injects the stable Release version into the main image'
+Assert-Matches $publishScript '--build-arg\s+COMMIT=' 'publish injects the approved custom commit into the main image'
+Assert-Matches $publishScript 'built image version probe failed' 'publish reports a failed image version probe'
+Assert-Matches $publishScript 'built image version mismatch' 'publish rejects a main image with incorrect Release metadata'
+Assert-Before $publishScript 'built image version mismatch' 'up -d --no-deps --force-recreate sub2api extensions-self' 'publish validates the built version before recreating services'
 Assert-Matches $publishScript 'docker\s+compose\s+--project-name\s+deploy' 'publish uses the stable Compose project name'
 Assert-Matches $publishScript '--no-deps\s+--force-recreate\s+sub2api\s+extensions-self' 'publish recreates only the affected services'
 Assert-NotMatches $publishScript 'origin/custom' 'publish must not hardcode origin/custom'

@@ -7,6 +7,7 @@ ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
 ORIGIN_REF="$ORIGIN_REMOTE/$BRANCH"
 COMPOSE="$REPO/deploy/docker-compose.yml"
 ENV_FILE="${SUB2API_ENV_FILE:-$REPO/deploy/.env}"
+BASELINE_FILE="${SUB2API_STABLE_BASELINE_FILE:-$REPO/deploy/stable-release-baseline.json}"
 BACKUP_ROOT="${SUB2API_BACKUP_ROOT:-/root/backups/sub2api}"
 LOG="${SUB2API_PUBLISH_LOG:-/var/log/sub2api-publish.log}"
 STAMP="$(date -u '+%Y%m%d-%H%M%S')"
@@ -37,6 +38,16 @@ ORIGIN_COMMIT="$(git rev-parse "$ORIGIN_REF")"
 [[ "$APPROVED_COMMIT" == "$ORIGIN_COMMIT" ]] || fail "approved commit $APPROVED_COMMIT is not $ORIGIN_REF $ORIGIN_COMMIT"
 git merge --ff-only "$ORIGIN_REF" >> "$LOG" 2>&1 || fail "fast-forward to $ORIGIN_REF failed"
 [[ "$(git rev-parse HEAD)" == "$APPROVED_COMMIT" ]] || fail 'source HEAD is not the approved commit'
+
+[[ -r "$BASELINE_FILE" ]] || fail 'stable Release baseline metadata is missing'
+release_tag="$(jq -er '.tag' "$BASELINE_FILE" 2>/dev/null || true)"
+release_commit="$(jq -er '.commit_sha' "$BASELINE_FILE" 2>/dev/null || true)"
+[[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'stable Release tag is invalid'
+[[ "$release_commit" =~ ^[0-9a-fA-F]{40}$ ]] || fail 'stable Release commit is invalid'
+git cat-file -e "$release_commit^{commit}" >/dev/null 2>&1 || fail 'stable Release commit is unavailable'
+git merge-base --is-ancestor "$release_commit" "$APPROVED_COMMIT" || fail 'approved commit does not contain the stable Release baseline'
+[[ "$(git rev-list -n 1 "$release_tag" 2>/dev/null || true)" == "$release_commit" ]] || fail 'stable Release tag does not match the recorded commit'
+release_version="${release_tag#v}"
 
 if docker container inspect sub2api-risk-control >/dev/null 2>&1; then
   fail 'retired legacy container sub2api-risk-control still exists'
@@ -220,7 +231,15 @@ if [[ "$monitor_enabled" == true ]]; then
 fi
 
 log 'Building main application image'
-docker build -t sub2api:custom "$REPO" >> "$LOG" 2>&1 || fail 'main image build failed'
+docker build \
+  --build-arg VERSION="$release_version" \
+  --build-arg COMMIT="$APPROVED_COMMIT" \
+  -t sub2api:custom "$REPO" >> "$LOG" 2>&1 || fail 'main image build failed'
+built_version=''
+if ! built_version="$(docker run --rm --entrypoint /app/sub2api sub2api:custom --version 2>&1 | sed -nE 's/.*Sub2API ([^ ]+).*/\1/p' | tail -n 1)"; then
+  fail 'built image version probe failed'
+fi
+[[ "$built_version" == "$release_version" ]] || fail "built image version mismatch: expected $release_version, got ${built_version:-empty}"
 log 'Building extensions-self image'
 docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" build extensions-self >> "$LOG" 2>&1 || fail 'extensions-self image build failed'
 
