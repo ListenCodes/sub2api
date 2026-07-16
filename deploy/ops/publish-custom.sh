@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO="${SUB2API_REPO:-/root/sub2api}"
 BRANCH="${SUB2API_BRANCH:-custom-release}"
 ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
+UPSTREAM_REMOTE="${SUB2API_UPSTREAM_REMOTE:-upstream}"
 ORIGIN_REF="$ORIGIN_REMOTE/$BRANCH"
 COMPOSE="$REPO/deploy/docker-compose.yml"
 ENV_FILE="${SUB2API_ENV_FILE:-$REPO/deploy/.env}"
@@ -42,10 +43,14 @@ git merge --ff-only "$ORIGIN_REF" >> "$LOG" 2>&1 || fail "fast-forward to $ORIGI
 [[ -r "$BASELINE_FILE" ]] || fail 'stable Release baseline metadata is missing'
 release_tag="$(jq -er '.tag' "$BASELINE_FILE" 2>/dev/null || true)"
 release_commit="$(jq -er '.commit_sha' "$BASELINE_FILE" 2>/dev/null || true)"
+release_tag_object_sha="$(jq -er '.tag_object_sha' "$BASELINE_FILE" 2>/dev/null || true)"
 [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'stable Release tag is invalid'
 [[ "$release_commit" =~ ^[0-9a-fA-F]{40}$ ]] || fail 'stable Release commit is invalid'
+[[ "$release_tag_object_sha" =~ ^[0-9a-fA-F]{40}$ ]] || fail 'stable Release tag object is invalid'
 git cat-file -e "$release_commit^{commit}" >/dev/null 2>&1 || fail 'stable Release commit is unavailable'
 git merge-base --is-ancestor "$release_commit" "$APPROVED_COMMIT" || fail 'approved commit does not contain the stable Release baseline'
+git fetch "$UPSTREAM_REMOTE" "refs/tags/$release_tag:refs/tags/$release_tag" >> "$LOG" 2>&1 || fail "fetch stable Release tag $release_tag failed"
+[[ "$(git rev-parse "$release_tag^{tag}" 2>/dev/null || true)" == "$release_tag_object_sha" ]] || fail 'stable Release tag object does not match the recorded metadata'
 [[ "$(git rev-list -n 1 "$release_tag" 2>/dev/null || true)" == "$release_commit" ]] || fail 'stable Release tag does not match the recorded commit'
 release_version="${release_tag#v}"
 
