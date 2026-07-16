@@ -92,13 +92,16 @@ cleanup() {
 }
 
 trap cleanup EXIT
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log 'Another release pipeline is running; leaving the durable trigger pending'
+  exit 0
+fi
 claim_job || { log 'No durable release trigger is pending'; exit 0; }
 release_valid_job_id "$JOB_ID" || { log 'Invalid release job id'; exit 1; }
 export SUB2API_JOB_ID="$JOB_ID"
 
 trap 'on_error "$LINENO"' ERR
-exec 9>"$LOCK_FILE"
-flock -n 9 || fail_run 'another release pipeline is already running' RELEASE_LOCKED
 
 for script in "$SYNC_SCRIPT" "$WAIT_ACTIONS_SCRIPT" "$VERIFY_IMAGES_SCRIPT" "$PROMOTE_SCRIPT" "$PUBLISH_SCRIPT"; do
   [[ -x "$script" ]] || fail_run "required release script is not executable: $script" RELEASE_SCRIPT_MISSING

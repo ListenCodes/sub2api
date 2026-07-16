@@ -69,6 +69,7 @@ foreach ($marker in @(
 Assert-Before $orchestrator 'waiting_actions' 'waiting_images' 'Actions must finish before image verification'
 Assert-Before $orchestrator 'waiting_images' 'promoting_release' 'images must be verified before branch promotion'
 Assert-Before $orchestrator 'promoting_release' 'Publishing commit' 'promotion must precede publication'
+Assert-Before $orchestrator 'flock -n 9' 'claim_job ||' 'orchestrator must acquire its lock before claiming the durable trigger'
 Assert-NotMatches $orchestrator 'git\s+(merge|rebase)|--force' 'orchestrator delegates guarded promotion and never rewrites history'
 
 # Promotion advances only the already-tested remote ref; publisher moves local source after backup.
