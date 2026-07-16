@@ -261,7 +261,7 @@ GROUP BY group_id,display_bucket
 ORDER BY group_id,display_bucket`
 
 const groupModelTimelineSQL = `
-SELECT actual_model,
+SELECT COALESCE(NULLIF(actual_model,''),'未知实际模型') AS actual_model,
 	   date_bin(make_interval(secs => $4),occurred_at,TIMESTAMPTZ '1970-01-01 00:00:00+00') AS display_bucket,
 	   COUNT(*),
 	   COUNT(*) FILTER (WHERE result='succeeded'),
@@ -270,7 +270,7 @@ SELECT actual_model,
 	   COUNT(*) FILTER (WHERE model_attribution<>'exact')
 FROM account_monitor_request_facts
 WHERE group_id=$1 AND occurred_at >= $2 AND occurred_at < $3
-GROUP BY actual_model,display_bucket
+GROUP BY COALESCE(NULLIF(actual_model,''),'未知实际模型'),display_bucket
 ORDER BY LOWER(actual_model),actual_model,display_bucket`
 
 type AdminService struct {

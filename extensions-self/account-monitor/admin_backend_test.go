@@ -39,6 +39,9 @@ func TestGroupMonitorQueriesUseOnlyDimensionsAndRequestFacts(t *testing.T) {
 			t.Fatalf("%s query still uses incompatible ten-minute aggregates: %s", name, query)
 		}
 	}
+	if !strings.Contains(groupModelTimelineSQL, "COALESCE(NULLIF(actual_model,''),'未知实际模型')") {
+		t.Fatalf("group detail query does not normalize blank actual models: %s", groupModelTimelineSQL)
+	}
 }
 
 func TestGroupMonitorQueriesUseAdaptiveDisplayBuckets(t *testing.T) {
