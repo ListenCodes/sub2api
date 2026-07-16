@@ -36,23 +36,33 @@ function Assert-NotMatches {
     }
 }
 
-# Upstream preparation must be isolated from custom and production.
-Assert-Matches $syncScript 'git\s+fetch\s+"?\$UPSTREAM_REMOTE"?' 'sync fetches the configured upstream remote'
+# Stable Release preparation must be isolated from custom and production.
+Assert-Matches $syncScript 'resolve-stable-release\.sh' 'sync resolves the latest stable Release'
+Assert-Matches $syncScript 'integration/release-' 'sync publishes a Release integration branch'
+Assert-Matches $syncScript 'release_tag' 'sync records the stable Release tag'
+Assert-Matches $syncScript 'release_commit' 'sync records the peeled Release commit'
+Assert-Matches $syncScript 'release_published_at' 'sync records the Release publication time'
 Assert-Matches $syncScript 'git\s+-C\s+"?\$WORKTREE"?\s+merge' 'sync merges upstream in a temporary worktree'
-Assert-Matches $syncScript 'integration/upstream-' 'sync publishes an integration branch'
+Assert-Matches $syncScript 'refs/tags/' 'sync fetches the verified Release tag'
 Assert-Matches $syncScript 'need_restart:false' 'sync reports preparation-only status'
+Assert-NotMatches $syncScript 'merge[^\r\n]*upstream/main' 'stable sync never merges upstream/main'
+Assert-NotMatches $syncScript 'fetch[^\r\n]*main' 'stable sync never fetches main for publication'
 Assert-NotMatches $syncScript 'git\s+rebase' 'sync must not rebase'
 Assert-NotMatches $syncScript 'docker\s+(build|compose\s+up)' 'sync must not build or deploy'
 Assert-NotMatches $syncScript 'git\s+push\s+[^\r\n]*\bcustom\b' 'sync must not push custom'
 Assert-NotMatches $syncScript '--force' 'sync must not force-update refs'
 Assert-Matches $syncScript 'SUB2API_SYNC_DEFER_RESULT' 'sync supports deferred trigger results'
-Assert-Matches $syncScript 'base_commit' 'sync records the origin/custom base commit'
+Assert-Matches $syncScript 'base_commit' 'sync records the approved branch base commit'
 Assert-Matches $syncScript 'SCHEDULED_RUN' 'scheduled syncs use an independent run mode'
 Assert-Matches $syncScript 'CONFLICT_DIR' 'sync stores conflict artifacts under a configured directory'
 Assert-Matches $syncScript 'conflict_files' 'sync records conflicted files'
 Assert-Matches $syncScript 'conflict_log' 'sync records the conflict artifact path'
-Assert-Matches $syncScript 'conflict_upstream' 'sync records the conflicting upstream commit'
+Assert-Matches $syncScript 'conflict_release' 'sync records the conflicting Release identity'
 Assert-Matches $triggerScript 'conflict_files' 'admin trigger initializes conflict metadata fields'
+Assert-Matches $triggerScript 'release_tag' 'admin trigger initializes Release metadata fields'
+Assert-Matches $triggerScript 'release_commit' 'admin trigger initializes Release commit field'
+Assert-Matches $triggerScript 'release_published_at' 'admin trigger initializes Release timestamp field'
+Assert-Matches $triggerScript 'conflict_release' 'admin trigger initializes Release conflict field'
 
 # Both the scheduled and admin-triggered paths must use the same auto-publish wrapper.
 Assert-Matches $autoUpdateScript 'sync-and-publish\.sh' 'scheduled updates use the unified wrapper'
@@ -71,7 +81,7 @@ Assert-Matches $publishScript 'origin/custom' 'publish validates against origin/
 Assert-Matches $publishScript 'BACKUP_ROOT' 'publish creates a backup under the configured backup root'
 Assert-Matches $publishScript 'pg_dump' 'publish backs up PostgreSQL before deployment'
 Assert-Matches $publishScript 'docker\s+compose\s+--project-name\s+deploy' 'publish uses the stable Compose project name'
-Assert-Matches $publishScript '--no-deps\s+--force-recreate\s+sub2api\s+risk-control' 'publish recreates only the affected services'
+Assert-Matches $publishScript '--no-deps\s+--force-recreate\s+sub2api\s+extensions-self' 'publish recreates only the affected services'
 Assert-NotMatches $publishScript 'git\s+reset\s+--hard' 'publish must not discard source changes'
 Assert-NotMatches $publishScript 'git\s+push\s+[^\r\n]*--force' 'publish must not force-push'
 
