@@ -24,6 +24,9 @@ JSON
 cat >"$FIXTURE_DIR/missing-ref.json" <<'JSON'
 {"ref":"refs/tags/v0.1.157","object":{"type":"tag"}}
 JSON
+cat >"$FIXTURE_DIR/mismatched-ref.json" <<'JSON'
+{"ref":"refs/tags/v0.1.156","object":{"type":"tag","sha":"a44e63f9fab426ec181bafcf4e4c1a002bbcb8e0"}}
+JSON
 
 run_resolver() {
   SUB2API_RELEASE_JSON_FILE="$1" \
@@ -57,5 +60,6 @@ assert_fails draft.json ref.json
 assert_fails prerelease.json ref.json
 assert_fails malformed-tag.json ref.json
 assert_fails stable.json missing-ref.json
+assert_fails stable.json mismatched-ref.json
 
 printf 'release resolver tests: PASS\n'

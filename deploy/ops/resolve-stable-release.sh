@@ -29,6 +29,8 @@ tag="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' <<<
 
 published_at="$(jq -er '.published_at' <<<"$release_json" 2>/dev/null)" || fail
 ref_json="$(read_fixture_or_curl "${SUB2API_RELEASE_REF_JSON_FILE:-}" "https://api.github.com/repos/Wei-Shaw/sub2api/git/ref/tags/$tag")" || fail
+ref_name="$(jq -er '.ref' <<<"$ref_json" 2>/dev/null)" || fail
+[[ "$ref_name" == "refs/tags/$tag" ]] || fail
 tag_object_sha="$(jq -er '.object.sha' <<<"$ref_json" 2>/dev/null)" || fail
 [[ "$tag_object_sha" =~ ^[0-9a-fA-F]{40}$ ]] || fail
 
