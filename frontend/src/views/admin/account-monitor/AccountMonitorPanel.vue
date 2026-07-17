@@ -1,32 +1,31 @@
 <template>
-  <section class="min-w-0" data-testid="account-monitor-panel">
-    <TablePageLayout title="账号监控" description="账号调用、风险和数据质量">
+    <TablePageLayout data-testid="account-monitor-panel" :title="t('admin.accountMonitor.title')" :description="t('admin.accountMonitor.description')">
       <template #actions>
-        <div class="space-y-4">
+        <div class="space-y-3">
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <div><h2 class="text-lg font-semibold text-gray-950 dark:text-white">账号监控</h2><p class="mt-0.5 text-xs text-gray-500">{{ lastUpdated ? `更新于 ${lastUpdated.toLocaleTimeString()}` : '尚未更新' }}</p></div>
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ lastUpdated ? `更新于 ${lastUpdated.toLocaleTimeString()}` : '尚未更新' }}</p>
             <div class="flex flex-wrap items-center gap-2">
               <button type="button" class="btn btn-secondary" data-testid="account-thresholds-open" @click="thresholdOpen = true"><Icon name="cog" size="sm" />阈值</button>
               <button type="button" class="btn btn-secondary" data-testid="account-rebuild-open" @click="rebuildOpen = true"><Icon name="database" size="sm" />历史重建</button>
               <button type="button" class="btn btn-primary" data-testid="account-monitor-refresh" :disabled="loading" @click="refresh"><Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />刷新</button>
             </div>
           </div>
-          <div v-if="error" class="border-y border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300" role="alert">{{ error }}</div>
+          <div v-if="error" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700/40 dark:bg-red-900/20 dark:text-red-300" role="alert">{{ error }}</div>
           <AccountMonitorOverview :overview="overview" :quality="quality" />
         </div>
       </template>
 		<template #filters><AccountMonitorFilters :state="state" :groups="groupOptions" @apply="setFilters" @reset="resetFilters" /></template>
-      <template #table><AccountMonitorTable :accounts="accounts" :loading="loading" :sort-by="state.sortBy" :sort-order="state.sortOrder" @select="openAccount" @sort-risk="sortRisk" /></template>
-		<template v-if="total" #pagination><Pagination :page="state.page" :total="total" :page-size="state.pageSize" :page-size-options="pageSizeOptions" @update:page="setPage" @update:page-size="changePageSize" /></template>
+      <template #table><AccountMonitorTable :accounts="accounts" :loading="loading" :sort-by="state.sortBy" :sort-order="state.sortOrder" @select="openAccount" @sort="sortAccounts" /></template>
+		<template #pagination><Pagination v-if="total" :page="state.page" :total="total" :page-size="state.pageSize" @update:page="setPage" @update:pageSize="changePageSize" /></template>
     </TablePageLayout>
     <AccountMonitorDrawer :show="Boolean(selectedAccount)" :account="selectedAccount" :filters="requestFilters" :tab="state.detailTab" @close="closeAccount" @update:tab="changeDetailTab" />
     <AccountMonitorThresholdDialog :show="thresholdOpen" @close="thresholdOpen = false" @saved="refresh" />
     <AccountMonitorRebuildDialog :show="rebuildOpen" @close="rebuildOpen = false" />
-  </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -38,7 +37,8 @@ import AccountMonitorDrawer from './AccountMonitorDrawer.vue'
 import AccountMonitorThresholdDialog from './AccountMonitorThresholdDialog.vue'
 import AccountMonitorRebuildDialog from './AccountMonitorRebuildDialog.vue'
 import { resolveTimeRange, useAccountMonitorFilters, type AccountDetailTab } from './useAccountMonitorFilters'
-import { getConfiguredTablePageSizeOptions } from '@/utils/tablePreferences'
+
+const { t } = useI18n()
 
 const overview = ref<AccountMonitorOverviewResponse | null>(null)
 const quality = ref<AccountDataQuality | null>(null)
@@ -53,7 +53,6 @@ const thresholdOpen = ref(false)
 const rebuildOpen = ref(false)
 let requestID = 0
 const { state, refresh, setFilters, resetFilters, setPage, setPageSize, selectAccount, setDetailTab } = useAccountMonitorFilters(loadAll)
-const pageSizeOptions = getConfiguredTablePageSizeOptions()
 function accountGroups(items: AccountMonitorAccount[]) {
 	const groups = new Map<number, AccountMonitorAccount['groups'][number]>()
 	for (const account of items) for (const group of account.groups || []) groups.set(group.group_id, group)
@@ -88,6 +87,9 @@ async function openAccount(account: AccountMonitorAccount) { selectedAccount.val
 async function closeAccount() { selectedAccount.value = null; await selectAccount(undefined) }
 async function changeDetailTab(tab: AccountDetailTab) { await setDetailTab(tab) }
 async function changePageSize(value: number) { await setPageSize(value as AccountPageSize) }
-async function sortRisk() { const order = state.sortBy === 'risk_score' && state.sortOrder === 'desc' ? 'asc' : 'desc'; await setFilters({ sortBy: 'risk_score', sortOrder: order }) }
+async function sortAccounts(key: string, order: 'asc' | 'desc') {
+  if (key !== 'risk') return
+  await setFilters({ sortBy: 'risk_score', sortOrder: order })
+}
 onMounted(loadAll)
 </script>

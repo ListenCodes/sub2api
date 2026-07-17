@@ -1,20 +1,18 @@
 <template>
-  <section class="space-y-3 border-y border-gray-200 py-3 dark:border-dark-700" data-testid="account-monitor-filters">
-    <div class="flex flex-wrap items-center gap-3">
-		<label class="flex w-full flex-col gap-1 sm:w-36"><span class="text-xs text-gray-500" data-testid="account-filter-range-label">时间范围</span><Select v-model="draft.range" class="w-full" :options="rangeOptions" @update:model-value="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-40"><span class="text-xs text-gray-500" data-testid="account-filter-platform-label">平台</span><Select v-model="draft.platform" class="w-full" :options="platformOptions" @update:model-value="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-48"><span class="text-xs text-gray-500" data-testid="account-filter-group-label">分组</span><Select v-model="draft.groupID" class="w-full" :options="groupOptions" @update:model-value="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-52"><span class="text-xs text-gray-500" data-testid="account-filter-model-label">实际模型</span><SearchInput :model-value="draft.model || ''" class="w-full" placeholder="输入模型名称" @update:model-value="updateModel" @search="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-36"><span class="text-xs text-gray-500" data-testid="account-filter-status-label">账号状态</span><Select v-model="draft.accountStatus" class="w-full" :options="statusOptions" @update:model-value="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-36"><span class="text-xs text-gray-500" data-testid="account-filter-result-label">调用结果</span><Select v-model="draft.result" class="w-full" :options="resultOptions" @update:model-value="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-36"><span class="text-xs text-gray-500" data-testid="account-filter-rollup-label">账号口径</span><Select v-model="draft.rollup" class="w-full" :options="rollupOptions" @update:model-value="runImmediate" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-auto"><span class="text-xs text-gray-500" data-testid="account-filter-risk-label">风险分</span><span class="flex items-center gap-2"><input v-model.number="draft.minRiskScore" type="number" min="0" max="100" class="input w-20" placeholder="最低" @input="schedule" /><span class="text-gray-400">-</span><input v-model.number="draft.maxRiskScore" type="number" min="0" max="100" class="input w-20" placeholder="最高" @input="schedule" /></span></label>
-      <button type="button" class="btn btn-ghost" data-testid="account-filter-reset" @click="$emit('reset')"><Icon name="x" size="sm" />重置</button>
-    </div>
-    <div v-if="draft.range === 'custom'" class="flex flex-wrap items-center gap-3">
-      <label class="text-xs text-gray-500">开始<input v-model="customFrom" type="datetime-local" class="input ml-2" @change="runImmediate" /></label>
-      <label class="text-xs text-gray-500">结束<input v-model="customTo" type="datetime-local" class="input ml-2" @change="runImmediate" /></label>
-    </div>
+  <section class="flex flex-wrap items-center gap-3" data-testid="account-monitor-filters">
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-range-label">时间范围</span><Select v-model="draft.range" class="w-full sm:w-36" :options="rangeOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-platform-label">平台</span><Select v-model="draft.platform" class="w-full sm:w-40" :options="platformOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-group-label">分组</span><Select v-model="draft.groupID" class="w-full sm:w-48" :options="groupOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-model-label">实际模型</span><SearchInput :model-value="draft.model || ''" class="w-full sm:w-52" placeholder="输入模型名称" @update:model-value="updateModel" @search="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-status-label">账号状态</span><Select v-model="draft.accountStatus" class="w-full sm:w-36" :options="statusOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-result-label">调用结果</span><Select v-model="draft.result" class="w-full sm:w-36" :options="resultOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-rollup-label">账号口径</span><Select v-model="draft.rollup" class="w-full sm:w-36" :options="rollupOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-risk-label">风险分</span><span class="flex min-w-0 flex-1 items-center gap-2 sm:flex-none"><input v-model.number="draft.minRiskScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-20 sm:flex-none" placeholder="最低" @input="schedule" /><span class="text-gray-400 dark:text-gray-500">-</span><input v-model.number="draft.maxRiskScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-20 sm:flex-none" placeholder="最高" @input="schedule" /></span></label>
+    <template v-if="draft.range === 'custom'">
+      <label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0">开始</span><input v-model="customFrom" type="datetime-local" class="input min-w-0 flex-1 sm:w-auto" @change="runImmediate" /></label>
+      <label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0">结束</span><input v-model="customTo" type="datetime-local" class="input min-w-0 flex-1 sm:w-auto" @change="runImmediate" /></label>
+    </template>
+    <button type="button" class="btn btn-ghost btn-icon" data-testid="account-filter-reset" title="重置筛选" aria-label="重置筛选" @click="$emit('reset')"><Icon name="x" size="sm" /></button>
   </section>
 </template>
 

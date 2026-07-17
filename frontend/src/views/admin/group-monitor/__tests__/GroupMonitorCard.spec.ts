@@ -42,5 +42,17 @@ describe('GroupMonitorCard', () => {
 		expect(wrapper.get('h3').classes()).toEqual(expect.arrayContaining(['text-base', 'font-semibold']))
 		expect(wrapper.find('[data-platform="openai"]').exists()).toBe(true)
 		expect(wrapper.get('[role="img"]').attributes('aria-label')).toContain('15 分钟')
+		expect(wrapper.get('button').classes()).toEqual(expect.arrayContaining(['card', 'card-hover']))
+		expect(wrapper.get('button').classes()).not.toContain('shadow-sm')
+  })
+
+  it.each([
+    ['normal', 'dark:text-emerald-400'],
+    ['partial_failure', 'dark:text-amber-400'],
+    ['all_failed', 'dark:text-red-400'],
+    ['no_data', 'dark:text-gray-400'],
+  ])('provides a readable dark color for %s', (callStatus, darkClass) => {
+    const wrapper = mount(GroupMonitorCard, { props: { group: { ...base, call_status: callStatus as typeof base.call_status } } })
+    expect(wrapper.findAll('p').some((node) => node.classes().includes(darkClass))).toBe(true)
   })
 })

@@ -1,14 +1,14 @@
 <template>
-  <section class="min-w-0 space-y-5" data-testid="group-monitor-panel">
-		<div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-semibold text-gray-950 dark:text-white">分组监控</h2><p class="mt-1 text-xs text-gray-500">{{ dataAsOf ? `数据截至 ${new Date(dataAsOf).toLocaleString()}` : '尚未获取聚合数据' }}</p></div><button type="button" class="btn btn-primary" data-testid="group-monitor-refresh" :disabled="loading" @click="load"><Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />刷新</button></div>
-    <div v-if="error" class="border-y border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300" role="alert">{{ error }}；已保留最近成功数据。</div>
-    <div v-if="quality.stale_data_warning" class="border-y border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300" role="alert">{{ quality.stale_data_warning }}；已保留最近成功数据。</div>
+  <section class="space-y-6" data-testid="group-monitor-panel">
+		<div class="flex flex-wrap items-center justify-between gap-3"><p class="text-xs text-gray-500 dark:text-gray-400">{{ dataAsOf ? `数据截至 ${new Date(dataAsOf).toLocaleString()}` : '尚未获取聚合数据' }}</p><button type="button" class="btn btn-primary" data-testid="group-monitor-refresh" :disabled="loading" @click="load"><Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />刷新</button></div>
+    <div v-if="error" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-300" role="alert">{{ error }}；已保留最近成功数据。</div>
+    <div v-if="quality.stale_data_warning" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-300" role="alert">{{ quality.stale_data_warning }}；已保留最近成功数据。</div>
     <GroupMonitorFilters :state="state" :platforms="platforms" @apply="setFilters" @reset="resetFilters" />
-    <div class="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-500"><span>缺失分组 {{ quality.missing_group_requests }}</span><span>精确模型 {{ quality.exact_model_requests }}</span><span>推定模型 {{ quality.estimated_model_requests }}</span></div>
-    <div v-if="loading && !groups.length" class="flex min-h-64 items-center justify-center text-sm text-gray-500" role="status">正在加载分组监控</div>
+    <div class="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-500 dark:text-gray-400"><span>缺失分组 {{ quality.missing_group_requests }}</span><span>精确模型 {{ quality.exact_model_requests }}</span><span>推定模型 {{ quality.estimated_model_requests }}</span></div>
+    <div v-if="loading && !groups.length" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" data-testid="group-monitor-skeleton" role="status" aria-label="正在加载分组监控"><div v-for="index in 8" :key="index" class="card min-h-56 animate-pulse space-y-4 p-4"><div class="h-5 w-2/3 rounded bg-gray-100 dark:bg-dark-700" /><div class="h-4 w-1/3 rounded bg-gray-100 dark:bg-dark-700" /><div class="mt-8 h-10 rounded bg-gray-100 dark:bg-dark-700" /><div class="mt-auto h-14 rounded bg-gray-100 dark:bg-dark-700" /></div></div>
 		<div v-else-if="groups.length" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" data-testid="group-monitor-grid"><GroupMonitorCard v-for="group in groups" :key="group.group_id" :group="group" :bucket-seconds="bucketSeconds" @select="openGroup" /></div>
     <EmptyState v-else title="当前筛选没有分组聚合数据" />
-		<Pagination v-if="total" :page="state.page" :total="total" :page-size="state.pageSize" :page-size-options="pageSizeOptions" @update:page="setPage" @update:page-size="changePageSize" />
+		<div class="min-h-10"><Pagination v-if="total" :page="state.page" :total="total" :page-size="state.pageSize" @update:page="setPage" @update:pageSize="changePageSize" /></div>
     <GroupMonitorDetailDialog :show="Boolean(state.selectedGroupID)" :group-i-d="state.selectedGroupID" :range="state.range" :original-status="selectedGroup?.group_status" @close="closeGroup" @removed="handleRemoved" />
   </section>
 </template>
@@ -22,7 +22,6 @@ import GroupMonitorFilters from './GroupMonitorFilters.vue'
 import GroupMonitorCard from './GroupMonitorCard.vue'
 import GroupMonitorDetailDialog from './GroupMonitorDetailDialog.vue'
 import { useGroupMonitorFilters } from './useGroupMonitorFilters'
-import { getConfiguredTablePageSizeOptions } from '@/utils/tablePreferences'
 const groups = ref<GroupCard[]>([])
 const total = ref(0)
 const platforms = ref<string[]>([])
@@ -31,7 +30,6 @@ const quality = ref<GroupMonitorQuality>({ data_as_of: null, collection_lag_seco
 const loading = ref(false)
 const error = ref('')
 const bucketSeconds = ref(900)
-const pageSizeOptions = getConfiguredTablePageSizeOptions()
 const selectedGroup = ref<GroupCard | null>(null)
 let requestID = 0
 const { state, setFilters, resetFilters, setPage, setPageSize, selectGroup } = useGroupMonitorFilters(load)

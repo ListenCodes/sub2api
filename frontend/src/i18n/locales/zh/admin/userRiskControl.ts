@@ -1,6 +1,10 @@
 export default {
   userRiskControl: {
     sectionLabel: '安全与风控',
+    tabsLabel: '用户风控',
+    usersTab: '用户风险',
+    rulesTab: '场景规则',
+    auditTab: '操作记录',
     title: '用户风险控制',
     description: '集中查看注册风险、复核案件和可解释的风险事件。当前处于 Shadow 模式，不会自动拒绝正常注册。',
     refresh: '刷新数据',
@@ -39,7 +43,7 @@ export default {
     resolutionPrompt: '请输入处理说明',
     defaultResolution: '人工复核完成，暂不采取限制措施',
     resolveSuccess: '案件已标记为已处理。',
-    usersTitle: '用户风控', usersDescription: '以真实账号为中心查看风险信号，并执行可追溯的封禁或解封操作。', rulesTitle: '场景规则', rulesDescription: '配置风险场景的窗口、阈值、分数和人工处置动作。', auditPageTitle: '操作记录', auditPageDescription: '查看封禁、解封、自动封禁和规则变更的完整操作结果。', searchPlaceholder: '搜索用户名或邮箱', allStatuses: '全部状态', active: '正常', disabled: '已封禁', allRiskTypes: '全部风险类型', allRiskLevels: '全部等级', pendingOnly: '仅待处理', pending: '待处理', empty: '暂无匹配账号', total: '共 {total} 条', enabled: '已启用', window: '窗口（秒）', threshold: '阈值', score: '分数', level: '风险等级', action: '动作', testRule: '测试规则', testResult: '测试结果', matched: '命中', notMatched: '未命中', saved: '规则已保存', saveFailed: '规则保存失败', testFailed: '规则测试失败', allActions: '全部操作', targetUserPlaceholder: '目标用户 ID', allResults: '全部结果', ban: '封禁', unban: '解封', autoBan: '自动封禁', ruleUpdate: '规则修改', confirmBan: '确认封禁该用户？', confirmUnban: '确认解封该用户？', reasonPlaceholder: '填写操作原因（必填）', reasonRequired: '请填写操作原因后再继续。', defaultReason: '管理员人工处置', statusFailed: '账号状态更新失败', drawer: { label: '账号详情', title: '账号详情', riskScore: '风险分数', riskLevel: '风险等级', ipAssociations: '关联 IP 数', deviceAssociations: '关联设备数', timeline: '风险时间线', noEvents: '暂无风险事件', history: '处置历史', noHistory: '暂无处置记录' },
+    usersTitle: '用户风控', usersDescription: '以真实账号为中心查看风险信号，并执行可追溯的封禁或解封操作。', rulesTitle: '场景规则', rulesDescription: '配置风险场景的窗口、阈值、分数和人工处置动作。', auditPageTitle: '操作记录', auditPageDescription: '查看封禁、解封、自动封禁和规则变更的完整操作结果。', searchPlaceholder: '搜索用户名或邮箱', allStatuses: '全部状态', active: '正常', disabled: '已封禁', allRiskTypes: '全部风险类型', allRiskLevels: '全部等级', pendingOnly: '仅待处理', pending: '待处理', empty: '暂无匹配账号', total: '共 {total} 条', enabled: '已启用', window: '窗口（秒）', threshold: '阈值', score: '分数', level: '风险等级', action: '动作', testRule: '测试规则', testResult: '测试结果', matched: '命中', notMatched: '未命中', saved: '规则已保存', saveFailed: '规则保存失败', testFailed: '规则测试失败', allActions: '全部操作', targetUserPlaceholder: '目标用户 ID', allResults: '全部结果', ban: '封禁', unban: '解封', autoBan: '自动封禁', ruleUpdate: '规则修改', confirmBan: '确认封禁该用户？', confirmUnban: '确认解封该用户？', statusChangeMessage: '此操作会立即变更账号访问状态，请填写原因后继续。', reasonPlaceholder: '填写操作原因（必填）', reasonRequired: '请填写操作原因后再继续。', defaultReason: '管理员人工处置', statusFailed: '账号状态更新失败', drawer: { label: '账号详情', title: '账号详情', riskScore: '风险分数', riskLevel: '风险等级', ipAssociations: '关联 IP 数', deviceAssociations: '关联设备数', timeline: '风险时间线', noEvents: '暂无风险事件', history: '处置历史', noHistory: '暂无处置记录' },
     table: { time: '时间', scenario: '场景', subject: '对象', action: '建议动作', reason: '原因', title: '案件', priority: '优先级', status: '状态', updated: '更新时间', name: '名称', code: '编码', mode: '模式', revision: '版本', type: '类型', events: '事件数', score: '最高分', lastSeen: '最近出现', actions: '操作', listType: '名单类型', valueHash: '值摘要', label: '标签', actor: '操作者', target: '目标', account: '账号', id: 'ID', riskType: '风险类型', pending: '待处理', statusChange: '状态变更', result: '结果' },
     metrics: {
       openCases: '待处理案件', openCasesMeta: '需要人工复核',

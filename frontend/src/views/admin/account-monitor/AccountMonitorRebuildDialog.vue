@@ -1,15 +1,15 @@
 <template>
   <BaseDialog :show="show" title="历史重建" width="normal" :close-on-click-outside="false" @close="$emit('close')">
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <label class="input-label">开始时间<input v-model="from" data-testid="rebuild-from" type="datetime-local" class="input mt-2 w-full" /></label>
-      <label class="input-label">结束时间<input v-model="to" data-testid="rebuild-to" type="datetime-local" class="input mt-2 w-full" /></label>
+      <div><label for="rebuild-from" class="input-label">开始时间</label><input id="rebuild-from" v-model="from" data-testid="rebuild-from" type="datetime-local" class="input w-full" /></div>
+      <div><label for="rebuild-to" class="input-label">结束时间</label><input id="rebuild-to" v-model="to" data-testid="rebuild-to" type="datetime-local" class="input w-full" /></div>
     </div>
-    <div v-if="job" class="mt-4 border-y border-gray-200 py-3 text-sm dark:border-dark-700" data-testid="rebuild-status">
+    <div v-if="job" class="mt-4 rounded-lg border border-gray-200 px-4 py-3 text-sm dark:border-dark-700 dark:bg-dark-800/50" data-testid="rebuild-status">
       <p class="font-medium">任务 {{ job.id }} · {{ statusLabel(job.status) }}</p>
-      <p class="mt-1 text-gray-500">已处理 {{ job.processed_rows }} 行</p>
-      <p v-if="job.error" class="mt-1 text-red-600">{{ job.error }}</p>
+      <p class="mt-1 text-gray-500 dark:text-gray-400">已处理 {{ job.processed_rows }} 行</p>
+      <p v-if="job.error" class="mt-1 text-red-600 dark:text-red-400">{{ job.error }}</p>
     </div>
-    <p v-if="error" class="mt-3 text-sm text-red-600" role="alert">{{ error }}</p>
+    <p v-if="error" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ error }}</p>
     <template #footer><button type="button" class="btn btn-secondary" @click="$emit('close')">关闭</button><button type="button" class="btn btn-primary" data-testid="rebuild-start" :disabled="starting || polling" @click="start">{{ starting ? '创建中' : '开始重建' }}</button></template>
   </BaseDialog>
 </template>

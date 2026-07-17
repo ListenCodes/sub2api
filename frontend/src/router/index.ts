@@ -606,7 +606,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/extensions',
     component: () => import('@/views/admin/ExtensionsCenterView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, title: '扩展中心' },
+    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'admin.accountMonitor.extensionsTitle', descriptionKey: 'admin.accountMonitor.extensionsDescription' },
     children: [
       { path: '', redirect: '/admin/extensions/user-risk/users' },
       {
@@ -614,13 +614,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/extensions/UserRiskControlPanel.vue'),
         children: [
           { path: '', redirect: '/admin/extensions/user-risk/users' },
-          { path: 'users', name: 'AdminExtensionUserRiskUsers', component: () => import('@/views/admin/UserRiskControlUsersView.vue'), meta: { title: '用户风险' } },
-          { path: 'rules', name: 'AdminExtensionUserRiskRules', component: () => import('@/views/admin/UserRiskControlRulesView.vue'), meta: { title: '场景规则' } },
-          { path: 'audit', name: 'AdminExtensionUserRiskAudit', component: () => import('@/views/admin/UserRiskControlAuditView.vue'), meta: { title: '操作审计' } },
+          { path: 'users', name: 'AdminExtensionUserRiskUsers', component: () => import('@/views/admin/UserRiskControlUsersView.vue'), meta: { titleKey: 'admin.userRiskControl.usersTitle', descriptionKey: 'admin.userRiskControl.usersDescription' } },
+          { path: 'rules', name: 'AdminExtensionUserRiskRules', component: () => import('@/views/admin/UserRiskControlRulesView.vue'), meta: { titleKey: 'admin.userRiskControl.rulesTitle', descriptionKey: 'admin.userRiskControl.rulesDescription' } },
+          { path: 'audit', name: 'AdminExtensionUserRiskAudit', component: () => import('@/views/admin/UserRiskControlAuditView.vue'), meta: { titleKey: 'admin.userRiskControl.auditPageTitle', descriptionKey: 'admin.userRiskControl.auditPageDescription' } },
         ],
       },
-      { path: 'account-monitor', name: 'AdminExtensionAccountMonitor', component: () => import('@/views/admin/AccountMonitorView.vue'), meta: { title: '账号监控' } },
-      { path: 'group-monitor', name: 'AdminExtensionGroupMonitor', component: () => import('@/views/admin/group-monitor/GroupMonitorPanel.vue'), meta: { title: '分组监控' } },
+      { path: 'account-monitor', name: 'AdminExtensionAccountMonitor', component: () => import('@/views/admin/AccountMonitorView.vue'), meta: { titleKey: 'admin.accountMonitor.title', descriptionKey: 'admin.accountMonitor.description' } },
+      { path: 'group-monitor', name: 'AdminExtensionGroupMonitor', component: () => import('@/views/admin/group-monitor/GroupMonitorPanel.vue'), meta: { titleKey: 'admin.accountMonitor.groupTitle', descriptionKey: 'admin.accountMonitor.groupDescription' } },
     ],
   },
   {

@@ -1,16 +1,35 @@
 <template>
-  <div class="min-w-0">
-    <TablePageLayout :title="t('admin.userRiskControl.rulesTitle')" :description="t('admin.userRiskControl.rulesDescription')">
+  <TablePageLayout :title="t('admin.userRiskControl.rulesTitle')" :description="t('admin.userRiskControl.rulesDescription')">
       <template #actions>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="min-w-0 flex-1">
-            <div v-if="error" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>
-            <div v-if="notice" class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300" data-testid="save-notice">{{ notice }}</div>
+        <div class="space-y-4">
+          <UserRiskControlTabs />
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <div v-if="error" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700/40 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
+              <div v-if="notice" class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-700/40 dark:bg-emerald-900/20 dark:text-emerald-300" data-testid="save-notice">{{ notice }}</div>
+            </div>
+            <button type="button" class="btn btn-primary" data-testid="new-rule" @click="openCreateForm">
+              <Icon name="plus" size="sm" />
+              新建规则
+            </button>
           </div>
-          <button type="button" class="btn btn-primary" data-testid="new-rule" @click="openCreateForm">
-            <Icon name="plus" size="sm" />
-            新建规则
-          </button>
+        </div>
+      </template>
+
+      <template #filters>
+        <div class="flex flex-wrap items-end gap-3" data-testid="rule-filters">
+          <div class="w-full sm:w-72">
+            <label class="input-label">规则名称或编码</label>
+            <SearchInput v-model="ruleSearch" data-testid="rule-search" placeholder="搜索规则名称、编码或说明" />
+          </div>
+          <div class="w-full sm:w-40">
+            <label class="input-label">启用状态</label>
+            <Select v-model="enabledFilter" data-testid="rule-enabled-filter" :options="enabledFilterOptions" />
+          </div>
+          <div class="w-full sm:w-40">
+            <label class="input-label">风险等级</label>
+            <Select v-model="levelFilter" data-testid="rule-level-filter" :options="levelFilterOptions" />
+          </div>
         </div>
       </template>
 
@@ -18,30 +37,28 @@
         <div data-testid="risk-rules-table">
           <DataTable
             :columns="columns"
-            :data="rules"
+            :data="filteredRules"
             :loading="loading"
             row-key="id"
-            :sticky-first-column="false"
-            :sticky-actions-column="true"
           >
             <template #cell-rule="{ row }">
               <div class="min-w-0 text-left">
                 <p class="font-medium text-gray-900 dark:text-white" :title="row.name || row.code">{{ row.name || row.code }}</p>
-                <p class="mt-0.5 max-w-sm whitespace-normal text-xs text-gray-500" :title="row.description || row.code">
+                <p class="mt-0.5 max-w-sm whitespace-normal text-xs text-gray-500 dark:text-gray-400" :title="row.description || row.code">
                   {{ row.code }} · 第 {{ row.revision }} 版<span v-if="row.description"> · {{ row.description }}</span>
                 </p>
               </div>
             </template>
             <template #cell-eventTypes="{ row }">{{ row.eventTypes?.map(formatRiskType).join('、') || '-' }}</template>
             <template #cell-enabled="{ row }">
-              <span class="rounded-full px-2 py-1 text-xs font-medium" :class="row.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'">{{ row.enabled ? '已启用' : '已停用' }}</span>
+              <span class="rounded-md px-2 py-0.5 text-xs font-medium" :class="row.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'">{{ row.enabled ? '已启用' : '已停用' }}</span>
             </template>
             <template #cell-condition="{ row }">{{ row.threshold }} 次 / {{ row.windowSeconds }} 秒</template>
             <template #cell-risk="{ row }"><span class="font-semibold">{{ row.score }}</span><span class="ml-2">{{ formatRiskLevel(row.riskLevel) }}</span></template>
             <template #cell-action="{ row }">{{ formatRiskAction(row.action) }}</template>
             <template #cell-actions="{ row }">
               <div class="flex justify-end">
-                <button type="button" class="btn-ghost btn-icon" :data-testid="`edit-rule-${row.id}`" title="编辑规则" aria-label="编辑规则" @click.stop="toggleEditor(row.id)">
+                <button type="button" class="btn btn-ghost btn-icon" :data-testid="`edit-rule-${row.id}`" title="编辑规则" aria-label="编辑规则" @click.stop="toggleEditor(row.id)">
                   <Icon name="edit" size="sm" />
                 </button>
               </div>
@@ -81,11 +98,11 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">规则编码用于 API 协议和历史审计，创建后不可修改。</p>
           </div>
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input v-model="draft.code" label="规则编码" required data-testid="rule-code-input" placeholder="login_failure_burst" />
-            <Input v-model="draft.name" label="规则名称" required data-testid="rule-name-input" />
-            <Input v-model="draft.description" label="规则说明" class="sm:col-span-2" data-testid="rule-description-input" />
+            <div><label for="rule-code-input" class="input-label">规则编码 <span class="text-red-500">*</span></label><input id="rule-code-input" v-model="draft.code" class="input w-full" required data-testid="rule-code-input" placeholder="login_failure_burst" /></div>
+            <div><label for="rule-name-input" class="input-label">规则名称 <span class="text-red-500">*</span></label><input id="rule-name-input" v-model="draft.name" class="input w-full" required data-testid="rule-name-input" /></div>
+            <div class="sm:col-span-2"><label for="rule-description-input" class="input-label">规则说明</label><input id="rule-description-input" v-model="draft.description" class="input w-full" data-testid="rule-description-input" /></div>
             <div>
-              <label class="input-label mb-1.5 block">事件类型 <span class="text-red-500">*</span></label>
+              <label class="input-label">事件类型 <span class="text-red-500">*</span></label>
               <Select v-model="draft.eventTypes[0]" data-testid="rule-event-type" :options="riskTypeOptions" />
             </div>
           </div>
@@ -94,11 +111,11 @@
         <section class="space-y-3">
           <h4 class="text-sm font-semibold text-gray-900 dark:text-white">触发与处置</h4>
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <label class="input-label">时间窗口（秒）<input v-model.number="draft.windowSeconds" type="number" min="1" data-testid="rule-window" class="input mt-1.5 w-full" /></label>
-            <label class="input-label">触发阈值（次）<input v-model.number="draft.threshold" type="number" min="1" data-testid="rule-threshold-create" class="input mt-1.5 w-full" /></label>
-            <label class="input-label">风险分<input v-model.number="draft.score" type="number" min="0" max="100" data-testid="rule-score-create" class="input mt-1.5 w-full" /></label>
-            <div><label class="input-label mb-1.5 block">风险等级</label><Select v-model="draft.riskLevel" data-testid="rule-level-create" :options="riskLevelOptions" /></div>
-            <div><label class="input-label mb-1.5 block">处置动作</label><Select v-model="draft.action" data-testid="rule-action-create" :options="ruleActionOptions" /></div>
+            <div><label for="rule-window" class="input-label">时间窗口（秒）</label><input id="rule-window" v-model.number="draft.windowSeconds" type="number" min="1" data-testid="rule-window" class="input w-full" /></div>
+            <div><label for="rule-threshold-create" class="input-label">触发阈值（次）</label><input id="rule-threshold-create" v-model.number="draft.threshold" type="number" min="1" data-testid="rule-threshold-create" class="input w-full" /></div>
+            <div><label for="rule-score-create" class="input-label">风险分</label><input id="rule-score-create" v-model.number="draft.score" type="number" min="0" max="100" data-testid="rule-score-create" class="input w-full" /></div>
+            <div><label class="input-label">风险等级</label><Select v-model="draft.riskLevel" data-testid="rule-level-create" :options="riskLevelOptions" /></div>
+            <div><label class="input-label">处置动作</label><Select v-model="draft.action" data-testid="rule-action-create" :options="ruleActionOptions" /></div>
           </div>
         </section>
         <p v-if="createValidationError" class="text-sm text-red-600 dark:text-red-300" data-testid="create-rule-error">{{ createValidationError }}</p>
@@ -117,17 +134,17 @@
         </div>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div class="sm:col-span-2 lg:col-span-3">
-            <label class="input-label mb-2 block">启用状态</label>
+            <label class="input-label">启用状态</label>
             <div class="flex items-center gap-3">
               <Toggle v-model="editDraft.enabled" />
               <span class="text-sm text-gray-600 dark:text-gray-300">{{ editDraft.enabled ? '已启用' : '已停用' }}</span>
             </div>
           </div>
-          <label class="input-label">时间窗口（秒）<input v-model.number="editDraft.windowSeconds" type="number" min="1" class="input mt-1.5 w-full" /></label>
-          <label class="input-label">触发阈值（次）<input v-model.number="editDraft.threshold" type="number" min="1" class="input mt-1.5 w-full" data-testid="rule-threshold" /></label>
-          <label class="input-label">风险分<input v-model.number="editDraft.score" type="number" min="0" max="100" class="input mt-1.5 w-full" /></label>
-          <div><label class="input-label mb-1.5 block">风险等级</label><Select v-model="editDraft.riskLevel" :options="riskLevelOptions" /></div>
-          <div><label class="input-label mb-1.5 block">处置动作</label><Select v-model="editDraft.action" data-testid="rule-action" :options="ruleActionOptions" /></div>
+          <div><label class="input-label">时间窗口（秒）</label><input v-model.number="editDraft.windowSeconds" type="number" min="1" class="input w-full" /></div>
+          <div><label class="input-label">触发阈值（次）</label><input v-model.number="editDraft.threshold" type="number" min="1" class="input w-full" data-testid="rule-threshold" /></div>
+          <div><label class="input-label">风险分</label><input v-model.number="editDraft.score" type="number" min="0" max="100" class="input w-full" /></div>
+          <div><label class="input-label">风险等级</label><Select v-model="editDraft.riskLevel" :options="riskLevelOptions" /></div>
+          <div><label class="input-label">处置动作</label><Select v-model="editDraft.action" data-testid="rule-action" :options="ruleActionOptions" /></div>
         </div>
         <div v-if="testResult && testedId === editDraft.id" class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-200" data-testid="rule-test-result">
           {{ testResult.matched ? '命中' : '未命中' }} · 风险分 {{ testResult.score }} · {{ formatRiskLevel(testResult.riskLevel) }} · {{ formatRiskAction(testResult.action) }}
@@ -142,17 +159,17 @@
         <button v-if="editDraft" type="button" class="btn btn-primary" data-testid="save-rule" :disabled="saving" @click="save(editDraft)">{{ saving ? t('common.saving') : t('common.save') }}</button>
       </template>
     </BaseDialog>
-  </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
+import UserRiskControlTabs from '@/views/admin/extensions/UserRiskControlTabs.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import Input from '@/components/common/Input.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -178,14 +195,27 @@ const conflictRuleId = ref<number | null>(null)
 const testResult = ref<{ matched: boolean; score: number; riskLevel: string; action: string; conditions: string[] } | null>(null)
 const testedId = ref<number | null>(null)
 const columns: Column[] = [
-  { key: 'rule', label: '规则', class: 'min-w-72' },
-  { key: 'eventTypes', label: '事件类型', class: 'min-w-32' },
-  { key: 'enabled', label: '状态', class: 'min-w-24' },
-  { key: 'condition', label: '触发条件', class: 'min-w-36' },
-  { key: 'risk', label: '风险', class: 'min-w-32' },
-  { key: 'action', label: '处置动作', class: 'min-w-28' },
-  { key: 'actions', label: '操作', class: 'min-w-20 text-right' },
+  { key: 'rule', label: '规则', sortable: true },
+  { key: 'eventTypes', label: '事件类型' },
+  { key: 'enabled', label: '状态', sortable: true },
+  { key: 'condition', label: '触发条件', sortable: true },
+  { key: 'risk', label: '风险', sortable: true },
+  { key: 'action', label: '处置动作', sortable: true },
+  { key: 'actions', label: '操作', class: 'text-right' },
 ]
+const ruleSearch = ref('')
+const enabledFilter = ref('')
+const levelFilter = ref('')
+const enabledFilterOptions = [{ value: '', label: '全部启用状态' }, { value: 'enabled', label: '已启用' }, { value: 'disabled', label: '已停用' }]
+const levelFilterOptions = [{ value: '', label: '全部风险等级' }, ...riskLevelOptions]
+const filteredRules = computed(() => {
+  const search = ruleSearch.value.trim().toLocaleLowerCase()
+  return rules.value
+    .filter((rule) => !search || [rule.name, rule.code, rule.description, ...(rule.eventTypes || [])].some((value) => String(value || '').toLocaleLowerCase().includes(search)))
+    .filter((rule) => enabledFilter.value === 'enabled' ? rule.enabled : enabledFilter.value === 'disabled' ? !rule.enabled : true)
+    .filter((rule) => !levelFilter.value || rule.riskLevel === levelFilter.value)
+    .map((rule) => ({ ...rule, rule: rule.name || rule.code, condition: rule.threshold, risk: rule.score }))
+})
 const ruleActionOptions = riskActionOptions.filter((option) => ['observe', 'review', 'ban', 'reject_candidate', 'auto_ban'].includes(option.value))
 const ruleTemplates: RuleCreateInput[] = [
   { code: 'registration_abuse', name: '注册滥用', description: '短时间内重复注册或命中注册风险信号', eventTypes: ['registration_attempt'], enabled: true, windowSeconds: 600, threshold: 3, score: 80, riskLevel: 'critical', action: 'reject_candidate' },
