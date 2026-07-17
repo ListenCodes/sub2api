@@ -1,6 +1,6 @@
-import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { ref } from 'vue'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlAuditView from '@/views/admin/UserRiskControlAuditView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import Pagination from '@/components/common/Pagination.vue'
@@ -11,6 +11,8 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 vi.mock('@/api/admin/userRiskControlV2', () => ({ userRiskControlV2API: { listAudit: vi.fn() } }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key, locale: ref('zh') }) }))
 enableAutoUnmount(afterEach)
+beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
+afterAll(() => { delete config.global.stubs.RouterLink })
 beforeEach(() => window.localStorage.clear())
 afterEach(() => {
   vi.useRealTimers()
@@ -135,10 +137,10 @@ describe('UserRiskControlAuditView', () => {
     actorSearch.vm.$emit('update:modelValue', '11')
     actorSearch.vm.$emit('search', '11')
     wrapper.findComponent(DateRangePicker).vm.$emit('change', { startDate: '2026-07-01', endDate: '2026-07-14', preset: null })
-    await wrapper.get('[data-testid="audit-sort-time"]').trigger('click')
-    await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ actor: '11', from: '2026-07-01', sortBy: 'created_at', sortOrder: 'desc' }))
-    await wrapper.get('[data-testid="audit-sort-time"]').trigger('click')
+    const table = wrapper.findComponent(DataTable)
+    expect(table.props('serverSideSort')).toBe(true)
+    expect(table.props('columns')).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'time', sortable: true })]))
+    table.vm.$emit('sort', 'time', 'asc')
     await flushPromises()
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'created_at', sortOrder: 'asc' }))
   })

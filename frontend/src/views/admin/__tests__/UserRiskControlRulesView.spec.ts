@@ -1,11 +1,12 @@
-import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import UserRiskControlRulesView from '@/views/admin/UserRiskControlRulesView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 
 vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
@@ -17,6 +18,8 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({
 }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
 enableAutoUnmount(afterEach)
+beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
+afterAll(() => { delete config.global.stubs.RouterLink })
 afterEach(() => vi.clearAllMocks())
 
 function bodyElement<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -173,8 +176,53 @@ describe('UserRiskControlRulesView', () => {
     await wrapper.findComponent(BaseDialog).vm.$emit('close')
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
 
-    const codeInput = bodyElement('[data-testid="rule-code-input"]').querySelector<HTMLInputElement>('input')
+    const codeTarget = bodyElement('[data-testid="rule-code-input"]')
+    const codeInput = codeTarget.matches('input') ? codeTarget as HTMLInputElement : codeTarget.querySelector<HTMLInputElement>('input')
     expect(codeInput?.value).toBe('registration_abuse')
     expect(bodyElement('[data-testid="template-registration_abuse"]').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('filters the complete rule list locally by text, enabled state, and risk level', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([
+      { id: 1, code: 'login_failure', name: 'Login burst', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 },
+      { id: 2, code: 'quota_watch', name: 'Quota watch', enabled: false, windowSeconds: 600, threshold: 8, score: 30, riskLevel: 'low', action: 'observe', revision: 1 },
+    ])
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.findComponent(SearchInput).exists()).toBe(true)
+    wrapper.getComponent('[data-testid="rule-search"]').vm.$emit('update:modelValue', 'quota_watch')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('Quota watch')
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).not.toContain('Login burst')
+
+    wrapper.getComponent('[data-testid="rule-search"]').vm.$emit('update:modelValue', '')
+    wrapper.getComponent('[data-testid="rule-enabled-filter"]').vm.$emit('update:modelValue', 'enabled')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('Login burst')
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).not.toContain('Quota watch')
+
+    wrapper.getComponent('[data-testid="rule-enabled-filter"]').vm.$emit('update:modelValue', '')
+    wrapper.getComponent('[data-testid="rule-level-filter"]').vm.$emit('update:modelValue', 'low')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('Quota watch')
+    expect(userRiskControlV2API.listRules).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses DataTable client sorting with real derived values', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([
+      { id: 1, code: 'high_rule', name: 'High rule', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 1 },
+      { id: 2, code: 'low_rule', name: 'Low rule', enabled: true, windowSeconds: 300, threshold: 1, score: 20, riskLevel: 'low', action: 'observe', revision: 1 },
+    ])
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    const table = wrapper.findComponent(DataTable)
+    expect(table.props('serverSideSort')).toBe(false)
+    expect(table.props('columns')).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'risk', sortable: true })]))
+    expect(table.props('data')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 1, risk: 80 }),
+      expect.objectContaining({ id: 2, risk: 20 }),
+    ]))
   })
 })

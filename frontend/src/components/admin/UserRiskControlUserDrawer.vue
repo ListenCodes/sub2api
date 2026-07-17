@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="user" class="fixed inset-0 z-[70] flex justify-end bg-gray-950/30" data-testid="risk-user-drawer" @click.self="emit('close')">
-      <aside class="flex h-full w-full max-w-xl flex-col overflow-hidden bg-white shadow-2xl dark:bg-dark-900" role="dialog" aria-modal="true">
+      <aside class="flex h-full w-full max-w-xl flex-col overflow-hidden bg-white shadow-2xl dark:bg-dark-800" role="dialog" aria-modal="true">
         <header class="flex items-start justify-between border-b border-gray-200 px-5 py-4 dark:border-dark-700">
           <div>
             <p class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.drawer.title') }}</p>
@@ -12,8 +12,8 @@
         </header>
 
         <div class="flex-1 overflow-y-auto p-5">
-          <div v-if="loading" class="py-12 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</div>
-          <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>
+          <div v-if="loading" class="space-y-4" data-testid="risk-user-detail-skeleton" role="status" :aria-label="t('common.loading')"><div class="grid grid-cols-2 gap-3"><span v-for="index in 4" :key="index" class="h-20 animate-pulse rounded-lg bg-gray-100 dark:bg-dark-800" /></div><div v-for="index in 4" :key="`row-${index}`" class="h-14 animate-pulse rounded-lg bg-gray-100 dark:bg-dark-800" /></div>
+          <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-700/40 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
           <template v-else-if="detail">
             <section class="grid grid-cols-2 gap-3">
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800"><p class="text-xs text-gray-500">{{ t('admin.userRiskControl.drawer.riskScore') }}</p><RiskScoreBadge class="mt-1" :score="detail.summary?.score ?? user.risk_score" :available="(detail.summary?.score ?? user.risk_score) !== null && (detail.summary?.score ?? user.risk_score) !== undefined && Boolean(detail.summary?.level || user.risk_level)" :explicit-level="detail.summary?.level || user.risk_level" /></div>
@@ -58,12 +58,21 @@
         </footer>
       </aside>
     </div>
-    <BaseDialog :show="confirming" :title="detail?.user?.status === 'active' ? t('admin.userRiskControl.confirmBan') : t('admin.userRiskControl.confirmUnban')" width="narrow" :close-on-click-outside="true" :z-index="80" @close="closeConfirmation">
+    <ConfirmDialog
+      :show="confirming"
+      :title="detail?.user?.status === 'active' ? t('admin.userRiskControl.confirmBan') : t('admin.userRiskControl.confirmUnban')"
+      :message="t('admin.userRiskControl.statusChangeMessage')"
+      :danger="detail?.user?.status === 'active'"
+      :confirm-text="saving ? t('common.saving') : t('common.confirm')"
+      :close-on-click-outside="true"
+      :z-index="80"
+      @confirm="submitStatus"
+      @cancel="closeConfirmation"
+    >
       <div data-testid="status-confirmation">
         <TextArea v-model="reason" data-testid="status-reason" label="操作原因" required :placeholder="t('admin.userRiskControl.reasonPlaceholder')" :error="validationError" @update:model-value="validationError = ''" />
       </div>
-      <template #footer><button type="button" class="btn btn-secondary" @click="closeConfirmation">{{ t('common.cancel') }}</button><button type="button" class="btn" :class="detail?.user?.status === 'active' ? 'btn-danger' : 'btn-primary'" data-testid="confirm-status-action" :disabled="saving" @click="submitStatus">{{ saving ? t('common.saving') : t('common.confirm') }}</button></template>
-    </BaseDialog>
+    </ConfirmDialog>
   </Teleport>
 </template>
 
@@ -71,7 +80,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
-import BaseDialog from '@/components/common/BaseDialog.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import { userRiskControlV2API, type RiskUserDetail, type RiskUserRow } from '@/api/admin/userRiskControlV2'
 import RiskScoreBadge from '@/components/admin/RiskScoreBadge.vue'
@@ -95,7 +104,7 @@ async function load() {
   try { detail.value = await userRiskControlV2API.getUserDetail(props.user.id) } catch (err) { error.value = errorMessage(err, t('admin.userRiskControl.loadFailed')) } finally { loading.value = false }
 }
 async function submitStatus() {
-  if (!detail.value) return
+  if (!detail.value || saving.value) return
   if (!reason.value.trim()) {
     validationError.value = t('admin.userRiskControl.reasonRequired')
     return

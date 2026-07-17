@@ -1,20 +1,19 @@
 <template>
-  <div class="space-y-4" data-testid="account-monitor-overview">
-    <div v-if="quality?.stale_data_warning" class="border-y border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300" role="alert">
+  <div class="space-y-2" data-testid="account-monitor-overview">
+    <div v-if="quality?.stale_data_warning" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-300" role="alert">
       {{ quality.stale_data_warning }}；已保留最近成功数据。
     </div>
     <div class="grid grid-cols-2 border-y border-gray-200 dark:border-dark-700 sm:grid-cols-4 xl:grid-cols-8">
-      <div v-for="metric in metrics" :key="metric.label" class="min-w-0 border-b border-r border-gray-200 px-3 py-3 last:border-r-0 dark:border-dark-700 sm:[&:nth-last-child(-n+4)]:border-b-0 xl:border-b-0">
+      <div v-for="metric in metrics" :key="metric.label" class="min-w-0 border-b border-r border-gray-200 px-3 py-2 last:border-r-0 dark:border-dark-700 sm:[&:nth-last-child(-n+4)]:border-b-0 xl:border-b-0">
         <p class="truncate text-xs text-gray-500 dark:text-gray-400">{{ metric.label }}</p>
-        <p class="mt-1 truncate text-lg font-semibold tabular-nums text-gray-950 dark:text-white" :title="metric.value">{{ metric.value }}</p>
-        <p class="mt-0.5 truncate text-xs text-gray-400" :title="metric.detail">{{ metric.detail }}</p>
+        <p class="mt-0.5 truncate text-base font-semibold tabular-nums text-gray-900 dark:text-white" :title="metric.value">{{ metric.value }}</p>
+        <p class="truncate text-xs text-gray-400 dark:text-gray-500" :title="metric.detail">{{ metric.detail }}</p>
       </div>
     </div>
-    <div class="flex flex-col gap-3 border-b border-gray-200 pb-4 dark:border-dark-700 lg:flex-row lg:items-start lg:justify-between">
-      <p class="text-xs text-gray-500 dark:text-gray-400">{{ syncText }}</p>
-      <div class="min-w-0">
-        <p class="text-xs font-semibold uppercase text-gray-500">数据质量</p>
-        <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-gray-200 pb-2 text-xs dark:border-dark-700">
+      <p class="text-gray-500 dark:text-gray-400">{{ syncText }}</p>
+      <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-gray-600 dark:text-gray-300">
+        <span class="font-semibold text-gray-700 dark:text-gray-200">数据质量</span>
           <span>主库 {{ quality?.source_connected ? '正常' : '不可用' }}</span>
           <span>错误归属 {{ quality?.error_attribution_rate == null ? '暂无' : percent(quality.error_attribution_rate) }}</span>
           <span>精确/估算最终模型 {{ number(quality?.exact_model_requests) }}/{{ number(quality?.estimated_model_requests) }}</span>
@@ -23,7 +22,6 @@
           <span>错误游标 {{ number(quality?.error_cursor.cursor_id) }}</span>
           <span>{{ historyText }}</span>
           <span>{{ quality?.data_source || '数据源未知' }}</span>
-        </div>
       </div>
     </div>
   </div>

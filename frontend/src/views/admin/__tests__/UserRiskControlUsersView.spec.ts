@@ -1,9 +1,10 @@
-import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import UserRiskControlUsersView from '@/views/admin/UserRiskControlUsersView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -23,6 +24,8 @@ vi.mock('vue-i18n', async (importOriginal) => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 enableAutoUnmount(afterEach)
+beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
+afterAll(() => { delete config.global.stubs.RouterLink })
 afterEach(() => {
   vi.useRealTimers()
   vi.clearAllMocks()
@@ -104,8 +107,9 @@ describe('UserRiskControlUsersView', () => {
 
     expect(wrapper.get('[data-testid="account-primary-7"]').text()).toBe('alice@example.com')
     expect(wrapper.get('[data-testid="account-secondary-7"]').text()).toBe('Alice')
+    expect(wrapper.get('[data-testid="user-row-7"]').classes()).toEqual(expect.arrayContaining(['max-w-[50vw]', 'sm:max-w-none']))
     expect(wrapper.get('[data-testid="risk-users-table"]').classes()).toContain('w-full')
-    expect(wrapper.findComponent(DataTable).props('stickyFirstColumn')).toBe(false)
+    expect(wrapper.findComponent(DataTable).props('stickyFirstColumn')).toBe(true)
   })
 
   it('resets to the first page when the page size changes', async () => {
@@ -155,10 +159,11 @@ describe('UserRiskControlUsersView', () => {
     expect(document.body.textContent).toContain('admin.userRiskControl.drawer.title')
     await (document.querySelector('[data-testid="ban-user"]') as HTMLElement).click()
     expect(document.body.textContent).toContain('admin.userRiskControl.confirmBan')
-    expect(wrapper.findAllComponents(BaseDialog).some((dialog) => dialog.props('show') && dialog.props('closeOnClickOutside'))).toBe(true)
+    expect(document.body.textContent).toContain('admin.userRiskControl.statusChangeMessage')
+    expect(wrapper.findComponent(ConfirmDialog).props('show')).toBe(true)
     expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
 
-    ;(document.querySelector('[data-testid="confirm-status-action"]') as HTMLElement).click()
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
     expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('admin.userRiskControl.reasonRequired')
@@ -166,7 +171,7 @@ describe('UserRiskControlUsersView', () => {
     const statusReason = document.querySelector('[data-testid="status-reason"] textarea') as HTMLTextAreaElement
     statusReason.value = 'Repeated login failures'
     statusReason.dispatchEvent(new Event('input', { bubbles: true }))
-    ;(document.querySelector('[data-testid="confirm-status-action"]') as HTMLElement).click()
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
     expect(userRiskControlV2API.setUserStatus).toHaveBeenCalledWith(7, 'disabled', expect.any(String))
   })
@@ -228,11 +233,21 @@ describe('UserRiskControlUsersView', () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 1, username: 'Sort me', email: 'sort@example.com', status: 'active' }], total: 1, page: 1, page_size: 20 })
     const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
-    await wrapper.get('[data-testid="sort-risk-score"]').trigger('click')
-    await flushPromises()
-    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'risk_score', sortOrder: 'desc' }))
-    await wrapper.get('[data-testid="sort-risk-score"]').trigger('click')
+    const table = wrapper.findComponent(DataTable)
+    expect(table.props('serverSideSort')).toBe(true)
+    expect(table.props('columns')).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'riskScore', sortable: true })]))
+    table.vm.$emit('sort', 'riskScore', 'asc')
     await flushPromises()
     expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'risk_score', sortOrder: 'asc' }))
+  })
+
+  it('keeps pagination fixed and places the batch bar inside the table area', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', status: 'active' }], total: 0, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.findComponent(TablePageLayout).vm.$slots.pagination).toBeTruthy()
+    await wrapper.get('[data-testid="user-select-7"]').setValue(true)
+    expect(wrapper.get('.layout-section-scrollable [data-testid="batch-action-bar"]').exists()).toBe(true)
   })
 })

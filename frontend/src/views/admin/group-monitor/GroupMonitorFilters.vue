@@ -1,11 +1,11 @@
 <template>
-  <section class="flex flex-wrap items-center gap-3 border-y border-gray-200 py-3 dark:border-dark-700">
-		<label class="flex w-full flex-col gap-1 sm:w-56"><span class="text-xs text-gray-500" data-testid="group-filter-query-label">分组名称</span><SearchInput :model-value="draft.query" class="w-full" data-testid="group-query" placeholder="输入分组名称" @update:model-value="updateQuery" @search="runNow" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-40"><span class="text-xs text-gray-500" data-testid="group-filter-platform-label">平台</span><Select v-model="draft.platform" class="w-full" data-testid="group-platform" :options="platformOptions" @update:model-value="runNow" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-36"><span class="text-xs text-gray-500" data-testid="group-filter-status-label">分组状态</span><Select v-model="draft.groupStatus" class="w-full" data-testid="group-status" :options="groupStatusOptions" @update:model-value="runNow" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-40"><span class="text-xs text-gray-500" data-testid="group-filter-call-status-label">调用状态</span><Select :model-value="draft.callStatus || ''" class="w-full" data-testid="group-call-status" :options="callStatusOptions" @update:model-value="updateCallStatus" /></label>
-		<label class="flex w-full flex-col gap-1 sm:w-36"><span class="text-xs text-gray-500" data-testid="group-filter-range-label">时间范围</span><Select v-model="draft.range" class="w-full" data-testid="group-range" :options="rangeOptions" @update:model-value="runNow" /></label>
-    <button type="button" class="btn btn-ghost" @click="$emit('reset')"><Icon name="x" size="sm" />重置</button>
+  <section class="flex flex-wrap items-center gap-3">
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="group-filter-query-label">分组名称</span><SearchInput :model-value="draft.query" class="w-full sm:w-56" data-testid="group-query" placeholder="输入分组名称" @update:model-value="updateQuery" @search="runNow" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="group-filter-platform-label">平台</span><Select v-model="draft.platform" class="w-full sm:w-40" data-testid="group-platform" :options="platformOptions" @update:model-value="runNow" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="group-filter-status-label">分组状态</span><Select v-model="draft.groupStatus" class="w-full sm:w-36" data-testid="group-status" :options="groupStatusOptions" @update:model-value="runNow" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="group-filter-call-status-label">调用状态</span><Select :model-value="draft.callStatus || ''" class="w-full sm:w-40" data-testid="group-call-status" :options="callStatusOptions" @update:model-value="updateCallStatus" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="group-filter-range-label">时间范围</span><Select v-model="draft.range" class="w-full sm:w-36" data-testid="group-range" :options="rangeOptions" @update:model-value="runNow" /></label>
+    <button type="button" class="btn btn-ghost btn-icon" title="重置筛选" aria-label="重置筛选" @click="$emit('reset')"><Icon name="x" size="sm" /></button>
   </section>
 </template>
 <script setup lang="ts">

@@ -6,6 +6,7 @@ import { accountMonitorAPI } from '@/api/admin/accountMonitor'
 import AccountMonitorPanel from '@/views/admin/account-monitor/AccountMonitorPanel.vue'
 import AccountMonitorDrawer from '@/views/admin/account-monitor/AccountMonitorDrawer.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import DataTable from '@/components/common/DataTable.vue'
 
 vi.mock('@/api/admin/accountMonitor', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/api/admin/accountMonitor')>()
@@ -125,6 +126,7 @@ describe('AccountMonitorPanel', () => {
 		expect(wrapper.text()).toContain('Idle Grok')
 		expect(wrapper.text()).toContain('GPT Pro')
 		expect(wrapper.text()).toContain('Shared Pool')
+		expect(wrapper.get('[data-testid="account-row-42"]').classes()).toEqual(expect.arrayContaining(['max-w-[50vw]', 'sm:max-w-none']))
 		expect(wrapper.get('[data-testid="account-group-11"]').text()).toBe('GPT Pro · 1.5x')
 		expect(wrapper.get('[data-testid="account-group-12"]').text()).toBe('Shared Pool · 2x')
 		expect(wrapper.get('[data-testid="account-group-11"]').find('[data-platform]').exists()).toBe(false)
@@ -158,9 +160,12 @@ describe('AccountMonitorPanel', () => {
     await flushPromises()
     expect(document.body.textContent).toContain('Primary OpenAI')
 
-    await wrapper.get('[data-testid="sort-risk-score"]').trigger('click')
+    const table = wrapper.findComponent(DataTable)
+    expect(table.props('serverSideSort')).toBe(true)
+    expect(table.props('columns')).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'risk', sortable: true })]))
+    table.vm.$emit('sort', 'risk', 'asc')
     await flushPromises()
-    expect(accountMonitorAPI.listAccounts).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'risk_score', sortOrder: 'desc' }))
+    expect(accountMonitorAPI.listAccounts).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'risk_score', sortOrder: 'asc' }))
 
     await wrapper.get('[data-testid="account-monitor-refresh"]').trigger('click')
     await flushPromises()

@@ -32,6 +32,19 @@ describe('user risk control routes', () => {
     expect(router.resolve(path).matched.at(-1)?.path).toBe(path)
   })
 
+  it.each([
+    ['/admin/extensions/user-risk/users', 'admin.userRiskControl.usersTitle', 'admin.userRiskControl.usersDescription'],
+    ['/admin/extensions/user-risk/rules', 'admin.userRiskControl.rulesTitle', 'admin.userRiskControl.rulesDescription'],
+    ['/admin/extensions/user-risk/audit', 'admin.userRiskControl.auditPageTitle', 'admin.userRiskControl.auditPageDescription'],
+    ['/admin/extensions/account-monitor', 'admin.accountMonitor.title', 'admin.accountMonitor.description'],
+    ['/admin/extensions/group-monitor', 'admin.accountMonitor.groupTitle', 'admin.accountMonitor.groupDescription'],
+  ])('uses localized title metadata for %s', (path, titleKey, descriptionKey) => {
+    const meta = router.resolve(path).matched.at(-1)?.meta
+    expect(meta?.titleKey).toBe(titleKey)
+    expect(meta?.descriptionKey).toBe(descriptionKey)
+    expect(meta?.title).toBeUndefined()
+  })
+
   it('renders extensions center as an expandable sidebar group with three native entries', () => {
     const source = readFileSync(resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf8')
     const center = readFileSync(resolve(__dirname, '../../views/admin/ExtensionsCenterView.vue'), 'utf8')

@@ -1,7 +1,7 @@
 <template>
   <BaseDialog :show="show" title="异常阈值" width="narrow" :close-on-click-outside="false" @close="$emit('close')">
-    <label class="input-label">最低成功率（%）<input v-model.number="successRate" data-testid="threshold-success-rate" type="number" min="0.1" max="100" step="0.1" class="input mt-2 w-full" /></label>
-    <p v-if="error" class="mt-3 text-sm text-red-600" role="alert">{{ error }}</p>
+    <label for="threshold-success-rate" class="input-label">最低成功率（%）</label><input id="threshold-success-rate" v-model.number="successRate" data-testid="threshold-success-rate" type="number" min="0.1" max="100" step="0.1" class="input w-full" />
+    <p v-if="error" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ error }}</p>
     <template #footer><button type="button" class="btn btn-secondary" @click="$emit('close')">取消</button><button type="button" class="btn btn-primary" data-testid="threshold-save" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存' }}</button></template>
   </BaseDialog>
 </template>
