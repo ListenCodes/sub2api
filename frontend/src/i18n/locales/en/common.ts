@@ -191,6 +191,9 @@ export default {
     accountMonitor: 'Account Monitor',
     channelStatus: 'Channel Status',
     riskControl: 'Risk Control',
+    securityAudit: 'Security Audit',
+    contentModeration: 'Content Moderation',
+    promptAudit: 'Prompt Audit',
     auditLogs: 'Audit Logs',
     securityRiskControl: 'Security & Risk',
     userRiskControl: 'User Risk Control',
@@ -200,7 +203,6 @@ export default {
     riskScenarios: 'Scenarios & Rules',
     riskLists: 'Risk Lists',
     riskAudit: 'Audit Log',
-    contentModeration: 'Content Moderation',
   },
 
   // Auth

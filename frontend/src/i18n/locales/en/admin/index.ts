@@ -7,6 +7,7 @@ import settings from './settings'
 import audit from './audit'
 import userRiskControl from './userRiskControl'
 import accountMonitor from './accountMonitor'
+import promptAudit from './promptAudit'
 
 export default {
   ...overview,
@@ -18,4 +19,5 @@ export default {
   ...audit,
   ...userRiskControl,
   ...accountMonitor,
+  ...promptAudit,
 }
