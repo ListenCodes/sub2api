@@ -3,6 +3,11 @@
 This runbook defines how to change and publish Sub2API and its unified custom
 extensions service.
 
+Start with `docs/SUB2API-CUSTOM-OPERATIONS.md` for the Chinese project overview,
+automation boundary, standard custom-code workflow, expected timing, and report
+template. This runbook remains authoritative for production execution and
+rollback details.
+
 ## Release Units
 
 | Unit | Source | Runtime image | Production path |
@@ -135,8 +140,8 @@ process serves signed risk/account-monitor APIs and the static `/homepage/` rout
 The browser reaches them only through same-origin main application proxies:
 
 ```text
-https://sub.ailisten.top/api/v1/extensions-self/homepage/
-https://sub.ailisten.top/api/v1/admin/extensions-self/account-monitor/data-quality
+/api/v1/extensions-self/homepage/
+/api/v1/admin/extensions-self/account-monitor/data-quality
 ```
 
 `risk-control-postgres` and `risk_control_postgres_data` remain independent and

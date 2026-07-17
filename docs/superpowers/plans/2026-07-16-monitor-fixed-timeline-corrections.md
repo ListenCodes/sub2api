@@ -332,7 +332,7 @@ force or reset, rerun merge-sensitive tests, and push `origin/custom`.
 
 - [ ] **Step 6: Back up and publish using the approved production path**
 
-Use `ssh-skill` for every operation on `US-RN-66`. Confirm no parallel publish,
+Use `ssh-skill` for every operation on the production host resolved from the external inventory. Confirm no parallel publish,
 verify `/root/sub2api` is clean, verify `origin/custom` equals the approved merge
 commit, validate Compose, and then run exactly:
 

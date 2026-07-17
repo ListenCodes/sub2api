@@ -41,8 +41,8 @@ this migration because it would create unrelated code churn.
 The main application exposes a narrow public proxy at
 `/api/v1/extensions-self/homepage/`. It permits only `GET` and `HEAD`, forwards
 only the homepage path, applies a response-size limit, and does not expose any
-risk-control API. The configured iframe URL is therefore
-`https://sub.ailisten.top/api/v1/extensions-self/homepage/`.
+risk-control API. The configured iframe URL therefore uses the current public
+origin plus `/api/v1/extensions-self/homepage/`.
 
 ## Homepage Migration
 

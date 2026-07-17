@@ -139,6 +139,7 @@ docs/*
 !docs/EXTENSIONS-SELF-ARCHITECTURE.md
 !docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md
 !docs/ACCOUNT-MONITOR-CHECKLIST.md
+!docs/SUB2API-CUSTOM-OPERATIONS.md
 !docs/legal/
 !docs/legal/*.md
 .serena/

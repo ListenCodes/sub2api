@@ -209,6 +209,10 @@ each job, stops on the first failure, and records results in the release backup:
 
 ### Custom fork update and release
 
+For the complete Chinese project overview and repeatable release procedure,
+read `docs/SUB2API-CUSTOM-OPERATIONS.md`. The section below is the compact
+deployment contract.
+
 The only production path for this fork is:
 
 ```text

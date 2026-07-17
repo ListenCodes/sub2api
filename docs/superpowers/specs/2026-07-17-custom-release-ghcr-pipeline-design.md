@@ -4,7 +4,7 @@
 
 Approved implementation direction from the release architecture objective. This
 document defines the end-to-end path from an administrator update request to a
-verified, digest-pinned production release on US-RN-66.
+verified, digest-pinned release on the active production host.
 
 ## Problem
 
@@ -76,7 +76,7 @@ The two packages are made public once through the GitHub package API using a
 local administrative credential. No GitHub credential is installed on the VPS
 for GHCR; production pulls anonymously.
 
-### US-RN-66 Host Orchestrator
+### Host Orchestrator
 
 The host owns release integration, candidate promotion, backups, deployment,
 and rollback. This is required because Actions has `contents: read` and cannot

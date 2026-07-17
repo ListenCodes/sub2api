@@ -1,7 +1,11 @@
 # Release Operations
 
 These files are the versioned source for `/opt/sub2api-custom/` and the host
-systemd units that publish Sub2API on US-RN-66.
+systemd units that publish Sub2API in the active production environment.
+
+The operator-facing project and custom-release workflow is documented in
+`docs/SUB2API-CUSTOM-OPERATIONS.md`. This file defines the narrower ownership
+and safety contract of the host scripts.
 
 ## Production Path
 
