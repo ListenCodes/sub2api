@@ -5,6 +5,13 @@ on:
     branches:
       - custom-release
       - 'integration/release-*'
+    paths-ignore:
+      - '*.md'
+      - '**/*.md'
+      - 'AGENTS.md'
+      - '**/AGENTS.md'
+      - '.gitignore'
+      - '**/.gitignore'
   workflow_dispatch:
 
 permissions:

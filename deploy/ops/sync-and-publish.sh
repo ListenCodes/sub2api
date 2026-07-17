@@ -7,6 +7,7 @@ STATE_HELPER="${SUB2API_RELEASE_STATE_HELPER:-$SCRIPT_DIR/release-state.sh}"
 SYNC_SCRIPT="${SUB2API_SYNC_SCRIPT:-$SCRIPT_DIR/sync-upstream.sh}"
 WAIT_ACTIONS_SCRIPT="${SUB2API_WAIT_ACTIONS_SCRIPT:-$SCRIPT_DIR/wait-for-actions.sh}"
 VERIFY_IMAGES_SCRIPT="${SUB2API_VERIFY_IMAGES_SCRIPT:-$SCRIPT_DIR/verify-release-images.sh}"
+SCOPE_SCRIPT="${SUB2API_SCOPE_SCRIPT:-$SCRIPT_DIR/classify-release-scope.sh}"
 PROMOTE_SCRIPT="${SUB2API_PROMOTE_SCRIPT:-$SCRIPT_DIR/promote-release.sh}"
 PUBLISH_SCRIPT="${SUB2API_PUBLISH_SCRIPT:-$SCRIPT_DIR/publish-custom.sh}"
 LOCK_FILE="${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-release.lock}"
@@ -87,6 +88,12 @@ parse_images_output() {
   [[ "$EXTENSIONS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
 }
 
+parse_scope_output() {
+  local output="$1"
+  [[ "$output" == docs_only=true || "$output" == docs_only=false ]] || return 1
+  DOCS_ONLY="${output#docs_only=}"
+}
+
 cleanup() {
   [[ -z "$TRIGGER_CLAIM" ]] || rm -f "$TRIGGER_CLAIM"
 }
@@ -103,7 +110,7 @@ export SUB2API_JOB_ID="$JOB_ID"
 
 trap 'on_error "$LINENO"' ERR
 
-for script in "$SYNC_SCRIPT" "$WAIT_ACTIONS_SCRIPT" "$VERIFY_IMAGES_SCRIPT" "$PROMOTE_SCRIPT" "$PUBLISH_SCRIPT"; do
+for script in "$SYNC_SCRIPT" "$SCOPE_SCRIPT" "$WAIT_ACTIONS_SCRIPT" "$VERIFY_IMAGES_SCRIPT" "$PROMOTE_SCRIPT" "$PUBLISH_SCRIPT"; do
   [[ -x "$script" ]] || fail_run "required release script is not executable: $script" RELEASE_SCRIPT_MISSING
 done
 
@@ -135,6 +142,21 @@ if [[ "$TARGET_COMMIT" == "$production_commit" ]]; then
   message="Already current: commit=$TARGET_COMMIT release=$RELEASE_TAG"
   release_job_update "$JOB_ID" success "$message" '{"published":false,"production_changed":false}'
   log "$message"
+  exit 0
+fi
+
+scope_base="$production_commit"
+if [[ ! "$scope_base" =~ ^[0-9a-f]{40}$ ]]; then
+  scope_base="$BASE_COMMIT"
+fi
+scope_output="$($SCOPE_SCRIPT "$scope_base" "$TARGET_COMMIT")" \
+  || fail_run 'release scope classification failed' SCOPE_CLASSIFICATION_FAILED
+parse_scope_output "$scope_output" \
+  || fail_run 'release scope classifier returned invalid evidence' SCOPE_EVIDENCE_INVALID
+if [[ "$DOCS_ONLY" == true ]]; then
+  docs_metadata="$(jq -n '{docs_only:true,published:false,production_changed:false}')"
+  release_job_update "$JOB_ID" success "Documentation-only commit $TARGET_COMMIT; production unchanged" "$docs_metadata"
+  log "Documentation-only release job $JOB_ID completed without Actions, GHCR verification, or publication"
   exit 0
 fi
 

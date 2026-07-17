@@ -170,7 +170,7 @@ case "$PIPELINE_SCENARIO" in
   no-change)
     metadata="$(jq -n --arg base "$TARGET_COMMIT" --arg target "$TARGET_COMMIT" '{base_commit:$base,target_commit:$target,release_tag:"v0.1.158",release_commit:"26abd19a2812edba02bbef93c3e2a620141cc257",release_published_at:"2026-07-16T12:37:06Z",integration_branch:""}')"
     ;;
-  custom|publisher-failure)
+  custom|docs-only|publisher-failure)
     metadata="$(jq -n --arg base "$TARGET_COMMIT" --arg target "$TARGET_COMMIT" '{base_commit:$base,target_commit:$target,release_tag:"v0.1.158",release_commit:"26abd19a2812edba02bbef93c3e2a620141cc257",release_published_at:"2026-07-16T12:37:06Z",integration_branch:""}')"
     ;;
   release|base-race)
@@ -185,6 +185,15 @@ cat > "$FAKE_BIN/wait.sh" <<'SH'
 set -Eeuo pipefail
 printf 'wait %s\n' "$1" >> "$PIPELINE_CALLS"
 printf 'workflow_url=https://github.example/actions/%s\n' "$1"
+SH
+cat > "$FAKE_BIN/scope.sh" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$PIPELINE_SCENARIO" == docs-only ]]; then
+  printf 'docs_only=true\n'
+else
+  printf 'docs_only=false\n'
+fi
 SH
 cat > "$FAKE_BIN/verify.sh" <<'SH'
 #!/usr/bin/env bash
@@ -245,6 +254,7 @@ run_scenario() {
   SUB2API_JOB_ID="$job_id" \
   SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" \
   SUB2API_SYNC_SCRIPT="$FAKE_BIN/sync.sh" \
+  SUB2API_SCOPE_SCRIPT="$FAKE_BIN/scope.sh" \
   SUB2API_WAIT_ACTIONS_SCRIPT="$FAKE_BIN/wait.sh" \
   SUB2API_VERIFY_IMAGES_SCRIPT="$FAKE_BIN/verify.sh" \
   SUB2API_PROMOTE_SCRIPT="$FAKE_BIN/promote.sh" \
@@ -272,6 +282,13 @@ grep -q '^wait ' "$SCENARIO_DIR/calls" || fail 'custom commit did not wait for A
 grep -q '^verify ' "$SCENARIO_DIR/calls" || fail 'custom commit did not verify images'
 grep -q '^publish ' "$SCENARIO_DIR/calls" || fail 'custom commit was not published'
 if grep -q '^promote ' "$SCENARIO_DIR/calls"; then fail 'custom commit path unexpectedly promoted a Release branch'; fi
+
+run_scenario docs-only "$sha_b" "$sha_b" "$sha_c"
+assert_eq success "$(jq -r '.status' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only job did not finish successfully'
+assert_eq true "$(jq -r '.docs_only' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only scope was not persisted'
+assert_eq false "$(jq -r '.published' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only job was marked published'
+assert_eq false "$(jq -r '.production_changed' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only job changed production'
+assert_eq '' "$(cat "$SCENARIO_DIR/calls")" 'docs-only job called Actions, image verification, or publication tools'
 
 run_scenario release "$sha_b" "$sha_b" "$sha_c"
 release_calls="$(cat "$SCENARIO_DIR/calls")"

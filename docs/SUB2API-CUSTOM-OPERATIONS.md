@@ -90,6 +90,19 @@ feature 开发并测试
 -> 等待持久任务 success
 ```
 
+### 文档专用提交例外
+
+只修改 Markdown、`AGENTS.md` 或任意层级 `.gitignore` 的 push 会被
+`Custom Release` workflow 的 `paths-ignore` 排除，因此不会启动测试/镜像构建，
+也不会推送 GHCR 镜像。管理员按钮触发的持久任务仍会比较生产 commit 与目标 commit
+之间的完整差异；如果确认目标只包含这些文档路径，任务直接以 `success` 结束，记录
+`docs_only=true`、`published=false`、`production_changed=false`，不等待 Actions、不验证
+GHCR、不调用发布器，也不修改 `release-state.json`。
+
+只要一次 push 同时包含源码、Workflow、Dockerfile、Compose、数据库迁移或
+`deploy/ops/` 脚本等运行时路径，就按普通运行时提交处理。文档提交之后再合入运行时代码时，
+分类器比较生产 commit 到目标 commit 的完整差异，仍会恢复完整 Actions、双镜像和管理员发布门禁。
+
 管理员可以在 Actions 尚未完成时点击更新；状态机会进入 `waiting_actions` / `waiting_images`
 并继续等待。为了更快发现代码问题，日常操作仍建议先看 Actions 结果再点击。
 
@@ -103,7 +116,7 @@ feature 开发并测试
 4. 审查完整 diff，确认没有凭据、生产 `.env` 或无关改动。
 5. commit 到 feature 分支，再合并到 `custom-release`。
 
-Custom Release workflow 会在 Linux runner 上执行完整门禁：
+运行时提交的 Custom Release workflow 会在 Linux runner 上执行完整门禁：
 
 - 后端单元测试和集成测试。
 - `golangci-lint`。

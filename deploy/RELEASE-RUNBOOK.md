@@ -44,6 +44,12 @@ manual migration and requires explicit publication authorization. Completing
 code, pushing `origin/custom-release`, and publishing production are separate
 states.
 
+Commits limited to Markdown, `AGENTS.md`, or any `.gitignore` are documentation-only:
+the Custom Release workflow ignores those pushes, and the host classifier marks
+the durable job `docs_only=true` without waiting for Actions, verifying GHCR, or
+changing production. Any runtime path in the full production-to-target diff uses
+the normal validation and paired-image gates.
+
 ## Versioned Host Operations
 
 Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
