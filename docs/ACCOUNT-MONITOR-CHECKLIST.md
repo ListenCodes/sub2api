@@ -3,13 +3,12 @@
 代码完成不等于生产发布。按“验证 -> 合并/推送 -> 备份 -> 安装权限 -> 构建 -> 发布 ->
 浏览器与数据对账”的顺序记录结果。
 
-2026-07-16 生产发布的提交、备份、镜像、回填、对账和回滚证据见
-[`ACCOUNT-MONITOR-RELEASE-2026-07-16.md`](ACCOUNT-MONITOR-RELEASE-2026-07-16.md)。本文件继续作为
-后续发布可重复使用的检查模板。
+本文件是账号与分组监控后续发布可重复使用的检查模板。每次生产发布的 commit、双 digest、
+备份、回填、对账和回滚证据应写入对应发布备份目录，不再在仓库保留容易过时的生产快照。
 
 ## Before Merge
 
-- [ ] 功能分支基于批准的 `custom`，工作树干净。
+- [ ] 功能分支基于批准的 `custom-release`，工作树干净。
 - [ ] account-monitor、risk-control、后端、前端和 deploy 契约测试通过。
 - [ ] `git diff --check` 通过，官方代码改动只包含模型归因、代理、路由、菜单和 i18n。
 - [ ] 单个重建任务最大 31 天；重叠任务返回冲突。
@@ -18,7 +17,7 @@
 
 ## Production Preparation
 
-- [ ] 记录批准的 `origin/custom` commit、当前镜像 ID 和回滚 tag。
+- [ ] 记录批准的 `origin/custom-release` commit、当前镜像 digest 和回滚 tag。
 - [ ] `sub2api_db.dump` 与 `risk_control_db.dump` 都已生成并校验。
 - [ ] Compose、`.env`、Nginx vhost、证书/私钥、容器和镜像元数据已备份。
 - [ ] 两个 dump 均通过 `pg_restore --list`，`SHA256SUMS`、`release-metadata.env` 和匹配回滚 tag 已记录。

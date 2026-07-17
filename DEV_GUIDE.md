@@ -7,7 +7,7 @@
 | 项目 | 说明 |
 |------|------|
 | **上游仓库** | Wei-Shaw/sub2api |
-| **Fork 仓库** | bayma888/sub2api-bmai |
+| **Fork 仓库** | ListenCodes/sub2api |
 | **技术栈** | Go 后端 (Ent ORM + Gin) + Vue3 前端 (pnpm) |
 | **数据库** | PostgreSQL 16 + Redis |
 | **包管理** | 后端: go modules, 前端: **pnpm**（不是 npm） |
@@ -50,6 +50,7 @@ npm install -g pnpm
 | **backend-ci.yml** | push, pull_request | 单元测试 + 集成测试 + golangci-lint v2.7 |
 | **security-scan.yml** | push, pull_request, 每周一 | govulncheck + gosec + pnpm audit |
 | **release.yml** | tag `v*` | 构建发布（PR 不触发） |
+| **custom-release.yml** | push 到 `custom-release`（文档-only 除外） | 完整测试并构建/推送双 GHCR 镜像 |
 
 ### CI 要求
 
@@ -264,18 +265,19 @@ psql -U sub2api -h 127.0.0.1 -d sub2api -f migration.sql
 ### Git 操作
 
 ```bash
-# 同步上游
-git fetch upstream
-git checkout main
-git merge upstream/main
-git push origin main
+# 从生产批准分支创建功能分支
+git fetch origin --prune
+git switch -c feature/xxx origin/custom-release
 
-# 创建功能分支
-git checkout -b feature/xxx
+# 完成功能后，在干净的 custom-release 工作树中合并并推送
+git switch custom-release
+git merge --no-ff feature/xxx
+git push origin custom-release
 
-# Rebase 到最新 main
-git fetch upstream
-git rebase upstream/main
+# upstream 仅用于前瞻兼容测试，不作为生产发布来源
+git fetch upstream --prune
+git switch custom
+git cherry-pick -x <已验证提交>
 ```
 
 ### 前端操作

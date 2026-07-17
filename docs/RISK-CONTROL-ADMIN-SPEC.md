@@ -187,4 +187,4 @@ Sub2API 管理端代理必须只允许已认证管理员访问规则创建、修
 
 本规格完成不等于已发布生产。代码开发、提交推送、本地测试、风险服务镜像发布、Sub2API 主应用发布和生产验收分别报告。
 
-生产发布必须遵循 `AGENTS.md` 和 `deploy/RELEASE-RUNBOOK.md`：先备份 PostgreSQL、Compose/config、Nginx，使用批准的 `origin/custom` commit，通过 `publish-custom.sh` 发布，并检查主应用、风控服务、数据库、Redis、内部健康接口和公网 HTTPS。未获得明确发布授权时，只做本地开发和测试。
+生产发布必须遵循 `AGENTS.md` 和 `deploy/RELEASE-RUNBOOK.md`：先备份 PostgreSQL、Compose/config、Nginx，使用批准的 `origin/custom-release` commit 和 Actions/GHCR 双 digest，通过管理员触发的持久发布任务发布，并检查主应用、风控服务、数据库、Redis、内部健康接口和公网 HTTPS。未获得明确发布授权时，只做本地开发和测试。

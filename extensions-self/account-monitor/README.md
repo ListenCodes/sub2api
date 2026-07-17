@@ -116,5 +116,5 @@ docker exec risk-control-postgres psql -U risk_control_app -d risk_control \
 完整数据字典和发布检查清单见
 [`../../docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md`](../../docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md)
 与 [`../../docs/ACCOUNT-MONITOR-CHECKLIST.md`](../../docs/ACCOUNT-MONITOR-CHECKLIST.md)。
-2026-07-16 的首次完整生产发布证据见
-[`../../docs/ACCOUNT-MONITOR-RELEASE-2026-07-16.md`](../../docs/ACCOUNT-MONITOR-RELEASE-2026-07-16.md)。
+生产 commit、双镜像 digest、备份、回填、对账和回滚记录保存在对应发布备份目录；仓库仅
+保留可重复使用的数据字典、检查清单和发布手册。

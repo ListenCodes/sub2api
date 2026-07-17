@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-  UI["Sub2API admin UI"] --> MAIN["sub2api:custom"]
+  UI["Sub2API admin UI"] --> MAIN["sub2api"]
   MAIN -->|"authenticated homepage proxy"| EXT["extensions-self"]
   MAIN -->|"signed admin API"| EXT
   MAIN --> PG["Sub2API PostgreSQL"]
@@ -41,14 +41,15 @@ flowchart LR
 
 ## Release Unit
 
-主应用和 `extensions-self` 必须来自同一批准的 `origin/custom` commit。发布器先验证干净
-工作树和 Compose，再备份主库与扩展库，安装/探测安全视图，构建两个镜像，只重建
-`sub2api` 与 `extensions-self`，最后检查主应用、首页、原生账号/分组监控页面和签名 API。
+主应用和 `extensions-self` 必须来自同一批准的 `origin/custom-release` commit。Actions
+负责测试并生成两张公共 GHCR 镜像；发布器只验证镜像 digest，不在 VPS 本地构建。发布器先
+验证干净工作树和 Compose，再备份主库与扩展库，安装/探测安全视图，只重建 `sub2api` 与
+`extensions-self`，最后检查主应用、首页、原生账号/分组监控页面和签名 API。
 发布备份同时包含两个已校验 dump、Compose、`.env`、Nginx、证书、容器/镜像元数据和
 匹配回滚 tag。历史数据随后按不超过 31 天的非重叠段回填；任一段失败即停止。
 
 代码完成不等于生产发布。实现 commit、合并、推送、生产备份、发布和回滚是独立状态，
 必须分别报告。
 
-2026-07-16 账号与分组监控生产发布的批准提交、镜像、备份、回填和回滚记录见
-[`ACCOUNT-MONITOR-RELEASE-2026-07-16.md`](ACCOUNT-MONITOR-RELEASE-2026-07-16.md)。
+具体生产 commit、镜像 digest、备份、回填和回滚证据保存在每次发布的备份目录；仓库文档只
+维护可重复执行的架构和发布规则，不保存会迅速过时的现场快照。
