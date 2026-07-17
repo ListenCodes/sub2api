@@ -135,7 +135,10 @@ git -C "$PROMOTE_SEED" config user.name 'Release Fixture'
 git -C "$PROMOTE_SEED" config user.email 'release-fixture@example.com'
 printf 'base\n' > "$PROMOTE_SEED/release.txt"
 git -C "$PROMOTE_SEED" add release.txt
-git -C "$PROMOTE_SEED" commit -q -m base
+git -C "$PROMOTE_SEED" commit -q -m production
+promote_local="$(git -C "$PROMOTE_SEED" rev-parse HEAD)"
+printf 'approved base\n' >> "$PROMOTE_SEED/release.txt"
+git -C "$PROMOTE_SEED" commit -q -am base
 promote_base="$(git -C "$PROMOTE_SEED" rev-parse HEAD)"
 printf 'target\n' >> "$PROMOTE_SEED/release.txt"
 git -C "$PROMOTE_SEED" commit -q -am target
@@ -149,11 +152,14 @@ git clone -q "$PROMOTE_REMOTE" "$PROMOTE_REPO"
 git -C "$PROMOTE_REPO" config user.name 'Release Fixture'
 git -C "$PROMOTE_REPO" config user.email 'release-fixture@example.com'
 git -C "$PROMOTE_SEED" push -q "$PROMOTE_REMOTE" "integration/release-v0.1.159-fixture:integration/release-v0.1.159-fixture"
+git -C "$PROMOTE_REPO" switch -q --detach "$promote_local"
+git -C "$PROMOTE_REPO" branch -f custom-release "$promote_local"
+git -C "$PROMOTE_REPO" switch -q custom-release
 
 SUB2API_REPO="$PROMOTE_REPO" SUB2API_PROMOTE_LOG="$TMP_DIR/promote.log" \
   "$ROOT_DIR/deploy/ops/promote-release.sh" \
   "$promote_base" "$promote_target" integration/release-v0.1.159-fixture >/dev/null
-assert_eq "$promote_base" "$(git -C "$PROMOTE_REPO" rev-parse HEAD)" \
+assert_eq "$promote_local" "$(git -C "$PROMOTE_REPO" rev-parse HEAD)" \
   'promotion moved local production source before the publisher backup'
 assert_eq "$promote_target" "$(git --git-dir="$PROMOTE_REMOTE" rev-parse refs/heads/custom-release)" \
   'promotion did not advance the remote approved branch'
