@@ -105,7 +105,8 @@ git fetch "$UPSTREAM_REMOTE" "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" >> 
 
 local_head="$(git rev-parse HEAD)"
 origin_head="$(git rev-parse "$ORIGIN_REMOTE/$BRANCH")"
-[[ "$local_head" == "$origin_head" ]] || fail_job "local $BRANCH differs from $ORIGIN_REMOTE/$BRANCH" SOURCE_BASE_MISMATCH
+git merge-base --is-ancestor "$local_head" "$origin_head" \
+  || fail_job "local $BRANCH is not an ancestor of $ORIGIN_REMOTE/$BRANCH" SOURCE_BASE_MISMATCH
 BASE_COMMIT="$origin_head"
 
 local_tag_object_sha="$(git rev-parse "$RELEASE_TAG^{tag}" 2>/dev/null || true)"

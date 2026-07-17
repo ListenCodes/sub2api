@@ -44,6 +44,8 @@ if SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigg
 fi
 printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 
+bash "$ROOT_DIR/deploy/ops/tests/test-sync-upstream-behind.sh"
+
 cat > "$TMP_DIR/checks-success.json" <<'JSON'
 {
   "check_runs": [
