@@ -34,8 +34,9 @@ local_head="$(git rev-parse HEAD)"
 [[ "$integration_head" == "$TARGET_COMMIT" ]] || fail 'integration ref does not match the tested target'
 git merge-base --is-ancestor "$BASE_COMMIT" "$TARGET_COMMIT" || fail 'tested target is not based on the approved branch'
 
-if [[ "$local_head" != "$BASE_COMMIT" && "$local_head" != "$TARGET_COMMIT" ]]; then
-  fail 'local source is neither the approved base nor the tested target'
+if [[ "$local_head" != "$TARGET_COMMIT" ]] \
+  && ! git merge-base --is-ancestor "$local_head" "$BASE_COMMIT"; then
+  fail 'local source is neither an ancestor of the approved base nor the tested target'
 fi
 
 integration_source="$(git rev-parse --symbolic-full-name "$integration_ref")"
