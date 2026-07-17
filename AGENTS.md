@@ -3,6 +3,11 @@
 This file is the repository-level operating contract for all agents and
 development conversations working in this repository.
 
+For the Chinese project overview and the repeatable developer/operator release
+workflow, read `docs/SUB2API-CUSTOM-OPERATIONS.md`. This file remains the
+authoritative repository rule set when the overview and implementation details
+differ.
+
 ## Canonical Locations
 
 - Local source of truth: `E:\Code\sub2api`

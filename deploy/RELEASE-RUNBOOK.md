@@ -3,6 +3,11 @@
 This runbook defines how to change and publish Sub2API and its unified custom
 extensions service.
 
+Start with `docs/SUB2API-CUSTOM-OPERATIONS.md` for the Chinese project overview,
+automation boundary, standard custom-code workflow, expected timing, and report
+template. This runbook remains authoritative for production execution and
+rollback details.
+
 ## Release Units
 
 | Unit | Source | Runtime image | Production path |
@@ -38,6 +43,12 @@ The first production branch switch from `custom` to `custom-release` is a
 manual migration and requires explicit publication authorization. Completing
 code, pushing `origin/custom-release`, and publishing production are separate
 states.
+
+Commits limited to Markdown, `AGENTS.md`, or any `.gitignore` are documentation-only:
+the Custom Release workflow ignores those pushes, and the host classifier marks
+the durable job `docs_only=true` without waiting for Actions, verifying GHCR, or
+changing production. Any runtime path in the full production-to-target diff uses
+the normal validation and paired-image gates.
 
 ## Versioned Host Operations
 
@@ -135,8 +146,8 @@ process serves signed risk/account-monitor APIs and the static `/homepage/` rout
 The browser reaches them only through same-origin main application proxies:
 
 ```text
-https://sub.ailisten.top/api/v1/extensions-self/homepage/
-https://sub.ailisten.top/api/v1/admin/extensions-self/account-monitor/data-quality
+/api/v1/extensions-self/homepage/
+/api/v1/admin/extensions-self/account-monitor/data-quality
 ```
 
 `risk-control-postgres` and `risk_control_postgres_data` remain independent and

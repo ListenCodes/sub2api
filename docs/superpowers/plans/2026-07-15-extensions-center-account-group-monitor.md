@@ -680,14 +680,14 @@ In `E:\Code\sub2api`, fetch `origin`, confirm `custom` is clean and still matche
 ## Task 14: Production Backup, Publish, Backfill, Reconciliation, and Browser Acceptance
 
 **Files/Systems:**
-- Production alias: `US-RN-66`
+- Production host: resolve from the external VPS inventory
 - Production source: `/root/sub2api`
 - Publisher: `/opt/sub2api-custom/publish-custom.sh`
-- Public site: `https://sub.ailisten.top`
+- Public site: use the currently configured public origin
 
 - [ ] **Step 1: Pass all release gates through `ssh-skill`**
 
-Using only `python ~/.claude/skills/ssh-skill/scripts/ssh_execute.py US-RN-66 "..."`, verify no publish/sync process or lock is active, `/root/sub2api` is clean on `custom`, production HEAD and `origin/custom` match the approved merge SHA, and Compose config renders successfully.
+Using only `ssh-skill` with the production alias from the external inventory, verify no publish/sync process or lock is active, `/root/sub2api` is clean on `custom`, production HEAD and `origin/custom` match the approved merge SHA, and Compose config renders successfully.
 
 - [ ] **Step 2: Create and verify the release backup before mutation**
 

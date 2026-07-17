@@ -64,6 +64,26 @@ test('custom-release workflow gates paired images on every required validation j
   assert.match(workflow, /password:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/)
 })
 
+test('custom-release workflow excludes documentation-only pushes', () => {
+  const workflow = read('.github/workflows/custom-release.yml')
+  assert.match(workflow, /paths-ignore:/, 'documentation-only pushes must be excluded before validation and image jobs')
+  assert.match(workflow, /\*\*\/\*\.md/, 'all Markdown-only pushes must be excluded')
+  assert.match(workflow, /\.gitignore/, 'repository ignore-file-only pushes must be excluded')
+  assert.doesNotMatch(workflow, /paths-ignore:[^]*\.github\/workflows/, 'workflow changes must remain runtime changes')
+})
+
+test('release scope classifier compares the production and target commits', () => {
+  const classifierPath = resolve(repoRoot, 'deploy/ops/classify-release-scope.sh')
+  assert.equal(existsSync(classifierPath), true, 'release scope classifier is missing')
+  const classifier = read('deploy/ops/classify-release-scope.sh')
+  assert.match(classifier, /PRODUCTION_COMMIT/)
+  assert.match(classifier, /TARGET_COMMIT/)
+  assert.match(classifier, /git\s+-C\s+.*diff\s+--name-only/)
+  assert.match(classifier, /\.md|AGENTS\.md/)
+  assert.match(classifier, /\.gitignore/)
+  assert.match(classifier, /docs_only=(?:true|false)/)
+})
+
 test('both application images expose the same OCI release identity', () => {
   for (const dockerfilePath of ['Dockerfile', 'extensions-self/Dockerfile']) {
     const dockerfile = read(dockerfilePath)

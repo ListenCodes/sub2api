@@ -1,7 +1,11 @@
 # Release Operations
 
 These files are the versioned source for `/opt/sub2api-custom/` and the host
-systemd units that publish Sub2API on US-RN-66.
+systemd units that publish Sub2API in the active production environment.
+
+The operator-facing project and custom-release workflow is documented in
+`docs/SUB2API-CUSTOM-OPERATIONS.md`. This file defines the narrower ownership
+and safety contract of the host scripts.
 
 ## Production Path
 
@@ -40,6 +44,9 @@ not production image credentials.
   state transitions.
 - `sync-upstream.sh` verifies `Wei-Shaw/sub2api /releases/latest`, fetches the
   exact annotated tag, and creates `origin/integration/release-*` when needed.
+- `classify-release-scope.sh` compares the production and target commits; a
+  target containing only Markdown, `AGENTS.md`, or any `.gitignore` is marked
+  `docs_only` and stops before Actions, GHCR verification, or publication.
 - `wait-for-actions.sh` requires the complete Custom Release validation suite.
 - `verify-release-images.sh` checks public pull, `linux/amd64`, digest identity,
   and OCI revision/version/source labels for both images.
@@ -62,6 +69,13 @@ When no new official Release exists but `origin/custom-release` has an
 undeployed custom commit, the same administrator action waits for that commit's
 Actions/images and publishes it without a Release merge. When neither changed,
 the job returns `success` without pulling or recreating services.
+
+Documentation-only commits are not runtime releases. The GitHub workflow ignores
+pushes containing only Markdown, `AGENTS.md`, or any `.gitignore`; if a durable job
+still targets such a commit, the classifier records `docs_only=true`, leaves
+`release-state.json` and production unchanged, and returns `success` without
+waiting for checks or images. A mixed or later runtime diff follows the normal
+seven-check and paired-image path.
 
 Conflicts are terminal `conflict` jobs with the exact files, both source
 identities, a resolution hint, and an artifact under

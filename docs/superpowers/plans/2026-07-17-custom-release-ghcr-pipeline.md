@@ -4,7 +4,7 @@
 
 **Goal:** Replace VPS-local scheduled builds with a durable administrator-triggered pipeline that validates official stable Releases, gates promotion on Actions, publishes two public GHCR images, deploys immutable digests, and automatically restores the previous digest pair after failed health checks.
 
-**Architecture:** US-RN-66 owns the persistent release state machine, guarded branch promotion, backup, deployment, and rollback. GitHub Actions has read-only source access plus package write access and produces both images from one tested commit. The application creates a durable job and returns immediately; a `systemd.path` unit wakes the host orchestrator.
+**Architecture:** The production host owns the persistent release state machine, guarded branch promotion, backup, deployment, and rollback. GitHub Actions has read-only source access plus package write access and produces both images from one tested commit. The application creates a durable job and returns immediately; a `systemd.path` unit wakes the host orchestrator.
 
 **Tech Stack:** Go, Vue 3/TypeScript/Vitest, Bash, PowerShell contract tests, Node `node:test`, GitHub Actions, Docker Buildx/GHCR, Docker Compose, systemd, PostgreSQL backup tools.
 
@@ -585,7 +585,7 @@ Use focused commit messages and leave the feature worktree clean.
 
 ### Task 9: Merge, push, validate GHCR, and publish production
 
-**Files:** Git refs, GitHub Actions/GHCR state, and US-RN-66 runtime state.
+**Files:** Git refs, GitHub Actions/GHCR state, and production runtime state.
 
 - [ ] **Step 1: Merge the feature into local `custom-release`**
 
@@ -598,11 +598,11 @@ feature without rewriting history, run final checks, and push
 Verify every required job is green. Record the two full-SHA tags, manifest
 digests, `linux/amd64`, and all three OCI labels. Set each GHCR package to Public
 using a local administrative GitHub API credential; verify anonymous manifests
-and pulls. Never copy that credential to US-RN-66.
+and pulls. Never copy that credential to the production host.
 
 - [ ] **Step 3: Inspect production through ssh-skill**
 
-Use only `ssh_execute.py US-RN-66`. Confirm branch/commit/dirty state, containers,
+Use only `ssh-skill` with the production alias from the external inventory. Confirm branch/commit/dirty state, containers,
 current images, database identities, crontab, existing scripts, disk space, and
 health before mutation.
 

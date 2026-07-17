@@ -209,6 +209,10 @@ each job, stops on the first failure, and records results in the release backup:
 
 ### Custom fork update and release
 
+For the complete Chinese project overview and repeatable release procedure,
+read `docs/SUB2API-CUSTOM-OPERATIONS.md`. The section below is the compact
+deployment contract.
+
 The only production path for this fork is:
 
 ```text
@@ -227,6 +231,14 @@ Actions publishes one immutable pair from the same full SHA:
 ghcr.io/listencodes/sub2api-custom:custom-<full-sha>
 ghcr.io/listencodes/sub2api-extensions:custom-<full-sha>
 ```
+
+Documentation-only pushes are the exception: changes limited to Markdown,
+`AGENTS.md`, or any `.gitignore` are ignored by the workflow and do not build or
+push images. The host classifier compares the full production-to-target diff;
+such a target completes the durable job with `docs_only=true` and leaves
+production and `release-state.json` unchanged. Any runtime path in the diff
+(source, workflow, Dockerfile, Compose, migration, or `deploy/ops/` script)
+uses the normal Actions, paired-image, and administrator digest gates.
 
 Production Compose requires anonymous, digest-pinned values:
 
