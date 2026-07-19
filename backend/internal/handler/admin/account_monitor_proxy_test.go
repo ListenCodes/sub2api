@@ -56,7 +56,7 @@ func TestProxyAccountMonitorForwardsSignedAdminRequest(t *testing.T) {
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "01234567890123456789012345678901")
 
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil)
+	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
 	h.SetRiskControlClient(service.NewRiskControlClientFromEnv())
 	engine := gin.New()
 	engine.GET("/api/v1/admin/extensions-self/account-monitor/*path", func(c *gin.Context) {
