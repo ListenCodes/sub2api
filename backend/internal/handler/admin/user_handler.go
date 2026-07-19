@@ -35,6 +35,7 @@ type UserHandler struct {
 	billingCache          service.BillingCache                // T17/T18 缓存失效（PUT/POST 路径）
 	totpService           *service.TotpService                // 角色提升为管理员的 step-up 门控
 	userService           *service.UserService
+	settingService        *service.SettingService // step-up 功能开关
 }
 
 // SetAuthService wires token revocation into the dedicated risk status action
@@ -151,6 +152,7 @@ func NewUserHandler(
 	billingCache service.BillingCache,
 	totpService *service.TotpService,
 	userService *service.UserService,
+	settingService *service.SettingService,
 ) *UserHandler {
 	return &UserHandler{
 		adminService:          adminService,
@@ -159,7 +161,33 @@ func NewUserHandler(
 		billingCache:          billingCache,
 		totpService:           totpService,
 		userService:           userService,
+		settingService:        settingService,
 	}
+}
+
+// ProvideUserHandler wires the runtime-only risk dependencies into the admin handler.
+func ProvideUserHandler(
+	adminService service.AdminService,
+	concurrencyService *service.ConcurrencyService,
+	userPlatformQuotaRepo service.UserPlatformQuotaRepository,
+	billingCache service.BillingCache,
+	totpService *service.TotpService,
+	userService *service.UserService,
+	settingService *service.SettingService,
+	authService *service.AuthService,
+) *UserHandler {
+	handler := NewUserHandler(
+		adminService,
+		concurrencyService,
+		userPlatformQuotaRepo,
+		billingCache,
+		totpService,
+		userService,
+		settingService,
+	)
+	handler.SetAuthService(authService)
+	handler.SetRiskControlClient(service.NewRiskControlClientFromEnv())
+	return handler
 }
 
 // CreateUserRequest represents admin create user request
@@ -383,7 +411,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 
 	// 创建管理员账号属权限敏感操作：需最近完成 step-up 2FA 验证。
 	if req.Role == service.RoleAdmin {
-		if !middleware.EnforceStepUp(c, h.totpService, h.userService) {
+		if !middleware.EnforceStepUp(c, h.totpService, h.userService, h.settingService) {
 			return
 		}
 	}
@@ -439,7 +467,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 			return
 		}
 		if target.Role != service.RoleAdmin {
-			if !middleware.EnforceStepUp(c, h.totpService, h.userService) {
+			if !middleware.EnforceStepUp(c, h.totpService, h.userService, h.settingService) {
 				return
 			}
 		}
