@@ -105,7 +105,7 @@ export function updateWasPublished(job: Pick<UpdateJob, 'published'>): boolean {
   return job.published === true
 }
 
-function newUpdateIdempotencyKey(): string {
+function newSystemOperationIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
@@ -129,12 +129,20 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
 }
 
 /**
+ * In-place update/rollback downloads a full release binary from GitHub, which
+ * can take several minutes on slow links. The global 30s axios timeout would
+ * abort the request mid-download (#4504), so these calls wait as long as the
+ * backend allows (15 minutes server-side).
+ */
+const UPDATE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+
+/**
  * Perform system update
  * Downloads and applies the latest version
  */
 export async function performUpdate(): Promise<UpdateJob> {
   const { data } = await apiClient.post<UpdateJob>('/admin/system/update', undefined, {
-    headers: { 'Idempotency-Key': newUpdateIdempotencyKey() }
+    headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() }
   })
   return data
 }
@@ -161,7 +169,11 @@ export interface UpdateResult {
 export async function rollback(version?: string): Promise<UpdateResult> {
   const { data } = await apiClient.post<UpdateResult>(
     '/admin/system/rollback',
-    version ? { version } : undefined
+    version ? { version } : undefined,
+    {
+      headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() },
+      timeout: UPDATE_REQUEST_TIMEOUT_MS
+    }
   )
   return data
 }

@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { apiClient } from '@/api/client'
 import {
+  performUpdate,
+  rollback,
   isTerminalUpdateStatus,
   updateNeedsRestart,
   updateWasPublished,
@@ -7,7 +10,42 @@ import {
   type UpdateJobStatus
 } from '@/api/admin/system'
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('upstream preparation jobs', () => {
+  it('starts a durable update with an idempotency key instead of a long browser timeout', async () => {
+    const job: UpdateJob = {
+      job_id: 'update-async',
+      status: 'checking_release',
+      message: 'queued',
+      need_restart: false
+    }
+    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: job })
+
+    await expect(performUpdate()).resolves.toEqual(job)
+    expect(post).toHaveBeenCalledWith('/admin/system/update', undefined, {
+      headers: { 'Idempotency-Key': expect.any(String) }
+    })
+  })
+
+  it('keeps the official long timeout for versioned rollback downloads', async () => {
+    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
+      data: { message: 'rolled back', need_restart: true }
+    })
+
+    await rollback('0.1.161')
+    expect(post).toHaveBeenCalledWith(
+      '/admin/system/rollback',
+      { version: '0.1.161' },
+      {
+        headers: { 'Idempotency-Key': expect.any(String) },
+        timeout: 15 * 60 * 1000
+      }
+    )
+  })
+
   it('treats every release phase as non-terminal until success, failure, or conflict', () => {
     const phases: UpdateJobStatus[] = [
       'checking_release',

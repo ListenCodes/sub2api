@@ -21,6 +21,23 @@ type SystemHandler struct {
 	lockSvc   *service.SystemOperationLockService
 }
 
+// systemUpdateTimeout bounds a durable release trigger or versioned rollback.
+// A rollback can include a large binary download over slow links, so this must
+// stay above the GitHub download client timeout (10 minutes).
+const systemUpdateTimeout = 15 * time.Minute
+
+// systemUpdateContext detaches update/rollback work from the HTTP request
+// lifetime. This keeps the durable trigger, idempotency record, system lock,
+// and any rollback download alive after a client disconnect while retaining a
+// finite server-side deadline (#4504).
+func systemUpdateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, systemUpdateTimeout)
+}
+
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
 	PerformUpdate(ctx context.Context) (*service.UpdateJob, error)
@@ -64,6 +81,9 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 	operationID := buildSystemOperationID(c, "update")
 	payload := gin.H{"operation_id": operationID}
+	updateCtx, cancel := systemUpdateContext(c.Request.Context())
+	defer cancel()
+	c.Request = c.Request.WithContext(updateCtx)
 	executeAdminIdempotentAcceptedJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
@@ -165,6 +185,11 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 	}
 	operationID := buildSystemOperationID(c, operation)
 	payload := gin.H{"operation_id": operationID, "version": targetVersion}
+	if targetVersion != "" {
+		rollbackCtx, cancel := systemUpdateContext(c.Request.Context())
+		defer cancel()
+		c.Request = c.Request.WithContext(rollbackCtx)
+	}
 	executeAdminIdempotentJSON(c, "admin.system.rollback", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {

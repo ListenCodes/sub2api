@@ -75,10 +75,11 @@ func TestAuthenticatedWriteAliasesPreserveRiskAndStableBodyLimits(t *testing.T) 
 		bodyLimit string
 		found     bool
 	}{
-		"/responses":          {bodyLimit: "bodyLimit"},
-		"/responses/*subpath": {bodyLimit: "bodyLimit"},
-		"/alpha/search":       {bodyLimit: "textBodyLimit"},
-		"/embeddings":         {bodyLimit: "textBodyLimit"},
+		"/responses":             {bodyLimit: "bodyLimit"},
+		"/responses/*subpath":    {bodyLimit: "bodyLimit"},
+		"/messages/count_tokens": {bodyLimit: "bodyLimit"},
+		"/alpha/search":          {bodyLimit: "textBodyLimit"},
+		"/embeddings":            {bodyLimit: "textBodyLimit"},
 	}
 
 	fset := token.NewFileSet()
