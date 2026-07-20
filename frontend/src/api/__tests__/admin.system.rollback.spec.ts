@@ -44,7 +44,10 @@ describe('admin system rollback API', () => {
     expect(post).toHaveBeenCalledWith(
       '/admin/system/rollback',
       { version: '0.1.146' },
-      { timeout: 15 * 60 * 1000 }
+      {
+        headers: { 'Idempotency-Key': expect.any(String) },
+        timeout: 15 * 60 * 1000
+      }
     )
     expect(result.need_restart).toBe(true)
   })
@@ -55,6 +58,7 @@ describe('admin system rollback API', () => {
     await rollback()
 
     expect(post).toHaveBeenCalledWith('/admin/system/rollback', undefined, {
+      headers: { 'Idempotency-Key': expect.any(String) },
       timeout: 15 * 60 * 1000
     })
   })

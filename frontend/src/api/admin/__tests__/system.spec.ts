@@ -39,7 +39,10 @@ describe('upstream preparation jobs', () => {
     expect(post).toHaveBeenCalledWith(
       '/admin/system/rollback',
       { version: '0.1.161' },
-      { timeout: 15 * 60 * 1000 }
+      {
+        headers: { 'Idempotency-Key': expect.any(String) },
+        timeout: 15 * 60 * 1000
+      }
     )
   })
 
