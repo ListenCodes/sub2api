@@ -43,6 +43,15 @@ describe('AppSidebar scroll position persistence', () => {
 })
 
 describe('AppSidebar header styles', () => {
+  it('combines the custom logo with the role-aware home navigation', () => {
+    expect(componentSource).toContain(
+      "const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))"
+    )
+    expect(componentSource).toContain(":src=\"siteLogo || '/logo.svg'\"")
+    expect(componentSource.match(/:to=\"homePath\"/g)).toHaveLength(2)
+    expect(componentSource.match(/@click=\"handleMenuItemClick\(homePath\)\"/g)).toHaveLength(2)
+  })
+
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)
     const sidebarBrandBlockMatch = componentSource.match(/\.sidebar-brand\s*\{[\s\S]*?\n\}/)

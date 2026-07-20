@@ -18,20 +18,24 @@ import (
 )
 
 type systemHandlerUpdateServiceStub struct {
-	performErr           error
-	performJob           *service.UpdateJob
-	updateInfo           *service.UpdateInfo
-	checkErr             error
-	checkForces          []bool
-	statusJobIDs         []string
-	performCall          int
-	rollbackCall         int
-	rollbackToCall       int
-	rollbackToVersions   []string
-	rollbackToErr        error
-	rollbackVersions     []service.RollbackVersion
-	rollbackVersionsErr  error
-	rollbackVersionsCall int
+	performErr            error
+	performJob            *service.UpdateJob
+	updateInfo            *service.UpdateInfo
+	checkErr              error
+	checkForces           []bool
+	statusJobIDs          []string
+	performCall           int
+	performCtxErr         error
+	performHasDeadline    bool
+	rollbackCall          int
+	rollbackToCall        int
+	rollbackToCtxErr      error
+	rollbackToHasDeadline bool
+	rollbackToVersions    []string
+	rollbackToErr         error
+	rollbackVersions      []service.RollbackVersion
+	rollbackVersionsErr   error
+	rollbackVersionsCall  int
 }
 
 func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bool) (*service.UpdateInfo, error) {
@@ -39,8 +43,10 @@ func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bo
 	return s.updateInfo, s.checkErr
 }
 
-func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) (*service.UpdateJob, error) {
+func (s *systemHandlerUpdateServiceStub) PerformUpdate(ctx context.Context) (*service.UpdateJob, error) {
 	s.performCall++
+	s.performCtxErr = ctx.Err()
+	_, s.performHasDeadline = ctx.Deadline()
 	return s.performJob, s.performErr
 }
 
@@ -59,8 +65,10 @@ func (s *systemHandlerUpdateServiceStub) ListRollbackVersions(context.Context) (
 	return s.rollbackVersions, s.rollbackVersionsErr
 }
 
-func (s *systemHandlerUpdateServiceStub) RollbackToVersion(_ context.Context, version string) error {
+func (s *systemHandlerUpdateServiceStub) RollbackToVersion(ctx context.Context, version string) error {
 	s.rollbackToCall++
+	s.rollbackToCtxErr = ctx.Err()
+	_, s.rollbackToHasDeadline = ctx.Deadline()
 	s.rollbackToVersions = append(s.rollbackToVersions, version)
 	return s.rollbackToErr
 }
@@ -174,6 +182,36 @@ func TestSystemHandlerPerformUpdateReturnsAcceptedJob(t *testing.T) {
 	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
 }
 
+// TestSystemHandlerPerformUpdateSurvivesClientDisconnect reproduces #4504
+// for the durable release trigger. The trigger must not inherit a canceled
+// browser request, but it must still have a bounded execution deadline.
+func TestSystemHandlerPerformUpdateSurvivesClientDisconnect(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{
+		performJob: &service.UpdateJob{
+			JobID:  "update-disconnected",
+			Status: service.UpdateStatusCheckingRelease,
+		},
+	}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req = req.WithContext(canceledCtx)
+	req.Header.Set("Idempotency-Key", "disconnected-update")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Equal(t, 1, updateSvc.performCall)
+	require.NoError(t, updateSvc.performCtxErr,
+		"update must not observe the canceled request context")
+	require.True(t, updateSvc.performHasDeadline,
+		"detached update context must still be bounded by a deadline")
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
+}
+
 func TestSystemHandlerGetUpdateStatusWithoutJobIDReturnsCurrentJob(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{
 		performJob: &service.UpdateJob{
@@ -196,6 +234,29 @@ func TestSystemHandlerGetUpdateStatusWithoutJobIDReturnsCurrentJob(t *testing.T)
 	require.Equal(t, "update-current", body.Data.JobID)
 	require.Equal(t, service.UpdateStatusWaitingImages, body.Data.Status)
 	require.Equal(t, []string{""}, updateSvc.statusJobIDs)
+}
+
+func TestSystemHandlerRollbackToVersionSurvivesClientDisconnect(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
+		strings.NewReader(`{"version":"0.1.146"}`))
+	req.Header.Set("Content-Type", "application/json")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req = req.WithContext(canceledCtx)
+	req.Header.Set("Idempotency-Key", "disconnected-rollback")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, 1, updateSvc.rollbackToCall)
+	require.NoError(t, updateSvc.rollbackToCtxErr,
+		"versioned rollback must not observe the canceled request context")
+	require.True(t, updateSvc.rollbackToHasDeadline,
+		"detached rollback context must still be bounded by a deadline")
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
 }
 
 func TestSystemHandlerRollbackWithoutBodyUsesLegacyBackup(t *testing.T) {

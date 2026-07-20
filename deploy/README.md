@@ -380,6 +380,7 @@ docker compose down -v
 | `ACCOUNT_MONITOR_BATCH_SIZE` | No | `1000` | Maximum source rows per page |
 | `ACCOUNT_MONITOR_QUERY_TIMEOUT_MS` | No | `3000` | Safe-view query timeout |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
+| `UPDATE_GITHUB_TOKEN` | No | *(empty)* | Token for `api.github.com` release checks only; asset downloads remain anonymous. |
 | `GEMINI_OAUTH_CLIENT_ID` | No | *(builtin)* | Google OAuth client ID (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
 | `GEMINI_OAUTH_CLIENT_SECRET` | No | *(builtin)* | Google OAuth client secret (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
 | `GEMINI_OAUTH_SCOPES` | No | *(default)* | OAuth scopes (Gemini OAuth) |
