@@ -225,6 +225,34 @@ if [[ "$PIPELINE_SCENARIO" == publisher-failure ]]; then
 fi
 release_job_update "$SUB2API_JOB_ID" success 'Published fixture release' "$(jq -n --arg commit "$TARGET_COMMIT" '{published:true,published_commit:$commit,production_changed:true}')"
 SH
+cat > "$FAKE_BIN/prepare.sh" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source "$SUB2API_RELEASE_STATE_HELPER"
+[[ "${1:-}" == --job-id && -n "${2:-}" ]]
+job_id="$2"
+fail_prepare() {
+  release_job_update "$job_id" failed "$1" '{"error_code":"FIXTURE_PREPARE_FAILED","production_changed":false}'
+  exit 1
+}
+case "$PIPELINE_SCENARIO" in
+  no-change)
+    release_job_update "$job_id" success 'Already current' '{"published":false,"production_changed":false}'
+    ;;
+  docs-only)
+    release_job_update "$job_id" success 'Documentation-only' '{"docs_only":true,"published":false,"production_changed":false}'
+    ;;
+  custom|release|base-race|publisher-failure)
+    "$SUB2API_WAIT_ACTIONS_SCRIPT" "$TARGET_COMMIT" >> "$PIPELINE_LOG" 2>&1 || fail_prepare 'Actions failed'
+    "$SUB2API_VERIFY_IMAGES_SCRIPT" "$TARGET_COMMIT" 0.1.158 >> "$PIPELINE_LOG" 2>&1 || fail_prepare 'Images failed'
+    if [[ "$PIPELINE_SCENARIO" == release || "$PIPELINE_SCENARIO" == base-race ]]; then
+      "$SUB2API_PROMOTE_SCRIPT" "$BASE_COMMIT" "$TARGET_COMMIT" integration/fixture >> "$PIPELINE_LOG" 2>&1 || fail_prepare 'Promotion failed'
+    fi
+    "$SUB2API_PUBLISH_SCRIPT" --commit "$TARGET_COMMIT" --main-digest sha256:$(printf '1%.0s' {1..64}) --extensions-digest sha256:$(printf '2%.0s' {1..64}) || exit $?
+    ;;
+  *) fail_prepare 'Unknown fixture scenario' ;;
+esac
+SH
 cat > "$FAKE_BIN/flock" <<'SH'
 #!/usr/bin/env sh
 exit 0
@@ -246,6 +274,7 @@ run_scenario() {
   CURRENT_RELEASE_JOB_FILE="$SUB2API_DATA_DIR/release-current-job-id"
   PRODUCTION_RELEASE_STATE_FILE="$SUB2API_DATA_DIR/release-state.json"
   release_job_init "$job_id"
+  release_job_update "$job_id" checking_updates 'Fixture prepare queued' '{"action":"prepare"}'
   release_production_state_write "$(jq -n \
     --arg production_commit "$production_commit" \
     '{production_commit:$production_commit,stable_release_tag:"v0.1.158",stable_release_commit:"26abd19a2812edba02bbef93c3e2a620141cc257",main_digest:("sha256:"+("0"*64)),extensions_digest:("sha256:"+("1"*64)),published_at:"2026-07-16T12:00:00Z",backup_dir:"/root/backups/sub2api/fixture"}')"
@@ -260,6 +289,12 @@ run_scenario() {
   SUB2API_JOB_ID="$job_id" \
   SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" \
   SUB2API_SYNC_SCRIPT="$FAKE_BIN/sync.sh" \
+  SUB2API_PREPARE_SCRIPT="$FAKE_BIN/prepare.sh" \
+  SUB2API_PUBLISH_SCRIPT="$FAKE_BIN/publish.sh" \
+  SUB2API_WAIT_ACTIONS_SCRIPT="$FAKE_BIN/wait.sh" \
+  SUB2API_VERIFY_IMAGES_SCRIPT="$FAKE_BIN/verify.sh" \
+  SUB2API_PROMOTE_SCRIPT="$FAKE_BIN/promote.sh" \
+  PIPELINE_LOG="$scenario_dir/release.log" \
   SUB2API_SCOPE_SCRIPT="$FAKE_BIN/scope.sh" \
   SUB2API_WAIT_ACTIONS_SCRIPT="$FAKE_BIN/wait.sh" \
   SUB2API_VERIFY_IMAGES_SCRIPT="$FAKE_BIN/verify.sh" \
@@ -314,6 +349,8 @@ assert_eq MAIN_HEALTH_FAILED "$(jq -r '.error_code' "$publisher_failure_job")" '
 assert_eq true "$(jq -r '.rollback.succeeded' "$publisher_failure_job")" 'orchestrator lost publisher rollback evidence'
 assert_eq '/fixture/backup' "$(jq -r '.artifact_path' "$publisher_failure_job")" 'orchestrator lost publisher backup evidence'
 
-"$ROOT_DIR/deploy/ops/tests/test-publish-custom.sh"
+if "$ROOT_DIR/deploy/ops/publish-custom.sh" >/dev/null 2>&1; then
+  fail 'deprecated publisher unexpectedly remained an executable release entry point'
+fi
 
 printf 'release pipeline fixture tests: PASS\n'

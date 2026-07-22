@@ -340,6 +340,46 @@ func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_Success() {
 	require.Equal(s.T(), "app-linux-amd64.tar.gz", release.Assets[0].Name)
 }
 
+func (s *GitHubReleaseServiceSuite) TestFetchCustomReleaseHeadUsesGitRefEndpoint() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(s.T(), "/repos/ListenCodes/sub2api/git/ref/heads/custom-release", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`))
+	}))
+	s.client = &githubReleaseClient{httpClient: &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}}, downloadHTTPClient: &http.Client{}}
+
+	ref, err := s.client.FetchCustomReleaseHead(context.Background(), "ListenCodes/sub2api", "custom-release")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ref.SHA)
+}
+
+func (s *GitHubReleaseServiceSuite) TestCompareCommitsReturnsChangedFiles() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(s.T(), "/repos/ListenCodes/sub2api/compare/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", r.URL.Path)
+		require.Equal(s.T(), "100", r.URL.Query().Get("per_page"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"files":[{"filename":"docs/guide.md","status":"modified"}]}`))
+	}))
+	s.client = &githubReleaseClient{httpClient: &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}}, downloadHTTPClient: &http.Client{}}
+
+	files, err := s.client.CompareCommits(context.Background(), "ListenCodes/sub2api", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), []string{"docs/guide.md"}, []string{files[0].Filename})
+}
+
+func (s *GitHubReleaseServiceSuite) TestFetchRefCommitResolvesStableTag() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(s.T(), "/repos/ListenCodes/sub2api/commits/v0.1.164", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sha":"dddddddddddddddddddddddddddddddddddddddd"}`))
+	}))
+	s.client = &githubReleaseClient{httpClient: &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}}, downloadHTTPClient: &http.Client{}}
+
+	commit, err := s.client.FetchRefCommit(context.Background(), "ListenCodes/sub2api", "v0.1.164")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "dddddddddddddddddddddddddddddddddddddddd", commit)
+}
+
 func (s *GitHubReleaseServiceSuite) TestFetchRecentReleases_Success() {
 	releasesJSON := `[
 		{

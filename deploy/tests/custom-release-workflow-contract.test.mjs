@@ -135,11 +135,11 @@ test('production compose preserves upstream Redis ACL username support', () => {
   assert.match(compose, /REDIS_USERNAME=\$\{REDIS_USERNAME:-\}/)
 })
 
-test('publisher validates, backs up, deploys, and rolls back an immutable image pair', () => {
-  const publisher = read('deploy/ops/publish-custom.sh')
+test('prepare validates evidence and apply deploys and rolls back an immutable image pair', () => {
+  const publisher = `${read('deploy/ops/prepare-release.sh')}\n${read('deploy/ops/apply-release.sh')}`
   for (const marker of [
-    '--main-digest',
-    '--extensions-digest',
+    'main_digest',
+    'extensions_digest',
     'verify-release-images.sh',
     'release-state.json',
     'release_job_update',
@@ -148,7 +148,7 @@ test('publisher validates, backs up, deploys, and rolls back an immutable image 
     'deploying_main',
     'health_checking',
     'rolling_back',
-    'perform_rollback'
+    'rollback_on_error'
   ]) {
     assert.match(publisher, new RegExp(escapeRegExp(marker)), `publisher is missing ${marker}`)
   }
@@ -157,7 +157,7 @@ test('publisher validates, backs up, deploys, and rolls back an immutable image 
   assert.doesNotMatch(publisher, /up -d[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /(?:rm|down)[^\n]*risk-control-postgres/)
 
-  const verifyIndex = publisher.indexOf('verify-release-images.sh')
+  const verifyIndex = publisher.indexOf('VERIFY_IMAGES_SCRIPT')
   const backupIndex = publisher.indexOf('backing_up')
   const extensionsIndex = publisher.indexOf('deploying_extensions')
   const mainIndex = publisher.indexOf('deploying_main')

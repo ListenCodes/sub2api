@@ -112,6 +112,18 @@ func (c *githubReleaseClientError) FetchRecentReleases(ctx context.Context, repo
 	return nil, c.err
 }
 
+func (c *githubReleaseClientError) FetchCustomReleaseHead(ctx context.Context, repo, branch string) (*service.GitRef, error) {
+	return nil, c.err
+}
+
+func (c *githubReleaseClientError) CompareCommits(ctx context.Context, repo, base, head string) ([]service.ChangedFile, error) {
+	return nil, c.err
+}
+
+func (c *githubReleaseClientError) FetchRefCommit(ctx context.Context, repo, ref string) (string, error) {
+	return "", c.err
+}
+
 func (c *githubReleaseClientError) DownloadFile(ctx context.Context, url, dest string, maxSize int64) error {
 	return c.err
 }
@@ -176,6 +188,86 @@ func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo stri
 	}
 
 	return releases, nil
+}
+
+func (c *githubReleaseClient) FetchCustomReleaseHead(ctx context.Context, repo, branch string) (*service.GitRef, error) {
+	requestURL := fmt.Sprintf("https://api.github.com/repos/%s/git/ref/heads/%s", repo, url.PathEscape(branch))
+	req, err := c.newAPIRequest(ctx, requestURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(payload.Object.SHA) == "" {
+		return nil, fmt.Errorf("GitHub custom-release ref returned no commit")
+	}
+	return &service.GitRef{SHA: payload.Object.SHA}, nil
+}
+
+func (c *githubReleaseClient) CompareCommits(ctx context.Context, repo, base, head string) ([]service.ChangedFile, error) {
+	requestURL := fmt.Sprintf("https://api.github.com/repos/%s/compare/%s...%s?per_page=100", repo, base, head)
+	req, err := c.newAPIRequest(ctx, requestURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		Files []service.ChangedFile `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Files) >= 300 {
+		return nil, fmt.Errorf("GitHub compare file list reached the 300-file safety limit")
+	}
+	return payload.Files, nil
+}
+
+func (c *githubReleaseClient) FetchRefCommit(ctx context.Context, repo, ref string) (string, error) {
+	requestURL := fmt.Sprintf("https://api.github.com/repos/%s/commits/%s", repo, url.PathEscape(ref))
+	req, err := c.newAPIRequest(ctx, requestURL)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(payload.SHA) == "" {
+		return "", fmt.Errorf("GitHub ref %q returned no commit", ref)
+	}
+	return payload.SHA, nil
 }
 
 func (c *githubReleaseClient) DownloadFile(ctx context.Context, url, dest string, maxSize int64) error {

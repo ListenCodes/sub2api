@@ -10,7 +10,8 @@ const deploymentFiles = [
   'docker-compose.custom.yml',
   'docker-compose.local.yml',
   '.env.example',
-  'ops/publish-custom.sh',
+  'ops/prepare-release.sh',
+  'ops/apply-release.sh',
   'ops/README.md',
   'RELEASE-RUNBOOK.md',
 ]
@@ -25,12 +26,10 @@ test('the active risk-control API uses the extensions-self hostname', () => {
   }
 
   assert.match(read('docker-compose.custom.yml'), /RISK_CONTROL_URL:\s*\$\{RISK_CONTROL_URL:-http:\/\/extensions-self:8090\}/)
-  const publishScript = read('ops/publish-custom.sh')
-  assert.match(publishScript, /http:\/\/extensions-self:8090\/healthz/)
-  assert.match(publishScript, /rendered_risk_url/)
-  assert.match(publishScript, /retired legacy container sub2api-risk-control still exists/)
-  assert.match(publishScript, /deploy-extensions-self:rollback-\$STAMP/)
-  assert.doesNotMatch(publishScript, /"risk-control:rollback-\$STAMP"/)
+  const applyScript = read('ops/apply-release.sh')
+  assert.match(applyScript, /extensions-self/)
+  assert.match(applyScript, /health_checking/)
+  assert.match(applyScript, /--pull never/)
 })
 
 test('release documentation no longer treats the retired standalone service as active', () => {

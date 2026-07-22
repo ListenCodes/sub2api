@@ -313,3 +313,34 @@ Custom Release Actions：
 - `extensions-self/account-monitor/README.md`：账号监控服务和数据采集。
 - `docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md`：账号监控数据口径。
 - `docs/RISK-CONTROL-ADMIN-SPEC.md`：风控管理功能契约。
+
+## 13. 两阶段更新与检测
+
+左上角检测同时读取官方最新非 draft、非 prerelease Stable Release，以及
+`release-state.json.production_commit` 和 `origin/custom-release` HEAD。更新分类
+是 `none`、`official`、`custom`、`combined` 或 `docs-only`；自定义更新始终展示目标
+commit 短 SHA，不使用 semver。检测是只读的，不修改生产、不拉镜像、不创建 trigger。
+任何运行时代码差异都进入运行时门禁；纯 Markdown、`AGENTS.md` 和 `.gitignore`
+可以提示但不会创建生产切换任务。
+
+管理员按钮采用明确的 prepare/apply 两步：
+
+1. `prepare` 持久化锁定 production、Stable 和 custom target，等待七个 Actions job，
+   验证两张 GHCR 镜像的 OCI 身份和 immutable digest，按 digest 预拉取，渲染显式
+   `docker-compose.yml` + `docker-compose.custom.yml`，备份双库、匹配 Compose、`.env`、
+   Nginx/证书、旧 digest、容器/镜像元数据和 rollback tag，并校验 SHA256 与
+   `pg_restore --list`。此阶段不切换 Git、不开关容器、不写 `release-state.json`，也不
+   触碰 `risk-control-postgres`。
+2. `prepared` manifest 有效 15 分钟，至少包含 production/target commit、Stable 身份、
+   双 digest、Compose/.env 哈希、backup_dir、`prepared_at`、`expires_at`。过期后重新
+   备份和复核即可，已经验证的镜像证据可以复用。
+3. 只有管理员点击“确认更新”才进入 `apply`。apply 只复核 manifest 和环境漂移，禁止
+   GitHub、Actions、pull、数据库备份和网络发布；使用本地镜像和 `--pull never`，先
+   `extensions-self` 再 `sub2api`，完成内网、公网、原生管理页、扩展路由和
+   `data-quality` 健康检查后才原子写 `release-state.json`。失败自动使用准备阶段的旧
+   digest 和匹配 Compose 对回滚。
+
+刷新、重新登录或浏览器断开会从服务端恢复当前非终态或 `prepared` job；终态 success、
+失败、冲突或回滚只作为审计历史，重新打开弹框不会显示上一次结果。旧单阶段 job 会
+fail-closed，`/admin/system/update` 仅保留为 prepare 兼容别名，不得直接调用
+`publish-custom.sh`。

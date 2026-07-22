@@ -378,3 +378,43 @@ the rollback target, and the reason.
 - Report implementation, local tests, `origin/custom-release` push,
   Actions/GHCR, production backup, deployment, health, trigger migration, and
   rollback material separately.
+
+## Two-Phase Update Contract
+
+The administrator update action is deliberately split into two durable jobs on
+the same `job_id`:
+
+```text
+check-updates (read-only)
+  -> prepare: Actions + paired GHCR digests + explicit Compose render + backups
+  -> prepared (15 minute expiry, immutable manifest)
+  -> administrator confirmation
+  -> apply: local drift gate + --pull never + extensions-self -> sub2api
+  -> health checks -> atomic release-state.json
+```
+
+`prepare-release.sh` may fetch and verify the locked target, but it never moves
+the production checkout, writes `.env` or `release-state.json`, or runs Compose
+`up`, `down`, `rm`, or `restart`. It backs up both databases, the matching
+Compose pair, environment, Nginx/certificates, old digests and metadata, then
+stores `release-prepared/<job-id>/manifest.json` and its SHA256. The manifest
+contains the production and target commits, Stable identity, both immutable
+digests, Compose and environment hashes, backup directory, `prepared_at`, and
+`expires_at`. A retry after expiry may reuse verified image evidence but must
+create a fresh backup and manifest.
+
+`apply-release.sh` accepts only a prepared manifest. It does not contact GitHub,
+wait for Actions, pull images, or repeat database backups. It refuses to run on
+production/origin/Compose/.env/digest/backup drift or an expired/corrupt
+manifest. Every lifecycle command uses the explicit Compose pair and
+`--pull never`; PostgreSQL, Redis, and `risk-control-postgres` are never
+recreated. A failed extension, main, or health step restores the old local
+digest pair and matching prepared Compose/backup evidence before reporting
+failure. `publish-custom.sh` is a deprecated fail-closed shim and is not a
+release entry point.
+
+The `/admin/system/update` endpoint remains a prepare-only compatibility alias.
+Legacy single-phase jobs are rejected with
+`LEGACY_SINGLE_PHASE_UNSUPPORTED`. Opening the admin version popup only shows
+current detection or an active/prepared durable job; a previous success,
+failure, or rollback result is historical and is not replayed.

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     clearVersionCache: vi.fn()
   },
   performUpdate: vi.fn(),
+  prepareUpdate: vi.fn(),
+  applyUpdate: vi.fn(),
   getUpdateStatus: vi.fn(),
   getRollbackVersions: vi.fn(),
   rollback: vi.fn(),
@@ -32,12 +34,16 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('@/api/admin/system', () => ({
   performUpdate: mocks.performUpdate,
+  prepareUpdate: mocks.prepareUpdate,
+  applyUpdate: mocks.applyUpdate,
   getUpdateStatus: mocks.getUpdateStatus,
   getRollbackVersions: mocks.getRollbackVersions,
   rollback: mocks.rollback,
   restartService: mocks.restartService,
   isTerminalUpdateStatus: (status: string) =>
-    status === 'success' || status === 'failed' || status === 'conflict',
+    status === 'success' || status === 'failed' || status === 'conflict' || status === 'expired' || status === 'drifted',
+  isPollingSettledUpdateStatus: (status: string) =>
+    status === 'success' || status === 'failed' || status === 'conflict' || status === 'prepared',
   updateNeedsRestart: (job: { need_restart: boolean }) => job.need_restart,
   updateWasPublished: (job: { published?: boolean }) => job.published === true
 }))
@@ -52,6 +58,11 @@ describe('VersionBadge conflict reporting', () => {
     localStorage.clear()
     mocks.appStore.hasUpdate = true
     mocks.appStore.buildType = 'release'
+    mocks.appStore.updateKind = 'official'
+    mocks.appStore.detectionComplete = true
+    mocks.appStore.updateWarning = ''
+    mocks.appStore.targetCustomShortSHA = ''
+    mocks.prepareUpdate.mockImplementation(mocks.performUpdate)
     mocks.getUpdateStatus.mockRejectedValueOnce({ response: { status: 404 } })
   })
 
@@ -141,6 +152,42 @@ describe('VersionBadge conflict reporting', () => {
     wrapper.unmount()
   })
 
+  it('does not show the previous terminal result when the update dialog is reopened', async () => {
+    mocks.performUpdate.mockResolvedValue({ job_id: 'update-published' })
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-published',
+      status: 'success',
+      message: 'PUBLISH OK',
+      need_restart: false,
+      published: true,
+      published_commit: 'customrelease1234567890'
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.152' },
+      global: { stubs: { Icon: true } }
+    })
+
+    await flushPromises()
+    const badge = wrapper.find('button')
+    await badge.trigger('click')
+    const updateButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('version.updateNow'))
+    await updateButton!.trigger('click')
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.text()).toContain('version.updatePublished')
+
+    await badge.trigger('click')
+    await badge.trigger('click')
+
+    expect(wrapper.text()).not.toContain('version.updatePublished')
+    expect(wrapper.text()).not.toContain('PUBLISH OK')
+
+    wrapper.unmount()
+  })
+
   it('resumes a persisted non-terminal release job after refresh', async () => {
     localStorage.setItem('sub2api-release-job-id', 'update-resume')
     mocks.getUpdateStatus.mockReset()
@@ -166,9 +213,84 @@ describe('VersionBadge conflict reporting', () => {
     wrapper.unmount()
   })
 
+  it('restores a prepared job and applies it only after explicit confirmation', async () => {
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-prepared',
+      action: 'prepare',
+      status: 'prepared',
+      message: 'Prepared',
+      expires_at: expiresAt,
+      need_restart: false
+    })
+    mocks.applyUpdate.mockResolvedValue({
+      job_id: 'update-prepared',
+      action: 'apply',
+      status: 'apply_queued',
+      message: 'Apply queued',
+      need_restart: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.158' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button').trigger('click')
+
+    expect(wrapper.text()).toContain('version.prepared')
+    expect(mocks.applyUpdate).not.toHaveBeenCalled()
+    const confirmButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('version.confirmUpdate'))
+    expect(confirmButton).toBeDefined()
+    await confirmButton!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.applyUpdate).toHaveBeenCalledWith('update-prepared')
+    wrapper.unmount()
+  })
+
+  it('shows docs-only detection without a production update action', async () => {
+    mocks.appStore.updateKind = 'docs-only'
+    mocks.appStore.hasUpdate = true
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.158' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button').trigger('click')
+
+    expect(wrapper.text()).toContain('version.docsOnlyUpdate')
+    expect(wrapper.findAll('button').some((button) => button.text().includes('version.updateNow'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows an incomplete detection warning without a production action', async () => {
+    mocks.appStore.detectionComplete = false
+    mocks.appStore.updateWarning = 'custom branch probe unavailable'
+    mocks.appStore.hasUpdate = false
+    mocks.appStore.updateKind = 'none'
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.158' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button').trigger('click')
+
+    expect(wrapper.text()).toContain('version.updateDetectionIncomplete')
+    expect(wrapper.text()).toContain('custom branch probe unavailable')
+    expect(wrapper.findAll('button').some((button) => button.text().includes('version.updateNow'))).toBe(false)
+    wrapper.unmount()
+  })
+
   it('allows a release check with no newer upstream version and keeps polling past 15 minutes', async () => {
     vi.useFakeTimers()
     mocks.appStore.hasUpdate = false
+    mocks.appStore.updateKind = 'custom'
     mocks.performUpdate.mockResolvedValue({
       job_id: 'update-custom',
       status: 'checking_release',

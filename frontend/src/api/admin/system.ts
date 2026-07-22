@@ -19,7 +19,21 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
+  update_kind: UpdateKind
+  official_update: boolean
+  custom_update: boolean
+  docs_only: boolean
+  runtime_update: boolean
+  detection_complete: boolean
+  production_commit?: string
+  production_stable_tag?: string
+  production_stable_commit?: string
+  target_custom_commit?: string
+  target_custom_short_sha?: string
+  custom_scope_error?: string
 }
+
+export type UpdateKind = 'none' | 'official' | 'custom' | 'combined' | 'docs-only'
 
 /**
  * Get current version
@@ -41,13 +55,19 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
 }
 
 export type UpdateJobStatus =
+  | 'checking_updates'
   | 'checking_release'
   | 'validating_tag'
   | 'merging_release'
   | 'waiting_actions'
   | 'waiting_images'
+  | 'downloading_images'
+  | 'preparing_compose'
   | 'promoting_release'
   | 'backing_up'
+  | 'validating_backup'
+  | 'prepared'
+  | 'apply_queued'
   | 'deploying_extensions'
   | 'deploying_main'
   | 'health_checking'
@@ -55,6 +75,10 @@ export type UpdateJobStatus =
   | 'success'
   | 'failed'
   | 'conflict'
+  | 'expired'
+  | 'drifted'
+
+export type UpdateAction = 'prepare' | 'apply'
 
 export interface UpdateRollback {
   attempted: boolean
@@ -64,11 +88,17 @@ export interface UpdateRollback {
 
 export interface UpdateJob {
   job_id: string
+  action?: UpdateAction
   status: UpdateJobStatus
   message: string
   integration_branch?: string
   base_commit?: string
   target_commit?: string
+  target_custom_commit?: string
+  update_kind?: UpdateKind
+  production_commit?: string
+  stable_release_tag?: string
+  stable_release_commit?: string
   release_tag?: string
   release_commit?: string
   release_published_at?: string
@@ -87,6 +117,10 @@ export interface UpdateJob {
   production_changed?: boolean
   error_code?: string
   artifact_path?: string
+  prepared_manifest?: string
+  prepared_manifest_sha256?: string
+  prepared_at?: string
+  expires_at?: string
   rollback?: UpdateRollback
   updated_at?: string
   started_at?: string | null
@@ -94,7 +128,17 @@ export interface UpdateJob {
 }
 
 export function isTerminalUpdateStatus(status: UpdateJobStatus): boolean {
-  return status === 'success' || status === 'failed' || status === 'conflict'
+  return (
+    status === 'success' ||
+    status === 'failed' ||
+    status === 'conflict' ||
+    status === 'expired' ||
+    status === 'drifted'
+  )
+}
+
+export function isPollingSettledUpdateStatus(status: UpdateJobStatus): boolean {
+  return isTerminalUpdateStatus(status) || status === 'prepared'
 }
 
 export function updateNeedsRestart(job: Pick<UpdateJob, 'need_restart'>): boolean {
@@ -141,9 +185,22 @@ const UPDATE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
  * Downloads and applies the latest version
  */
 export async function performUpdate(): Promise<UpdateJob> {
-  const { data } = await apiClient.post<UpdateJob>('/admin/system/update', undefined, {
+  return prepareUpdate('/admin/system/update')
+}
+
+export async function prepareUpdate(endpoint = '/admin/system/update/prepare'): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>(endpoint, undefined, {
     headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() }
   })
+  return data
+}
+
+export async function applyUpdate(jobID: string): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>(
+    '/admin/system/update/apply',
+    { job_id: jobID },
+    { headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() } }
+  )
   return data
 }
 
@@ -190,6 +247,8 @@ export const systemAPI = {
   getVersion,
   checkUpdates,
   performUpdate,
+  prepareUpdate,
+  applyUpdate,
   getUpdateStatus,
   getRollbackVersions,
   rollback,

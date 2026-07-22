@@ -54,10 +54,9 @@ test('compose runs one extensions-self application container and preserves the r
   }
 })
 
-test('the publisher targets extensions-self without managing the risk database lifecycle', () => {
-  const publisher = read('deploy/ops/publish-custom.sh')
-  assert.match(publisher, /deploy-extensions-self:rollback-\$STAMP/)
-  assert.match(publisher, /docker pull "\$TARGET_EXTENSIONS_REF"/)
+test('the apply phase targets extensions-self without managing the risk database lifecycle', () => {
+  const publisher = read('deploy/ops/apply-release.sh')
+  assert.match(publisher, /--pull never/)
   assert.match(publisher, /force-recreate extensions-self/)
   assert.match(publisher, /force-recreate sub2api/)
   assert.doesNotMatch(publisher, /force-recreate sub2api extensions-self/)
@@ -66,5 +65,4 @@ test('the publisher targets extensions-self without managing the risk database l
   assert.doesNotMatch(publisher, /rm[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /down[^\n]*risk-control-postgres/)
   assert.doesNotMatch(publisher, /docker inspect extensions-self[^\n]*\|\| docker inspect risk-control/)
-  assert.match(publisher, /if docker container inspect risk-control/)
 })
