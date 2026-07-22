@@ -105,7 +105,10 @@ test('both application images expose the same OCI release identity', () => {
 })
 
 test('production compose requires immutable application image references', () => {
-  const compose = read('deploy/docker-compose.yml')
+  const base = read('deploy/docker-compose.yml')
+  const compose = read('deploy/docker-compose.custom.yml')
+  assert.match(base, /image:\s*weishaw\/sub2api:latest/)
+  assert.doesNotMatch(base, /SUB2API_IMAGE|EXTENSIONS_SELF_IMAGE/)
   assert.match(compose, /image:\s*\$\{SUB2API_IMAGE:\?SUB2API_IMAGE is required\}/)
   assert.match(
     compose,

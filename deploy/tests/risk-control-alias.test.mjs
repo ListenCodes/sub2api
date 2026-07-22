@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const deploymentFiles = [
   'docker-compose.yml',
+  'docker-compose.custom.yml',
   'docker-compose.local.yml',
   '.env.example',
   'ops/publish-custom.sh',
@@ -23,7 +24,7 @@ test('the active risk-control API uses the extensions-self hostname', () => {
     assert.doesNotMatch(read(file), /risk-control-v2/, `${file} still references risk-control-v2`)
   }
 
-  assert.match(read('docker-compose.yml'), /RISK_CONTROL_URL=\$\{RISK_CONTROL_URL:-http:\/\/extensions-self:8090\}/)
+  assert.match(read('docker-compose.custom.yml'), /RISK_CONTROL_URL:\s*\$\{RISK_CONTROL_URL:-http:\/\/extensions-self:8090\}/)
   const publishScript = read('ops/publish-custom.sh')
   assert.match(publishScript, /http:\/\/extensions-self:8090\/healthz/)
   assert.match(publishScript, /rendered_risk_url/)

@@ -14,7 +14,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 | File | Description |
 |------|-------------|
-| `docker-compose.yml` | Docker Compose configuration (named volumes) |
+| `docker-compose.yml` | Official Stable Docker Compose configuration (named volumes) |
+| `docker-compose.custom.yml` | Custom production overlay; always load explicitly after `docker-compose.yml` |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
@@ -128,7 +129,7 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 | Version | Data Storage | Migration | Best For |
 |---------|-------------|-----------|----------|
 | **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data, ./risk_control_postgres_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
-| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/, including risk_control_postgres_data) | ⚠️ Requires docker commands | Simple setup, don't need migration |
+| **docker-compose.yml** | Official named-volume stack under `/var/lib/docker/volumes/` | ⚠️ Requires docker commands | Simple setup, don't need migration |
 
 **Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
 
@@ -183,8 +184,11 @@ ACCOUNT_MONITOR_BATCH_SIZE=1000
 ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=3000
 ```
 
-Use only `deploy/ops/publish-custom.sh` for the first enabled release. After
-backing up both databases, it runs `install-account-monitor-source.sql`, checks
+For the custom production deployment, use the administrator-triggered durable
+release path; do not invoke `deploy/ops/publish-custom.sh` as the final entry.
+Its internal publisher loads `docker-compose.yml` and
+`docker-compose.custom.yml` explicitly. After backing up both databases, it runs
+`install-account-monitor-source.sql`, checks
 `SET ROLE extensions_self_monitor_ro`, proves that the login cannot read full
 keys or credentials, deploys the verified paired digests, and checks the signed
 `data-quality` API. A failed permission probe stops before production mutation.

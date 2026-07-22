@@ -32,6 +32,11 @@
 主应用和 `extensions-self` 是一个发布单元：即使只修改其中一侧，也必须从同一完整 commit SHA
 生成双镜像并按 digest 成对发布。`risk-control-postgres` 独立存在，发布和回滚不得重建或替换它。
 
+生产 Compose 也分成两个职责明确的文件：`deploy/docker-compose.yml` 必须与当前记录的官方
+Stable Release 原文件完全一致；`deploy/docker-compose.custom.yml` 承载双 digest 镜像、宿主机更新挂载、
+风控环境、`extensions-self`、`risk-control-postgres` 和 `risk_control_postgres_data`。生产不得依赖
+隐式 `docker-compose.override.yml`，所有 Compose 命令都按 base 在前、custom 在后的顺序显式加载。
+
 ## 2. 权威来源和边界
 
 日常判断按以下优先级取证：
@@ -183,7 +188,7 @@ checking_release -> validating_tag -> merging_release
 
 1. 再次核对分支基线、官方稳定 Release 身份和镜像元数据。
 2. 备份并验证主数据库和扩展数据库 dump。
-3. 备份 Compose、`.env`、Nginx、源站证书/私钥、旧 digest、容器/镜像元数据和 rollback tag。
+3. 备份官方 Compose、自定义 Compose、`.env`、Nginx、源站证书/私钥、旧 digest、容器/镜像元数据和 rollback tag。
 4. 完成备份后才 fast-forward VPS 的 `/root/sub2api`。
 5. 匿名拉取两张目标 digest 镜像。
 6. 先部署并检查 `extensions-self`。
@@ -191,6 +196,24 @@ checking_release -> validating_tag -> merging_release
 8. 执行完整内网、公网、原生管理页、扩展代理和数据质量检查。
 9. 健康后写入 `release-state.json`。
 10. 仅在健康发布后，按 `data-quality.available_from/to` 执行必要的分段回填。
+
+生产 Compose 验证命令固定为：
+
+```bash
+docker compose --project-name deploy \
+  -f /root/sub2api/deploy/docker-compose.yml \
+  -f /root/sub2api/deploy/docker-compose.custom.yml \
+  --env-file /root/sub2api/deploy/.env config --quiet
+```
+
+需要核对有效服务、镜像、挂载、环境、网络和 volume 时，在相同参数后使用
+`config --format json`。Compose 的 map 覆盖和 list 追加以最终渲染结果为准，不能只检查某一源文件。
+备份文件固定为同一目录下的 `main-docker-compose.yml` 与 `custom-docker-compose.yml`；回滚及其健康
+检查只能加载这对备份，禁止把备份 base 与当前 custom（或反向组合）混用。
+
+首次从尚无自定义 overlay 的干净生产 commit 迁移时，发布器可为“当前旧配置”生成临时空 overlay，
+并把旧 base + 空 overlay 成对备份；无论是否已有 `release-state.json` 都适用。批准的目标 commit
+仍必须包含正式 `docker-compose.custom.yml`，否则在备份和生产变更前停止。
 
 禁止事项：
 
@@ -214,7 +237,7 @@ Release 校验、合并冲突、Actions 失败、镜像缺失、分支基线变�
 如果扩展、主应用或完整健康检查失败，发布器会：
 
 1. 记录 `rolling_back`。
-2. 恢复上一组 `SUB2API_IMAGE` 和 `EXTENSIONS_SELF_IMAGE` digest 及匹配配置。
+2. 恢复上一组 `SUB2API_IMAGE` 和 `EXTENSIONS_SELF_IMAGE` digest，以及同一备份目录中的匹配 Compose 对和 `.env`。
 3. 先恢复 `extensions-self`，再恢复 `sub2api`。
 4. 再次运行健康检查并记录回滚结果。
 
@@ -246,7 +269,7 @@ Release 校验、合并冲突、Actions 失败、镜像缺失、分支基线变�
 - [ ] 签名 `data-quality` 没有未解释的源错误、缺失分组或异常采集延迟。
 - [ ] `sub2api-release.path` enabled + active，发布 service 完成后 inactive。
 - [ ] root crontab 不包含发布、自动更新或 trigger 消费者，仅保留独立健康监控。
-- [ ] 备份目录包含双库 dump、校验和、配置、证书、镜像元数据和 rollback 证据。
+- [ ] 备份目录包含双库 dump、两份匹配 Compose、`.env`、校验和、证书、镜像元数据和 rollback 证据。
 
 ## 10. 时间预期
 

@@ -7,7 +7,9 @@ BRANCH="${SUB2API_BRANCH:-custom-release}"
 ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
 UPSTREAM_REMOTE="${SUB2API_UPSTREAM_REMOTE:-upstream}"
 ORIGIN_REF="$ORIGIN_REMOTE/$BRANCH"
-COMPOSE="$REPO/deploy/docker-compose.yml"
+COMPOSE_BASE="$REPO/deploy/docker-compose.yml"
+COMPOSE_CUSTOM="$REPO/deploy/docker-compose.custom.yml"
+CURRENT_COMPOSE_CUSTOM="$COMPOSE_CUSTOM"
 ENV_FILE="${SUB2API_ENV_FILE:-$REPO/deploy/.env}"
 DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 STATE_HELPER="${SUB2API_RELEASE_STATE_HELPER:-$SCRIPT_DIR/release-state.sh}"
@@ -24,6 +26,7 @@ MUTATION_STARTED=0
 ROLLBACK_ACTIVE=0
 LEGACY_BOOTSTRAP=0
 ANONYMOUS_DOCKER_CONFIG=''
+TEMP_COMPOSE_CUSTOM=''
 
 source "$STATE_HELPER"
 
@@ -33,6 +36,7 @@ log() {
 
 cleanup_publisher() {
   [[ -z "$ANONYMOUS_DOCKER_CONFIG" ]] || rm -rf "$ANONYMOUS_DOCKER_CONFIG"
+  [[ -z "$TEMP_COMPOSE_CUSTOM" ]] || rm -f "$TEMP_COMPOSE_CUSTOM"
 }
 
 prepare_anonymous_docker() {
@@ -92,9 +96,10 @@ write_image_environment() {
 }
 
 compose_with() {
-  local compose_file="$1"
-  shift
-  docker compose --project-name deploy -f "$compose_file" --env-file "$ENV_FILE" "$@"
+  local base_file="$1"
+  local custom_file="$2"
+  shift 2
+  docker compose --project-name deploy -f "$base_file" -f "$custom_file" --env-file "$ENV_FILE" "$@"
 }
 
 wait_container_health() {
@@ -131,7 +136,10 @@ print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).h
 }
 
 full_health_check() {
+  local base_file="$1"
+  local custom_file="$2"
   local name
+  compose_with "$base_file" "$custom_file" config --quiet >> "$LOG" 2>&1 || return 1
   for name in sub2api extensions-self risk-control-postgres sub2api-postgres sub2api-redis; do
     [[ "$(docker inspect "$name" --format '{{.State.Health.Status}}' 2>/dev/null || true)" == healthy ]] || return 1
   done
@@ -145,6 +153,7 @@ full_health_check() {
 
 perform_rollback() {
   local reason="$1"
+  local ROLLBACK_BASE ROLLBACK_CUSTOM
   ROLLBACK_ACTIVE=1
   job_update rolling_back "Restoring previous image digests after: $reason" "$(jq -n --arg message "$reason" '{rollback:{attempted:true,succeeded:false,message:$message}}')" || true
   log "Rolling back to $PREVIOUS_COMMIT"
@@ -152,22 +161,18 @@ perform_rollback() {
   cp -p "$BACKUP_DIR/main.env" "$ENV_FILE" || return 1
   if [[ "$LEGACY_BOOTSTRAP" -eq 1 ]]; then
     docker image inspect "$PREVIOUS_MAIN_REF" "$PREVIOUS_EXTENSIONS_REF" >/dev/null || return 1
-    ROLLBACK_COMPOSE="$BACKUP_DIR/main-docker-compose.yml"
   else
     anonymous_docker pull "$PREVIOUS_MAIN_REF" >> "$LOG" 2>&1 || return 1
     anonymous_docker pull "$PREVIOUS_EXTENSIONS_REF" >> "$LOG" 2>&1 || return 1
-    ROLLBACK_COMPOSE="$COMPOSE"
   fi
-  if [[ "$LEGACY_BOOTSTRAP" -eq 0 ]] \
-    && grep -q 'SUB2API_IMAGE' "$BACKUP_DIR/main-docker-compose.yml" \
-    && grep -q 'EXTENSIONS_SELF_IMAGE' "$BACKUP_DIR/main-docker-compose.yml"; then
-    ROLLBACK_COMPOSE="$BACKUP_DIR/main-docker-compose.yml"
-  fi
-  compose_with "$ROLLBACK_COMPOSE" up -d --no-deps --force-recreate extensions-self >> "$LOG" 2>&1 || return 1
+  ROLLBACK_BASE="$BACKUP_DIR/main-docker-compose.yml"
+  ROLLBACK_CUSTOM="$BACKUP_DIR/custom-docker-compose.yml"
+  [[ -r "$ROLLBACK_BASE" && -r "$ROLLBACK_CUSTOM" ]] || return 1
+  compose_with "$ROLLBACK_BASE" "$ROLLBACK_CUSTOM" up -d --no-deps --force-recreate extensions-self >> "$LOG" 2>&1 || return 1
   wait_container_health extensions-self || return 1
-  compose_with "$ROLLBACK_COMPOSE" up -d --no-deps --force-recreate sub2api >> "$LOG" 2>&1 || return 1
+  compose_with "$ROLLBACK_BASE" "$ROLLBACK_CUSTOM" up -d --no-deps --force-recreate sub2api >> "$LOG" 2>&1 || return 1
   wait_container_health sub2api || return 1
-  full_health_check || return 1
+  full_health_check "$ROLLBACK_BASE" "$ROLLBACK_CUSTOM" || return 1
   return 0
 }
 
@@ -228,12 +233,14 @@ cd "$REPO"
 [[ "$(git branch --show-current)" == "$BRANCH" ]] || abort_release "VPS source branch is not $BRANCH" WRONG_SOURCE_BRANCH
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || abort_release 'VPS source worktree is dirty' DIRTY_SOURCE
 [[ -r "$ENV_FILE" ]] || abort_release 'production environment file is missing' ENVIRONMENT_MISSING
-[[ -r "$COMPOSE" ]] || abort_release 'current production Compose file is missing' COMPOSE_MISSING
+[[ -r "$COMPOSE_BASE" ]] || abort_release 'current production Compose file is missing' COMPOSE_MISSING
 
 git fetch "$ORIGIN_REMOTE" "$BRANCH" >> "$LOG" 2>&1 || abort_release "fetch $ORIGIN_REF failed" ORIGIN_FETCH_FAILED
 ORIGIN_COMMIT="$(git rev-parse "$ORIGIN_REF")"
 LOCAL_COMMIT="$(git rev-parse HEAD)"
 [[ "$APPROVED_COMMIT" == "$ORIGIN_COMMIT" ]] || abort_release "approved commit is not $ORIGIN_REF" APPROVED_COMMIT_MISMATCH
+git cat-file -e "$APPROVED_COMMIT:deploy/docker-compose.custom.yml" >/dev/null 2>&1 \
+  || abort_release 'approved target custom Compose overlay is missing' TARGET_COMPOSE_CUSTOM_MISSING
 
 if [[ -r "$PRODUCTION_RELEASE_STATE_FILE" ]]; then
   PREVIOUS_COMMIT="$(jq -er '.production_commit' "$PRODUCTION_RELEASE_STATE_FILE" 2>/dev/null || true)"
@@ -255,6 +262,11 @@ else
   PREVIOUS_EXTENSIONS_DIGEST=''
   git merge-base --is-ancestor "$PREVIOUS_COMMIT" "$APPROVED_COMMIT" \
     || abort_release 'legacy production source is not an ancestor of the approved target' LEGACY_BOOTSTRAP_INVALID
+fi
+if [[ ! -r "$COMPOSE_CUSTOM" ]]; then
+  TEMP_COMPOSE_CUSTOM="$(mktemp)"
+  printf 'services: {}\n' > "$TEMP_COMPOSE_CUSTOM"
+  CURRENT_COMPOSE_CUSTOM="$TEMP_COMPOSE_CUSTOM"
 fi
 TARGET_MAIN_REF="$MAIN_REPOSITORY@$MAIN_DIGEST"
 TARGET_EXTENSIONS_REF="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST"
@@ -291,7 +303,7 @@ for container_name in "${required_containers[@]}"; do
   docker container inspect "$container_name" >/dev/null 2>&1 || abort_release "required container is missing: $container_name" CONTAINER_MISSING
 done
 
-rendered_compose="$(docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" config --format json)" \
+rendered_compose="$(docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$CURRENT_COMPOSE_CUSTOM" --env-file "$ENV_FILE" config --format json)" \
   || abort_release 'could not render current production Compose configuration' COMPOSE_INVALID
 rendered_values="$(printf '%s' "$rendered_compose" | python3 -c '
 import json, sys
@@ -353,7 +365,8 @@ docker exec -i sub2api-postgres pg_restore --list < "$BACKUP_DIR/sub2api_db.dump
 docker exec -i risk-control-postgres pg_restore --list < "$BACKUP_DIR/risk_control_db.dump" > "$BACKUP_DIR/risk_control_db.list" \
   || abort_release 'extensions database backup verification failed' EXTENSIONS_BACKUP_INVALID
 cp -p "$ENV_FILE" "$BACKUP_DIR/main.env"
-cp -p "$COMPOSE" "$BACKUP_DIR/main-docker-compose.yml"
+cp -p "$COMPOSE_BASE" "$BACKUP_DIR/main-docker-compose.yml"
+cp -p "$CURRENT_COMPOSE_CUSTOM" "$BACKUP_DIR/custom-docker-compose.yml"
 if [[ "$LEGACY_BOOTSTRAP" -eq 0 ]]; then
   cp -p "$PRODUCTION_RELEASE_STATE_FILE" "$BACKUP_DIR/release-state.json"
 fi
@@ -417,7 +430,7 @@ fi
 [[ "$(git rev-parse HEAD)" == "$APPROVED_COMMIT" ]] || abort_release 'local source did not reach the approved target' LOCAL_SOURCE_MISMATCH
 
 SUB2API_IMAGE="$TARGET_MAIN_REF" EXTENSIONS_SELF_IMAGE="$TARGET_EXTENSIONS_REF" \
-  docker compose --project-name deploy -f "$COMPOSE" --env-file "$ENV_FILE" config --quiet \
+  docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" config --quiet \
   || abort_release 'target Compose configuration is invalid' TARGET_COMPOSE_INVALID
 
 if [[ "$monitor_enabled" == true ]]; then
@@ -455,19 +468,19 @@ MUTATION_STARTED=1
 write_image_environment "$TARGET_MAIN_REF" "$TARGET_EXTENSIONS_REF" || abort_release 'write target image environment failed' ENVIRONMENT_UPDATE_FAILED
 
 job_update deploying_extensions "Deploying extensions digest $EXTENSIONS_DIGEST" '{}'
-compose_with "$COMPOSE" up -d --no-deps --force-recreate extensions-self >> "$LOG" 2>&1 \
+compose_with "$COMPOSE_BASE" "$COMPOSE_CUSTOM" up -d --no-deps --force-recreate extensions-self >> "$LOG" 2>&1 \
   || abort_release 'extensions deployment failed' EXTENSIONS_DEPLOY_FAILED
 wait_container_health extensions-self || abort_release 'extensions container did not become healthy' EXTENSIONS_HEALTH_FAILED
 docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null \
   || abort_release 'extensions internal health check failed' EXTENSIONS_HEALTH_FAILED
 
 job_update deploying_main "Deploying main digest $MAIN_DIGEST" '{}'
-compose_with "$COMPOSE" up -d --no-deps --force-recreate sub2api >> "$LOG" 2>&1 \
+compose_with "$COMPOSE_BASE" "$COMPOSE_CUSTOM" up -d --no-deps --force-recreate sub2api >> "$LOG" 2>&1 \
   || abort_release 'main deployment failed' MAIN_DEPLOY_FAILED
 wait_container_health sub2api || abort_release 'main container did not become healthy' MAIN_HEALTH_FAILED
 
 job_update health_checking 'Checking internal and public production health' '{}'
-full_health_check || abort_release 'production health checks failed' PRODUCTION_HEALTH_FAILED
+full_health_check "$COMPOSE_BASE" "$COMPOSE_CUSTOM" || abort_release 'production health checks failed' PRODUCTION_HEALTH_FAILED
 if docker container inspect risk-control >/dev/null 2>&1; then
   docker rm -f risk-control >> "$LOG" 2>&1 || abort_release 'retired risk-control container removal failed' LEGACY_CONTAINER_REMOVE_FAILED
 fi

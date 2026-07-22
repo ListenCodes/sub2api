@@ -34,7 +34,7 @@ test('homepage clips decorative overflow at the document boundary', () => {
 })
 
 test('compose runs one extensions-self application container and preserves the risk database', () => {
-  for (const composeFile of ['deploy/docker-compose.yml', 'deploy/docker-compose.local.yml']) {
+  for (const composeFile of ['deploy/docker-compose.custom.yml', 'deploy/docker-compose.local.yml']) {
     const compose = read(composeFile)
     assert.match(compose, /^  extensions-self:\s*$/m)
     assert.match(compose, /container_name: extensions-self/)
@@ -48,7 +48,7 @@ test('compose runs one extensions-self application container and preserves the r
       )
       assert.doesNotMatch(compose, /context: \.\.\/extensions-self/)
     }
-    assert.match(compose, /RISK_CONTROL_URL=\$\{RISK_CONTROL_URL:-http:\/\/extensions-self:8090\}/)
+    assert.match(compose, /RISK_CONTROL_URL(?:=|:)\s*\$\{RISK_CONTROL_URL:-http:\/\/extensions-self:8090\}/)
     assert.match(compose, /^  risk-control-postgres:\s*$/m)
     assert.doesNotMatch(compose, /^  risk-control:\s*$/m)
   }

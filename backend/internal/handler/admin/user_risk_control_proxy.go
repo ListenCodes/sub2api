@@ -3,6 +3,8 @@ package admin
 import (
 	"io"
 	"net/http"
+	"net/url"
+	pathpkg "path"
 	"strconv"
 	"strings"
 
@@ -122,6 +124,10 @@ func isAccountMonitorRebuildPath(path string) bool {
 }
 
 func allowedRiskControlPath(method, path string) bool {
+	path, ok := normalizeRiskControlPath(path)
+	if !ok {
+		return false
+	}
 	switch {
 	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/audit"):
 		return true
@@ -132,6 +138,29 @@ func allowedRiskControlPath(method, path string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeRiskControlPath(rawPath string) (string, bool) {
+	decoded := rawPath
+	for range 3 {
+		next, err := url.PathUnescape(decoded)
+		if err != nil {
+			return "", false
+		}
+		if next == decoded {
+			break
+		}
+		decoded = next
+	}
+	if strings.Contains(decoded, "\\") || pathpkg.Clean(decoded) != decoded {
+		return "", false
+	}
+	for _, segment := range strings.Split(decoded, "/") {
+		if segment == ".." {
+			return "", false
+		}
+	}
+	return decoded, true
 }
 
 func isProcessedUserPath(path string) bool {

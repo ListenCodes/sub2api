@@ -42,9 +42,9 @@ mkdir -p "$SEED_REPO/deploy"
 cat > "$SEED_REPO/deploy/docker-compose.yml" <<'YAML'
 services:
   sub2api:
-    image: sub2api:custom
+    image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}
   extensions-self:
-    image: deploy-extensions-self
+    image: ${EXTENSIONS_SELF_IMAGE:?EXTENSIONS_SELF_IMAGE is required}
 YAML
 printf 'deploy/.env\n' > "$SEED_REPO/.gitignore"
 printf 'stable\n' > "$SEED_REPO/application.txt"
@@ -62,15 +62,21 @@ jq -n \
 git -C "$SEED_REPO" add deploy/stable-release-baseline.json
 git -C "$SEED_REPO" commit -q -m baseline
 PREVIOUS_COMMIT="$(git -C "$SEED_REPO" rev-parse HEAD)"
-printf 'target\n' >> "$SEED_REPO/application.txt"
 cat > "$SEED_REPO/deploy/docker-compose.yml" <<'YAML'
+services:
+  sub2api:
+    image: weishaw/sub2api:latest
+YAML
+cat > "$SEED_REPO/deploy/docker-compose.custom.yml" <<'YAML'
 services:
   sub2api:
     image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}
   extensions-self:
     image: ${EXTENSIONS_SELF_IMAGE:?EXTENSIONS_SELF_IMAGE is required}
 YAML
-git -C "$SEED_REPO" commit -q -am target
+printf 'target\n' >> "$SEED_REPO/application.txt"
+git -C "$SEED_REPO" add deploy/docker-compose.yml deploy/docker-compose.custom.yml application.txt
+git -C "$SEED_REPO" commit -q -m target
 INTERMEDIATE_COMMIT="$(git -C "$SEED_REPO" rev-parse HEAD)"
 printf 'successor\n' >> "$SEED_REPO/application.txt"
 git -C "$SEED_REPO" commit -q -am successor
@@ -276,6 +282,10 @@ main_line="$(grep -n 'up -d --no-deps --force-recreate sub2api' "$CASE_DIR/docke
 [[ -n "$extensions_line" && -n "$main_line" && "$extensions_line" -lt "$main_line" ]] || fail 'healthy deployment was not staged extensions-first'
 [[ -s "$BACKUP_DIR/sub2api_db.dump" && -s "$BACKUP_DIR/risk_control_db.dump" ]] || fail 'database dumps were not backed up'
 [[ -s "$BACKUP_DIR/SHA256SUMS" && -s "$BACKUP_DIR/container-metadata.json" ]] || fail 'rollback metadata is incomplete'
+[[ -s "$BACKUP_DIR/main-docker-compose.yml" && -s "$BACKUP_DIR/custom-docker-compose.yml" ]] || fail 'matching Compose pair was not backed up'
+grep -q -- "-f $REPO/deploy/docker-compose.yml -f $REPO/deploy/docker-compose.custom.yml" "$CASE_DIR/docker-calls" || fail 'publisher did not load the explicit Compose pair'
+target_config_checks="$(grep -c -- "-f $REPO/deploy/docker-compose.yml -f $REPO/deploy/docker-compose.custom.yml .*config --quiet" "$CASE_DIR/docker-calls")"
+[[ "$target_config_checks" -ge 2 ]] || fail 'publisher did not revalidate the Compose pair during target health checks'
 grep -q 'docker image tag .* sub2api:rollback-' "$CASE_DIR/docker-calls" || fail 'main rollback image was not tagged'
 grep -q 'docker image tag .* deploy-extensions-self:rollback-' "$CASE_DIR/docker-calls" || fail 'extensions rollback image was not tagged'
 
@@ -294,6 +304,8 @@ run_case legacy-bootstrap-failure
 assert_eq true "$(jq -r '.rollback.succeeded' "$JOB_FILE")" 'legacy bootstrap failure did not restore the old deployment'
 [[ ! -e "$DATA_DIR/release-state.json" ]] || fail 'failed legacy bootstrap created a healthy production state'
 grep -q -- "-f $BACKUP_DIR/main-docker-compose.yml" "$CASE_DIR/docker-calls" || fail 'legacy bootstrap rollback did not use the old Compose file'
+grep -q -- "-f $BACKUP_DIR/main-docker-compose.yml -f $BACKUP_DIR/custom-docker-compose.yml" "$CASE_DIR/docker-calls" || fail 'legacy bootstrap rollback did not use the matching Compose pair'
+grep -q -- "-f $BACKUP_DIR/main-docker-compose.yml -f $BACKUP_DIR/custom-docker-compose.yml .*config --quiet" "$CASE_DIR/docker-calls" || fail 'rollback health checks did not validate the backed-up Compose pair'
 grep -q '^RISK_CONTROL_URL=http://extensions-self:8090$' "$REPO/deploy/.env" || fail 'legacy bootstrap rollback did not restore the old environment'
 
 for scenario in extension-failure health-failure; do

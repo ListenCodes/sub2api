@@ -1,9 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -74,6 +76,48 @@ func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
 	}
 	if allowedRiskControlPath(http.MethodPost, "/users/not-an-id/processed") {
 		t.Fatal("processed path must require a numeric user id")
+	}
+}
+
+func TestProxyRiskControlRejectsTraversalInAllowlistPrefixes(t *testing.T) {
+	for _, path := range []string{
+		"/users/../secret",
+		"/users/%2e%2e/secret",
+		"/users/%252e%252e/secret",
+		"/rules/../secret",
+		"/rules/%2e%2e/secret",
+		"/rules/%252e%252e/secret",
+		"/users\\..\\secret",
+		"/users/%5c..%5csecret",
+	} {
+		if allowedRiskControlPath(http.MethodGet, path) || allowedRiskControlPath(http.MethodPut, path) {
+			t.Fatalf("path traversal must be rejected: %s", path)
+		}
+	}
+}
+
+func TestProxyRiskControlRejectsOversizedBodyWithoutCallingUpstream(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "proxy-test-secret")
+
+	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
+	h.SetRiskControlClient(serviceClientFromEnvForTest())
+	engine := gin.New()
+	engine.POST("/admin/user-risk-control/*path", h.ProxyRiskControl)
+	request := httptest.NewRequest(http.MethodPost, "/admin/user-risk-control/rules", bytes.NewReader(make([]byte, maxRiskControlProxyBody+1)))
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("upstream calls = %d, want 0", calls.Load())
 	}
 }
 

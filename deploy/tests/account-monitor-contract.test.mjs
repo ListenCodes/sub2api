@@ -12,16 +12,16 @@ function read(relativePath) {
 }
 
 test('compose wires the account monitor into the existing extensions-self service', () => {
-  for (const composeFile of ['deploy/docker-compose.yml', 'deploy/docker-compose.local.yml']) {
+  for (const composeFile of ['deploy/docker-compose.custom.yml', 'deploy/docker-compose.local.yml']) {
     const compose = read(composeFile)
     assert.equal((compose.match(/^  extensions-self:\s*$/gm) ?? []).length, 1)
     assert.doesNotMatch(compose, /^  account-monitor:\s*$/m)
-    assert.match(compose, /ACCOUNT_MONITOR_ENABLED=\$\{ACCOUNT_MONITOR_ENABLED:-false\}/)
-    assert.match(compose, /ACCOUNT_MONITOR_SOURCE_DATABASE_URL=\$\{ACCOUNT_MONITOR_SOURCE_DATABASE_URL:-\}/)
-    assert.match(compose, /ACCOUNT_MONITOR_POLL_SECONDS=\$\{ACCOUNT_MONITOR_POLL_SECONDS:-60\}/)
-    assert.match(compose, /ACCOUNT_MONITOR_LOOKBACK_SECONDS=\$\{ACCOUNT_MONITOR_LOOKBACK_SECONDS:-300\}/)
-    assert.match(compose, /ACCOUNT_MONITOR_BATCH_SIZE=\$\{ACCOUNT_MONITOR_BATCH_SIZE:-1000\}/)
-    assert.match(compose, /ACCOUNT_MONITOR_QUERY_TIMEOUT_MS=\$\{ACCOUNT_MONITOR_QUERY_TIMEOUT_MS:-3000\}/)
+    assert.match(compose, /ACCOUNT_MONITOR_ENABLED(?:=|:)\s*\$\{ACCOUNT_MONITOR_ENABLED:-false\}/)
+    assert.match(compose, /ACCOUNT_MONITOR_SOURCE_DATABASE_URL(?:=|:)\s*\$\{ACCOUNT_MONITOR_SOURCE_DATABASE_URL:-\}/)
+    assert.match(compose, /ACCOUNT_MONITOR_POLL_SECONDS(?:=|:)\s*\$\{ACCOUNT_MONITOR_POLL_SECONDS:-60\}/)
+    assert.match(compose, /ACCOUNT_MONITOR_LOOKBACK_SECONDS(?:=|:)\s*\$\{ACCOUNT_MONITOR_LOOKBACK_SECONDS:-300\}/)
+    assert.match(compose, /ACCOUNT_MONITOR_BATCH_SIZE(?:=|:)\s*\$\{ACCOUNT_MONITOR_BATCH_SIZE:-1000\}/)
+    assert.match(compose, /ACCOUNT_MONITOR_QUERY_TIMEOUT_MS(?:=|:)\s*\$\{ACCOUNT_MONITOR_QUERY_TIMEOUT_MS:-3000\}/)
     assert.doesNotMatch(compose, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
     assert.match(compose, /extensions-self:[\s\S]*depends_on:[\s\S]*postgres:[\s\S]*condition: service_healthy/)
     assert.match(compose, /^  risk-control-postgres:\s*$/m)

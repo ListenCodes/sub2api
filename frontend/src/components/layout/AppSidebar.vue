@@ -197,6 +197,7 @@ import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import { createExtensionAdminNavItems } from '@/features/extensions/navigation'
 
 interface NavItem {
   path: string
@@ -783,18 +784,7 @@ const adminNavItems = computed((): NavItem[] => {
         { path: '/admin/prompt-audit', label: t('nav.promptAudit'), icon: ShieldIcon },
       ],
     },
-    {
-      path: '/admin/extensions',
-      label: '扩展中心',
-      icon: ShieldIcon,
-      hideInSimpleMode: true,
-      expandOnly: true,
-      children: [
-        { path: '/admin/extensions/user-risk/users', activePrefix: '/admin/extensions/user-risk', label: '用户风控', icon: ShieldIcon },
-        { path: '/admin/extensions/account-monitor', label: '账号监控', icon: ChartIcon },
-        { path: '/admin/extensions/group-monitor', label: '分组监控', icon: FolderIcon },
-      ],
-    },
+    ...createExtensionAdminNavItems({ ShieldIcon, ChartIcon, FolderIcon }),
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
     { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
     {

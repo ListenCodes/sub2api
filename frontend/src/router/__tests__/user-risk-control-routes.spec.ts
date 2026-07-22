@@ -4,6 +4,15 @@ import { describe, expect, it } from 'vitest'
 import router from '@/router'
 
 describe('user risk control routes', () => {
+  it('keeps extension routes and redirects in the dedicated module', () => {
+    const source = readFileSync(resolve(__dirname, '../../features/extensions/routes.ts'), 'utf8')
+    const routerSource = readFileSync(resolve(__dirname, '../index.ts'), 'utf8')
+    expect(source).toContain('extensionRoutes')
+    expect(source).toContain('/admin/extensions')
+    expect(routerSource).not.toContain("path: '/admin/extensions'")
+    expect(routerSource).toContain('extensionRoutes')
+  })
+
   it.each([
     ['/admin/user-risk-control/users', '/admin/extensions/user-risk/users'],
     ['/admin/user-risk-control/rules', '/admin/extensions/user-risk/rules'],
@@ -46,7 +55,8 @@ describe('user risk control routes', () => {
   })
 
   it('renders extensions center as an expandable sidebar group with three native entries', () => {
-    const source = readFileSync(resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf8')
+    const source = readFileSync(resolve(__dirname, '../../features/extensions/navigation.ts'), 'utf8')
+    const sidebar = readFileSync(resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf8')
     const center = readFileSync(resolve(__dirname, '../../views/admin/ExtensionsCenterView.vue'), 'utf8')
 
     expect(source.match(/path:\s*'\/admin\/extensions'/g)).toHaveLength(1)
@@ -60,6 +70,8 @@ describe('user risk control routes', () => {
     expect(source).toMatch(/path:\s*'\/admin\/extensions',[\s\S]*?expandOnly:\s*true,[\s\S]*?children:\s*\[/)
     expect(source).not.toContain("path: '/admin/account-monitor'")
     expect(source).not.toContain("path: '/admin/user-risk-control'")
+    expect(sidebar).not.toContain("path: '/admin/extensions'")
+    expect(sidebar).toContain('createExtensionAdminNavItems')
     expect(center).not.toContain('aria-label="扩展中心"')
     expect(center).not.toContain('const tabs =')
     expect(center).not.toContain('>扩展中心</h1>')
@@ -68,5 +80,12 @@ describe('user risk control routes', () => {
 
   it('keeps content moderation at the legacy risk-control route', () => {
     expect(router.resolve('/admin/risk-control').matched.at(-1)?.path).toBe('/admin/risk-control')
+  })
+
+  it('inherits authentication and administrator requirements from the extension parent', () => {
+    const matched = router.resolve('/admin/extensions/account-monitor').matched
+    expect(matched[0]?.path).toBe('/admin/extensions')
+    expect(matched[0]?.meta.requiresAuth).toBe(true)
+    expect(matched[0]?.meta.requiresAdmin).toBe(true)
   })
 })

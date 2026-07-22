@@ -21,18 +21,17 @@ func RegisterGatewayRoutes(
 	opsService *service.OpsService,
 	settingService *service.SettingService,
 	cfg *config.Config,
+	extensionMiddleware gin.HandlerFunc,
 ) {
 	bodyLimit := middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize)
 	textBodyLimit := middleware.RequestBodyLimit(cfg.Gateway.TextMaxBodySize)
 	clientRequestID := middleware.ClientRequestID()
 	opsErrorLogger := handler.OpsErrorLoggerMiddleware(opsService)
 	endpointNorm := handler.InboundEndpointMiddleware()
-	riskClient := service.NewRiskControlClientFromEnv()
-	var riskBanHandler handler.RiskBanHandler
-	if h != nil && h.Admin != nil && h.Admin.User != nil {
-		riskBanHandler = h.Admin.User.ApplyRiskBan
+	if extensionMiddleware == nil {
+		panic("gateway extension middleware is required")
 	}
-	riskEvents := handler.RiskEventMiddleware(riskClient, riskBanHandler)
+	riskEvents := extensionMiddleware
 
 	// 未分组 Key 拦截中间件（按协议格式区分错误响应）
 	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, middleware.AnthropicErrorWriter)

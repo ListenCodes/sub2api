@@ -89,12 +89,27 @@ Production `.env` pins `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE` to the
 verified `ghcr.io/...@sha256:...` references. The VPS pulls them anonymously.
 There is no release polling job or automatic source update.
 
+Production always uses an explicit Compose pair. The base
+`deploy/docker-compose.yml` is the unmodified file from the recorded official
+Stable Release. All production-only services, digest image substitutions,
+mounts, environment, and the dedicated risk database volume live in
+`deploy/docker-compose.custom.yml`. Never use an implicit
+`docker-compose.override.yml`; every production `config`, `up`, and health
+validation command supplies the base first and custom file second.
+
 For the one-time migration from legacy locally built images, a missing
 `release-state.json` makes the publisher record the clean local commit, current
-container image IDs, old Compose/environment, and rollback tags in the release
+container image IDs, the matching Compose pair/environment, and rollback tags in the release
 backup. A healthy publish creates the first formal digest state. A failed
-migration restores the old Compose and local images and leaves formal state
+migration restores the backed-up Compose pair and local images and leaves formal state
 absent; this bootstrap is not used after a healthy digest release.
+
+When the current clean production commit predates
+`docker-compose.custom.yml`, the publisher pairs its old base file with a
+temporary empty overlay for current-state rendering and backup. The approved
+target commit must contain the tracked custom overlay before backup or mutation
+can proceed. This also supports a pre-overlay deployment that already has a
+valid `release-state.json`.
 
 Do not call `publish-custom.sh` directly for final acceptance. Trigger the same
 durable job used by the administrator UI and monitor its persisted states.
@@ -138,6 +153,7 @@ The unified extension service is sourced from the approved main repository check
 /root/sub2api/extensions-self/account-monitor
 /root/sub2api/extensions-self/homepage
 /root/sub2api/deploy/docker-compose.yml
+/root/sub2api/deploy/docker-compose.custom.yml
 /root/sub2api/deploy/.env
 ```
 
@@ -180,9 +196,16 @@ service image and Compose file together, then validate:
 docker compose \
   --project-name deploy \
   -f /root/sub2api/deploy/docker-compose.yml \
+  -f /root/sub2api/deploy/docker-compose.custom.yml \
   --env-file /root/sub2api/deploy/.env \
   config --quiet
 ```
+
+Use the same pair with `config --format json` when inspecting effective
+services, images, mounts, environment, networks, and volumes. Compose mapping
+keys are overridden by the custom file, while lists such as mounts are merged;
+the rendered configuration, not either source file alone, is the runtime
+contract.
 
 Keep the main application in shadow/review mode until registration events,
 user identity, risk reason, action records, and administrator visibility have
@@ -198,7 +221,7 @@ must never be the main DB owner.
 For the first enabled release, use this order:
 
 1. Record the approved commit and current image IDs.
-2. Back up and verify the main database and `risk-control-postgres`; back up Compose,
+2. Back up and verify the main database and `risk-control-postgres`; back up both Compose files,
    `.env`, Nginx vhost, origin certificate/key, container/image metadata and rollback tags.
 3. Run `deploy/ops/install-account-monitor-source.sql` as the main DB owner.
 4. Verify the NOLOGIN role and TCP login can read `extensions_self_ro.usage_source`

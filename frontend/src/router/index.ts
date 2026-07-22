@@ -11,6 +11,7 @@ import { useAdminComplianceStore } from '@/stores/adminCompliance'
 import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
+import { extensionRoutes } from '@/features/extensions/routes'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { resolveRouteDocumentTitle } from './title'
 
@@ -480,10 +481,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/admin/account-monitor',
-    redirect: (to) => ({ path: '/admin/extensions/account-monitor', query: to.query })
-  },
-  {
     path: '/monitor',
     name: 'ChannelStatus',
     component: () => import('@/views/user/ChannelStatusView.vue'),
@@ -591,63 +588,7 @@ const routes: RouteRecordRaw[] = [
       requiresRiskControl: true
     }
   },
-  {
-    path: '/admin/user-risk-control/users',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/users', query: to.query })
-  },
-  {
-    path: '/admin/user-risk-control/rules',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/rules', query: to.query })
-  },
-  {
-    path: '/admin/user-risk-control/audit',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/audit', query: to.query })
-  },
-  {
-    path: '/admin/extensions',
-    component: () => import('@/views/admin/ExtensionsCenterView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'admin.accountMonitor.extensionsTitle', descriptionKey: 'admin.accountMonitor.extensionsDescription' },
-    children: [
-      { path: '', redirect: '/admin/extensions/user-risk/users' },
-      {
-        path: 'user-risk',
-        component: () => import('@/views/admin/extensions/UserRiskControlPanel.vue'),
-        children: [
-          { path: '', redirect: '/admin/extensions/user-risk/users' },
-          { path: 'users', name: 'AdminExtensionUserRiskUsers', component: () => import('@/views/admin/UserRiskControlUsersView.vue'), meta: { titleKey: 'admin.userRiskControl.usersTitle', descriptionKey: 'admin.userRiskControl.usersDescription' } },
-          { path: 'rules', name: 'AdminExtensionUserRiskRules', component: () => import('@/views/admin/UserRiskControlRulesView.vue'), meta: { titleKey: 'admin.userRiskControl.rulesTitle', descriptionKey: 'admin.userRiskControl.rulesDescription' } },
-          { path: 'audit', name: 'AdminExtensionUserRiskAudit', component: () => import('@/views/admin/UserRiskControlAuditView.vue'), meta: { titleKey: 'admin.userRiskControl.auditPageTitle', descriptionKey: 'admin.userRiskControl.auditPageDescription' } },
-        ],
-      },
-      { path: 'account-monitor', name: 'AdminExtensionAccountMonitor', component: () => import('@/views/admin/AccountMonitorView.vue'), meta: { titleKey: 'admin.accountMonitor.title', descriptionKey: 'admin.accountMonitor.description' } },
-      { path: 'group-monitor', name: 'AdminExtensionGroupMonitor', component: () => import('@/views/admin/group-monitor/GroupMonitorPanel.vue'), meta: { titleKey: 'admin.accountMonitor.groupTitle', descriptionKey: 'admin.accountMonitor.groupDescription' } },
-    ],
-  },
-  {
-    path: '/admin/risk-control/cases',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/users', query: to.query })
-  },
-  {
-    path: '/admin/risk-control/events',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/users', query: to.query })
-  },
-  {
-    path: '/admin/risk-control/scenarios',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/rules', query: to.query })
-  },
-  {
-    path: '/admin/risk-control/subjects',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/users', query: to.query })
-  },
-  {
-    path: '/admin/risk-control/lists',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/rules', query: to.query })
-  },
-  {
-    path: '/admin/risk-control/audit',
-    redirect: (to) => ({ path: '/admin/extensions/user-risk/audit', query: to.query })
-  },
-  { path: '/admin/risk-control/overview', redirect: (to) => ({ path: '/admin/extensions/user-risk/users', query: to.query }) },
+  ...extensionRoutes,
   {
     path: '/admin/prompt-audit',
     name: 'AdminPromptAudit',
