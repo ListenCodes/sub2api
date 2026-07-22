@@ -32,13 +32,11 @@ func RegisterCustomExtensionRoutes(
 	public.GET("/homepage/*path", h.Auth.ProxyExtensionsHomepage)
 	public.HEAD("/homepage/*path", h.Auth.ProxyExtensionsHomepage)
 
-	riskClient := service.NewRiskControlClientFromEnv()
-	var riskBanHandler handler.RiskBanHandler
-	if h != nil && h.Admin != nil && h.Admin.User != nil {
-		riskBanHandler = h.Admin.User.ApplyRiskBan
-	}
 	return &CustomExtensionRoutes{
-		GatewayRiskEvents: handler.RiskEventMiddleware(riskClient, riskBanHandler),
+		GatewayRiskEvents: handler.RiskEventMiddleware(
+			service.NewRiskControlClientFromEnv(),
+			h.Admin.User.ApplyRiskBan,
+		),
 	}
 }
 
