@@ -84,6 +84,7 @@ foreach ($marker in @(
     'release-state.json', 'docker exec sub2api-postgres pg_dump',
     'docker exec risk-control-postgres pg_dump', 'pg_restore --list',
     'certificate-metadata.tsv', 'container-metadata.json', 'image-metadata.json',
+    'docker-compose.custom.yml', 'main-docker-compose.yml', 'custom-docker-compose.yml',
     'MAIN_ROLLBACK_TAG', 'EXTENSIONS_ROLLBACK_TAG', 'SHA256SUMS',
     'deploying_extensions', 'deploying_main', 'health_checking',
     'rolling_back', 'perform_rollback', 'artifact_path', 'LEGACY_BOOTSTRAP'
@@ -92,6 +93,14 @@ foreach ($marker in @(
 }
 Assert-Matches $publisher 'SUB2API_IMAGE="\$TARGET_MAIN_REF"' 'publisher validates the target main digest in Compose'
 Assert-Matches $publisher 'EXTENSIONS_SELF_IMAGE="\$TARGET_EXTENSIONS_REF"' 'publisher validates the target extensions digest in Compose'
+Assert-Matches $publisher '-f "\$COMPOSE_BASE" -f "\$COMPOSE_CUSTOM"' 'publisher renders the explicit base and custom Compose pair'
+Assert-Matches $publisher 'git cat-file -e "\$APPROVED_COMMIT:deploy/docker-compose\.custom\.yml"' 'publisher requires the approved target to contain the custom Compose overlay'
+Assert-Matches $publisher 'cp -p "\$CURRENT_COMPOSE_CUSTOM" "\$BACKUP_DIR/custom-docker-compose\.yml"' 'publisher backs up the exact custom Compose overlay used for the current deployment'
+Assert-Matches $publisher 'compose_with "\$ROLLBACK_BASE" "\$ROLLBACK_CUSTOM"' 'rollback uses the backed-up Compose pair'
+Assert-Matches $publisher 'full_health_check "\$ROLLBACK_BASE" "\$ROLLBACK_CUSTOM"' 'rollback health checks validate the backed-up Compose pair'
+Assert-Matches $publisher 'full_health_check "\$COMPOSE_BASE" "\$COMPOSE_CUSTOM"' 'target health checks validate the current Compose pair'
+Assert-Before $publisher 'cp -p "$COMPOSE_BASE" "$BACKUP_DIR/main-docker-compose.yml"' 'git merge --ff-only' 'publisher backs up the base Compose before source fast-forward'
+Assert-Before $publisher 'custom-docker-compose.yml' 'git merge --ff-only' 'publisher backs up the custom Compose before source fast-forward'
 Assert-Matches $publisher 'force-recreate\s+extensions-self' 'publisher deploys extensions first'
 Assert-Matches $publisher 'force-recreate\s+sub2api' 'publisher deploys main separately'
 Assert-NotMatches $publisher 'force-recreate\s+sub2api\s+extensions-self' 'publisher must not recreate both services in one command'

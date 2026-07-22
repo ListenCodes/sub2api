@@ -1,9 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -67,5 +69,30 @@ func TestProxyAccountMonitorForwardsSignedAdminRequest(t *testing.T) {
 	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/admin/extensions-self/account-monitor/overview?page=1", nil))
 	if recorder.Code != http.StatusOK || recorder.Body.String() != `{"attempts":1}` {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestProxyAccountMonitorRejectsOversizedBodyWithoutCallingUpstream(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "01234567890123456789012345678901")
+
+	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
+	h.SetRiskControlClient(service.NewRiskControlClientFromEnv())
+	engine := gin.New()
+	engine.PUT("/api/v1/admin/extensions-self/account-monitor/*path", h.ProxyAccountMonitor)
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/admin/extensions-self/account-monitor/thresholds", bytes.NewReader(make([]byte, maxRiskControlProxyBody+1)))
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("upstream calls = %d, want 0", calls.Load())
 	}
 }

@@ -31,6 +31,21 @@ SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@sha256:<digest>
 EXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@sha256:<digest>
 ```
 
+Production Compose is an explicit two-file contract. `deploy/docker-compose.yml`
+stays byte-for-byte aligned with the current official Stable Release, while
+`deploy/docker-compose.custom.yml` owns the immutable image substitutions,
+host update mounts, risk-control settings, `extensions-self`, and its dedicated
+database/volume. Every production validation or lifecycle command must include
+both files in this order; implicit `docker-compose.override.yml` discovery is
+forbidden:
+
+```bash
+docker compose --project-name deploy \
+  -f /root/sub2api/deploy/docker-compose.yml \
+  -f /root/sub2api/deploy/docker-compose.custom.yml \
+  --env-file /root/sub2api/deploy/.env config --quiet
+```
+
 The packages are public and the VPS pulls anonymously. GitHub credentials are
 not production image credentials.
 
@@ -85,15 +100,28 @@ fail closed before production mutation.
 ## Backup And Rollback
 
 Before local source or Compose state changes, the publisher verifies both
-custom-format database dumps and backs up Compose, `.env`, Nginx, certificate
+custom-format database dumps and backs up the official and custom Compose files,
+`.env`, Nginx, certificate
 and key files, old digests, rollback tags, container/image metadata, and
 checksums. It never recreates or replaces `risk-control-postgres`.
+
+The backup names are `main-docker-compose.yml` and
+`custom-docker-compose.yml`. Rollback and its Compose health gate load that
+matching pair from the same backup directory; they never combine a backed-up
+file with the current checkout.
 
 If the legacy deployment has no `release-state.json`, the first administrator
 job uses a one-time bootstrap: it records the clean local commit and current
 image IDs, tags both local images for rollback, and keeps the old Compose. It
 writes the first formal digest state only after the new pair is healthy; a
 failed bootstrap restores the old deployment and leaves formal state absent.
+
+The first release containing the overlay also supports a clean pre-overlay
+production commit that already has `release-state.json`: the old single-file
+configuration is rendered and backed up with a temporary empty custom file,
+then the approved target must provide the real tracked overlay. This migration
+exception applies only to the current pre-update configuration and never makes
+the target overlay optional.
 
 A failed deployment or full health gate enters `rolling_back`, restores the
 previous `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE`, recreates

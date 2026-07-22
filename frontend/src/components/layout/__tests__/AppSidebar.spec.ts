@@ -10,6 +10,13 @@ const stylePath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sty
 const styleSource = readFileSync(stylePath, 'utf8')
 
 describe('AppSidebar custom SVG styles', () => {
+  it('keeps extension navigation in the dedicated registration module', () => {
+    const navigation = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../features/extensions/navigation.ts'), 'utf8')
+    expect(navigation).toContain('createExtensionAdminNavItems')
+    expect(componentSource).not.toContain("label: '扩展中心'")
+    expect(componentSource).toContain('createExtensionAdminNavItems')
+  })
+
   it('does not override uploaded SVG fill or stroke colors', () => {
     expect(componentSource).toContain('.sidebar-svg-icon {')
     expect(componentSource).toContain('color: currentColor;')

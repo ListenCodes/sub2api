@@ -7,13 +7,16 @@ import (
 )
 
 func TestAccountMonitorRoutesUseAdminAuthentication(t *testing.T) {
-	raw, err := os.ReadFile("admin.go")
+	raw, err := os.ReadFile("custom_extensions.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := string(raw)
 	for _, required := range []string{
 		`admin.Group("/extensions-self/account-monitor").Any("/*path", h.Admin.User.ProxyAccountMonitor)`,
+		`admin.Use(gin.HandlerFunc(adminAuth))`,
+		`admin.Use(gin.HandlerFunc(auditLog))`,
+		`admin.Use(middleware.AdminComplianceGuard(settingService))`,
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("admin routes missing %q", required)
