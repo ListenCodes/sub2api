@@ -122,6 +122,11 @@ test('production compose requires immutable application image references', () =>
   )
 })
 
+test('production compose preserves upstream Redis ACL username support', () => {
+  const compose = read('deploy/docker-compose.yml')
+  assert.match(compose, /REDIS_USERNAME=\$\{REDIS_USERNAME:-\}/)
+})
+
 test('publisher validates, backs up, deploys, and rolls back an immutable image pair', () => {
   const publisher = read('deploy/ops/publish-custom.sh')
   for (const marker of [
