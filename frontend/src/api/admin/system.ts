@@ -19,6 +19,18 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
+  update_kind: UpdateKind
+  official_update: boolean
+  custom_update: boolean
+  docs_only: boolean
+  runtime_update: boolean
+  detection_complete: boolean
+  production_commit?: string
+  production_stable_tag?: string
+  production_stable_commit?: string
+  target_custom_commit?: string
+  target_custom_short_sha?: string
+  custom_scope_error?: string
 }
 
 export type UpdateKind = 'none' | 'official' | 'custom' | 'combined' | 'docs-only'

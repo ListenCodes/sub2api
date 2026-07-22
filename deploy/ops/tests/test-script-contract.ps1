@@ -39,6 +39,9 @@ function Assert-Before {
 
 $sync = Read-RepoFile 'deploy\ops\sync-upstream.sh'
 $orchestrator = Read-RepoFile 'deploy\ops\sync-and-publish.sh'
+$prepare = Read-RepoFile 'deploy\ops\prepare-release.sh'
+$apply = Read-RepoFile 'deploy\ops\apply-release.sh'
+$common = Read-RepoFile 'deploy\ops\release-common.sh'
 $trigger = Read-RepoFile 'deploy\ops\sync-trigger.sh'
 $promoter = Read-RepoFile 'deploy\ops\promote-release.sh'
 $publisher = Read-RepoFile 'deploy\ops\publish-custom.sh'
@@ -59,55 +62,43 @@ Assert-NotMatches $sync 'upstream/main|fetch[^\r\n]*\bmain\b' 'sync never publis
 Assert-NotMatches $sync 'git\s+rebase|--force' 'sync never rewrites history'
 Assert-NotMatches $sync 'docker\s+(build|compose\s+up)' 'sync never builds or deploys'
 
-# The host orchestrator owns the durable state machine and one-at-a-time trigger.
+# The host orchestrator owns only locking, action dispatch, and one-at-a-time trigger consumption.
 foreach ($marker in @(
-    'release-trigger', 'flock -n', 'waiting_actions', 'waiting_images',
-    'promoting_release', 'publish-custom.sh', '--main-digest', '--extensions-digest'
+    'release-trigger', 'flock -n', 'prepare-release.sh', 'apply-release.sh',
+    'ACTION', 'LEGACY_SINGLE_PHASE_UNSUPPORTED'
 )) {
     Assert-Matches $orchestrator ([regex]::Escape($marker)) "orchestrator is missing $marker"
 }
-Assert-Before $orchestrator 'waiting_actions' 'waiting_images' 'Actions must finish before image verification'
-Assert-Before $orchestrator 'waiting_images' 'promoting_release' 'images must be verified before branch promotion'
-Assert-Before $orchestrator 'promoting_release' 'Publishing commit' 'promotion must precede publication'
 Assert-Before $orchestrator 'flock -n 9' 'claim_job ||' 'orchestrator must acquire its lock before claiming the durable trigger'
 Assert-NotMatches $orchestrator 'git\s+(merge|rebase)|--force' 'orchestrator delegates guarded promotion and never rewrites history'
+Assert-NotMatches $orchestrator 'publish-custom\.sh' 'orchestrator must not call the deprecated publisher'
 
-# Promotion advances only the already-tested remote ref; publisher moves local source after backup.
+# Promotion advances only the already-tested remote ref; the apply executor owns local mutation.
 Assert-Matches $promoter 'refs/remotes/' 'promoter pushes an immutable remote-tracking candidate ref'
 Assert-Matches $promoter 'refs/heads/\$BRANCH' 'promoter targets only the approved remote branch'
 Assert-NotMatches $promoter 'git\s+merge(?:\s|$)|git\s+reset|--force' 'promoter must not move local source or rewrite history'
-Assert-Before $publisher 'job_update backing_up' 'git merge --ff-only' 'publisher backs up before local source fast-forward'
-
-# Publisher validates immutable images, creates complete rollback evidence, and stages both services.
-foreach ($marker in @(
-    '--commit', '--main-digest', '--extensions-digest', 'verify-release-images.sh',
-    'release-state.json', 'docker exec sub2api-postgres pg_dump',
-    'docker exec risk-control-postgres pg_dump', 'pg_restore --list',
-    'certificate-metadata.tsv', 'container-metadata.json', 'image-metadata.json',
-    'docker-compose.custom.yml', 'main-docker-compose.yml', 'custom-docker-compose.yml',
-    'MAIN_ROLLBACK_TAG', 'EXTENSIONS_ROLLBACK_TAG', 'SHA256SUMS',
-    'deploying_extensions', 'deploying_main', 'health_checking',
-    'rolling_back', 'perform_rollback', 'artifact_path', 'LEGACY_BOOTSTRAP'
-)) {
-    Assert-Matches $publisher ([regex]::Escape($marker)) "publisher is missing $marker"
+# Preparation owns remote gates, immutable evidence, Compose rendering, and backups.
+foreach ($marker in @('wait-for-actions.sh', 'verify-release-images.sh', 'docker pull', 'pg_dump', 'pg_restore --list', 'SHA256SUMS', 'prepared_manifest', 'expires_at', 'prepared')) {
+    Assert-Matches $prepare ([regex]::Escape($marker)) "prepare executor is missing $marker"
 }
-Assert-Matches $publisher 'SUB2API_IMAGE="\$TARGET_MAIN_REF"' 'publisher validates the target main digest in Compose'
-Assert-Matches $publisher 'EXTENSIONS_SELF_IMAGE="\$TARGET_EXTENSIONS_REF"' 'publisher validates the target extensions digest in Compose'
-Assert-Matches $publisher '-f "\$COMPOSE_BASE" -f "\$COMPOSE_CUSTOM"' 'publisher renders the explicit base and custom Compose pair'
-Assert-Matches $publisher 'git cat-file -e "\$APPROVED_COMMIT:deploy/docker-compose\.custom\.yml"' 'publisher requires the approved target to contain the custom Compose overlay'
-Assert-Matches $publisher 'cp -p "\$CURRENT_COMPOSE_CUSTOM" "\$BACKUP_DIR/custom-docker-compose\.yml"' 'publisher backs up the exact custom Compose overlay used for the current deployment'
-Assert-Matches $publisher 'compose_with "\$ROLLBACK_BASE" "\$ROLLBACK_CUSTOM"' 'rollback uses the backed-up Compose pair'
-Assert-Matches $publisher 'full_health_check "\$ROLLBACK_BASE" "\$ROLLBACK_CUSTOM"' 'rollback health checks validate the backed-up Compose pair'
-Assert-Matches $publisher 'full_health_check "\$COMPOSE_BASE" "\$COMPOSE_CUSTOM"' 'target health checks validate the current Compose pair'
-Assert-Before $publisher 'cp -p "$COMPOSE_BASE" "$BACKUP_DIR/main-docker-compose.yml"' 'git merge --ff-only' 'publisher backs up the base Compose before source fast-forward'
-Assert-Before $publisher 'custom-docker-compose.yml' 'git merge --ff-only' 'publisher backs up the custom Compose before source fast-forward'
-Assert-Matches $publisher 'force-recreate\s+extensions-self' 'publisher deploys extensions first'
-Assert-Matches $publisher 'force-recreate\s+sub2api' 'publisher deploys main separately'
-Assert-NotMatches $publisher 'force-recreate\s+sub2api\s+extensions-self' 'publisher must not recreate both services in one command'
-Assert-NotMatches $publisher 'docker\s+build|compose[^\r\n]*\bbuild\b' 'publisher never builds on the VPS'
-Assert-NotMatches $publisher 'up[^\r\n]*risk-control-postgres|(?:rm|down)[^\r\n]*risk-control-postgres' 'publisher never recreates or removes risk-control-postgres'
-Assert-NotMatches $publisher 'pg_restore[^\r\n]*(?:--clean|--if-exists|-d\s)' 'publisher never restores a database automatically'
-Assert-NotMatches $publisher 'git\s+reset|git\s+push[^\r\n]*--force' 'publisher never discards source changes or force-pushes'
+Assert-NotMatches $prepare 'compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'prepare must not mutate container lifecycle'
+Assert-NotMatches $prepare 'release_production_state_write' 'prepare must not write production release state'
+
+# Apply is local-only, immutable, and extensions-first.
+foreach ($marker in @('release_manifest_valid', 'origin/$BRANCH', 'drifted', '--pull never', 'deploying_extensions', 'deploying_main', 'health_checking', 'release_production_state_write', 'rolling_back', 'restore_source', 'rollback:{attempted:true')) {
+    Assert-Matches $apply ([regex]::Escape($marker)) "apply executor is missing $marker"
+}
+foreach ($marker in @('config --quiet', 'config --format json', '.name ==', 'healthcheck', 'nginx', 'container-metadata', 'rollback-tags.txt', 'SUB2API_IMAGE=')) {
+    Assert-Matches $prepare ([regex]::Escape($marker)) "prepare executor is missing $marker"
+}
+Assert-NotMatches $apply 'git\s+fetch|docker\s+pull|pg_dump|pg_restore|api\.github\.com' 'apply must not access GitHub, pull images, or redo backups'
+Assert-NotMatches $apply 'up[^\r\n]*risk-control-postgres|(?:rm|down)[^\r\n]*risk-control-postgres' 'apply must not lifecycle-manage risk-control-postgres'
+Assert-Before $apply 'deploying_extensions' 'deploying_main' 'apply deploys extensions before the main application'
+Assert-Before $apply 'SOURCE_HEAD=' 'merge --ff-only' 'apply must snapshot the production source before advancing it'
+Assert-Before $apply 'status --porcelain' 'merge --ff-only' 'apply must reject a dirty production worktree before advancing it'
+
+Assert-Matches $publisher 'deprecated' 'publisher is a fail-closed compatibility shim'
+Assert-Matches $publisher 'exit 64' 'publisher rejects direct invocation'
 
 foreach ($marker in @(
     'org.opencontainers.image.revision', 'org.opencontainers.image.version',
@@ -117,9 +108,10 @@ foreach ($marker in @(
     Assert-Matches $imageVerifier ([regex]::Escape($marker)) "image verifier is missing $marker"
 }
 foreach ($status in @(
-    'checking_release', 'validating_tag', 'merging_release', 'waiting_actions',
-    'waiting_images', 'promoting_release', 'backing_up', 'deploying_extensions',
-    'deploying_main', 'health_checking', 'rolling_back', 'success', 'failed', 'conflict'
+    'checking_updates', 'checking_release', 'validating_tag', 'merging_release', 'waiting_actions',
+    'waiting_images', 'downloading_images', 'preparing_compose', 'promoting_release', 'backing_up',
+    'validating_backup', 'prepared', 'apply_queued', 'deploying_extensions', 'deploying_main',
+    'health_checking', 'rolling_back', 'success', 'failed', 'conflict', 'expired', 'drifted'
 )) {
     Assert-Matches $state ([regex]::Escape($status)) "durable state helper is missing $status"
 }
@@ -129,6 +121,7 @@ Assert-Matches $actionsWaiter 'TIMEOUT_SECONDS' 'Actions waiter has a bounded lo
 # The application helper only creates an atomic trigger and returns.
 Assert-Matches $trigger 'release-trigger' 'container helper writes the systemd path trigger'
 Assert-Matches $trigger 'mv -f' 'container helper writes the trigger atomically'
+Assert-Matches $trigger 'prepare|apply' 'container helper accepts an explicit action'
 Assert-NotMatches $trigger '\b(?:sleep|while|until)\b' 'container helper must return immediately'
 
 # Scheduled code is forbidden; systemd.path is the only host consumer.

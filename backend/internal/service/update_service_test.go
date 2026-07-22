@@ -35,6 +35,12 @@ type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
 	recentReleases []*GitHubRelease
 	recentErr      error
+	customHead     *GitRef
+	customErr      error
+	compareFiles   []ChangedFile
+	compareErr     error
+	tagCommits     map[string]string
+	tagErr         error
 }
 
 func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
@@ -43,6 +49,21 @@ func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, stri
 
 func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
 	return s.recentReleases, s.recentErr
+}
+
+func (s *updateServiceGitHubClientStub) FetchCustomReleaseHead(context.Context, string, string) (*GitRef, error) {
+	return s.customHead, s.customErr
+}
+
+func (s *updateServiceGitHubClientStub) CompareCommits(context.Context, string, string, string) ([]ChangedFile, error) {
+	return s.compareFiles, s.compareErr
+}
+
+func (s *updateServiceGitHubClientStub) FetchRefCommit(_ context.Context, _ string, ref string) (string, error) {
+	if s.tagErr != nil {
+		return "", s.tagErr
+	}
+	return s.tagCommits[ref], nil
 }
 
 func (s *updateServiceGitHubClientStub) DownloadFile(context.Context, string, string, int64) error {
@@ -108,6 +129,91 @@ func TestUpdateServicePrepareUpdateCreatesPrepareJob(t *testing.T) {
 	require.Equal(t, UpdateStatusCheckingUpdates, job.Status)
 	require.Equal(t, UpdateActionPrepare, action)
 	require.Equal(t, job.JobID, triggeredJobID)
+}
+
+func TestUpdateServiceCheckUpdateClassifiesUnifiedSources(t *testing.T) {
+	productionCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	customCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	stableCommit := "cccccccccccccccccccccccccccccccccccccccc"
+	statePath := filepath.Join(t.TempDir(), "release-state.json")
+	require.NoError(t, os.WriteFile(statePath, []byte(`{"production_commit":"`+productionCommit+`","stable_release_tag":"v0.1.163","stable_release_commit":"`+stableCommit+`"}`), 0644))
+	newService := func(files []ChangedFile) *UpdateService {
+		svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+			release:      &GitHubRelease{TagName: "v0.1.163"},
+			customHead:   &GitRef{SHA: customCommit},
+			compareFiles: files,
+			tagCommits:   map[string]string{"v0.1.163": stableCommit},
+		}, "0.1.163", "release")
+		svc.productionStatePath = statePath
+		return svc
+	}
+
+	info, err := newService(nil).CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.Equal(t, UpdateKindCustom, info.UpdateKind)
+	require.Equal(t, customCommit, info.TargetCustomCommit)
+	require.Equal(t, "bbbbbbbb", info.TargetCustomShortSHA)
+
+	info, err = newService([]ChangedFile{{Filename: "docs/guide.md", Status: "modified"}}).CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.Equal(t, UpdateKindDocsOnly, info.UpdateKind)
+	require.True(t, info.DocsOnly)
+
+	customOnly := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+		release:    &GitHubRelease{TagName: "v0.1.164"},
+		customHead: &GitRef{SHA: customOnly},
+		tagCommits: map[string]string{"v0.1.164": "dddddddddddddddddddddddddddddddddddddddd"},
+	}, "0.1.163", "release")
+	svc.productionStatePath = statePath
+	info, err = svc.CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.Equal(t, UpdateKindOfficial, info.UpdateKind)
+
+	svc.githubClient = &updateServiceGitHubClientStub{
+		release:      &GitHubRelease{TagName: "v0.1.164"},
+		customHead:   &GitRef{SHA: customCommit},
+		compareFiles: []ChangedFile{{Filename: "backend/main.go", Status: "modified"}},
+		tagCommits:   map[string]string{"v0.1.164": "dddddddddddddddddddddddddddddddddddddddd"},
+	}
+	info, err = svc.CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.Equal(t, UpdateKindCombined, info.UpdateKind)
+}
+
+func TestUpdateServiceCheckUpdateDoesNotClaimNoneWhenCustomProbeFails(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "release-state.json")
+	require.NoError(t, os.WriteFile(statePath, []byte(`{"production_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stable_release_tag":"v0.1.163","stable_release_commit":"cccccccccccccccccccccccccccccccccccccccc"}`), 0644))
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+		release:    &GitHubRelease{TagName: "v0.1.163"},
+		customErr:  errors.New("GitHub ref unavailable"),
+		tagCommits: map[string]string{"v0.1.163": "cccccccccccccccccccccccccccccccccccccccc"},
+	}, "0.1.163", "release")
+	svc.productionStatePath = statePath
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.False(t, info.HasUpdate)
+	require.Contains(t, info.Warning, "custom")
+	require.False(t, info.DetectionComplete)
+}
+
+func TestUpdateServiceCheckUpdateTreatsEmptyCustomHeadAsIncomplete(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "release-state.json")
+	require.NoError(t, os.WriteFile(statePath, []byte(`{"production_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stable_release_tag":"v0.1.163","stable_release_commit":"cccccccccccccccccccccccccccccccccccccccc"}`), 0644))
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+		release:    &GitHubRelease{TagName: "v0.1.163"},
+		customHead: nil,
+		tagCommits: map[string]string{"v0.1.163": "cccccccccccccccccccccccccccccccccccccccc"},
+	}, "0.1.163", "release")
+	svc.productionStatePath = statePath
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.False(t, info.DetectionComplete)
+	require.Contains(t, info.Warning, "custom branch probe returned no commit")
 }
 
 func TestUpdateServiceApplyUpdateUsesPreparedJobAndSameID(t *testing.T) {

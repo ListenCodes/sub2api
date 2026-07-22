@@ -51,12 +51,19 @@ not production image credentials.
 
 ## Script Ownership
 
-- `sync-trigger.sh` atomically writes the durable job ID to `release-trigger`
+- `sync-trigger.sh` atomically writes the action and durable job ID to `release-trigger`
   and returns immediately.
 - `sub2api-release.path` watches that file and starts the one-shot
   `sub2api-release.service`.
-- `sync-and-publish.sh` claims the trigger under `flock` and owns all release
-  state transitions.
+- `sync-and-publish.sh` claims the trigger under `flock` and dispatches only
+  `prepare-release.sh` or `apply-release.sh`; it never calls a publisher.
+- `prepare-release.sh` performs remote gates, digest pulls, explicit Compose
+  rendering and complete backup validation, then stops at `prepared` with a
+  signed-by-SHA256 15-minute manifest. It must not run Compose lifecycle
+  commands or write production state.
+- `apply-release.sh` consumes only that manifest, rejects expiry and drift,
+  performs local `--pull never` extensions-first/main-second switching and
+  health checks, then atomically writes production state or rolls back.
 - `sync-upstream.sh` verifies `Wei-Shaw/sub2api /releases/latest`, fetches the
   exact annotated tag, and creates `origin/integration/release-*` when needed.
 - `classify-release-scope.sh` compares the production and target commits; a
@@ -67,23 +74,24 @@ not production image credentials.
   and OCI revision/version/source labels for both images.
 - `promote-release.sh` advances only the tested remote candidate after a base
   recheck. It does not move the local production source.
-- `publish-custom.sh` backs up, fast-forwards local source after the backup,
-  stages extensions then main by digest, runs health checks, and automatically
-  rolls back the previous pair on failure.
+- `publish-custom.sh` is a deprecated fail-closed compatibility shim and is
+  never a final release entry point.
 
 There is no daily updater, polling cron consumer, scheduled mode, or VPS-local
 image build. The independent health-monitor schedule remains.
 
 ## Release Scenarios
 
-For a new official stable Release, the orchestrator validates the annotated tag,
-merges only its peeled commit in a temporary worktree, waits for Actions and
-images, rechecks the base, promotes `origin/custom-release`, and publishes.
+For a new official stable Release, prepare validates the annotated tag, merges
+only its peeled commit in a temporary worktree, waits for Actions and images,
+rechecks the base, promotes `origin/custom-release`, and stops at `prepared`.
+Only the separate apply action publishes.
 
 When no new official Release exists but `origin/custom-release` has an
-undeployed custom commit, the same administrator action waits for that commit's
-Actions/images and publishes it without a Release merge. When neither changed,
-the job returns `success` without pulling or recreating services.
+undeployed custom commit, prepare waits for that commit's Actions/images and
+creates a manifest without a Release merge. Apply is still explicit. When
+neither changed, the job returns `success` without pulling or recreating
+services.
 
 Documentation-only commits are not runtime releases. The GitHub workflow ignores
 pushes containing only Markdown, `AGENTS.md`, or any `.gitignore`; if a durable job
@@ -99,7 +107,7 @@ fail closed before production mutation.
 
 ## Backup And Rollback
 
-Before local source or Compose state changes, the publisher verifies both
+Before local source or Compose state changes, prepare verifies both
 custom-format database dumps and backs up the official and custom Compose files,
 `.env`, Nginx, certificate
 and key files, old digests, rollback tags, container/image metadata, and
@@ -123,13 +131,14 @@ then the approved target must provide the real tracked overlay. This migration
 exception applies only to the current pre-update configuration and never makes
 the target overlay optional.
 
-A failed deployment or full health gate enters `rolling_back`, restores the
-previous `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE`, recreates
+Any failed deployment or full health gate enters `rolling_back` and performs an
+automatic paired rollback: it restores the previous source, matching Compose/
+`.env`, `SUB2API_IMAGE`, and `EXTENSIONS_SELF_IMAGE`, then recreates
 `extensions-self` then `sub2api`, and reruns health checks. Database restore is
 not automatic; `risk_control_db.dump` is used only for separately authorized
 schema or data corruption recovery.
 
-`release-state.json` is updated only after a healthy release and records the
+`release-state.json` is updated only after a healthy apply and records the
 production commit, stable Release tag/commit, both digests, publication time,
 and backup directory. Backfill starts only after health and only across the
 `data-quality` `available_from/to` range.

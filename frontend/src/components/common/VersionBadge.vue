@@ -114,8 +114,37 @@
                 </p>
               </div>
 
+              <div
+                v-if="!detectionComplete && updateWarning"
+                class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300"
+              >
+                {{ t('version.updateDetectionIncomplete') }}: {{ updateWarning }}
+              </div>
+
               <!-- Priority 1: Durable release job progress -->
-              <div v-if="updating" class="space-y-2">
+              <div v-if="preparedJobID" class="space-y-2">
+                <div class="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800/50 dark:bg-emerald-900/20">
+                  <Icon name="check" size="sm" :stroke-width="2" class="text-emerald-600 dark:text-emerald-400" />
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-medium text-emerald-700 dark:text-emerald-300">{{ t('version.prepared') }}</p>
+                    <p class="break-words text-xs text-emerald-600/80 dark:text-emerald-400/80">
+                      {{ preparedRemainingSeconds > 0 ? t('version.preparedRemaining', { seconds: preparedRemainingSeconds }) : t('version.preparedExpired') }}
+                    </p>
+                    <p v-if="customShortSHA" class="mt-1 text-[11px] text-emerald-600/70 dark:text-emerald-400/70">custom-release@{{ customShortSHA }}</p>
+                  </div>
+                </div>
+                <button
+                  @click="handleApply"
+                  :disabled="applying || preparedRemainingSeconds <= 0"
+                  class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Icon v-if="applying" name="refresh" size="sm" :stroke-width="2" class="animate-spin" />
+                  <Icon v-else name="upload" size="sm" :stroke-width="2" />
+                  {{ applying ? t('version.confirmingUpdate') : t('version.confirmUpdate') }}
+                </button>
+              </div>
+
+              <div v-else-if="updating" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800/50 dark:bg-blue-900/20"
                 >
@@ -309,7 +338,7 @@
               </div>
 
               <!-- Priority 4: Update available for source/custom build - show sync button -->
-              <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
+              <div v-else-if="canPrepareUpdate && !isReleaseBuild" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
                 >
@@ -371,7 +400,7 @@
               </div>
 
               <!-- Priority 5: Update available for release build - show update button -->
-              <div v-else-if="hasUpdate && isReleaseBuild" class="space-y-2">
+              <div v-else-if="canPrepareUpdate && isReleaseBuild" class="space-y-2">
                 <!-- Update info card -->
                 <div
                   class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
@@ -436,7 +465,11 @@
 
               <!-- Priority 6: No upstream version change; custom commits may still be pending -->
               <div v-else class="space-y-2">
+                <div v-if="updateKind === 'docs-only'" class="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-700 dark:border-sky-800/50 dark:bg-sky-900/20 dark:text-sky-300">
+                  {{ t('version.docsOnlyUpdate') }}
+                </div>
                 <button
+                  v-else-if="hasUpdate"
                   @click="handleUpdate"
                   :disabled="updating"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -729,9 +762,11 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
-  performUpdate,
+  prepareUpdate,
+  applyUpdate,
   getUpdateStatus,
   isTerminalUpdateStatus,
+  isPollingSettledUpdateStatus,
   updateNeedsRestart,
   restartService,
   getRollbackVersions,
@@ -772,6 +807,16 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const updateKind = computed(() => appStore.updateKind || 'none')
+const customShortSHA = computed(() => appStore.targetCustomShortSHA || '')
+const detectionComplete = computed(() => appStore.detectionComplete)
+const updateWarning = computed(() => appStore.updateWarning || '')
+const canPrepareUpdate = computed(
+  () =>
+    detectionComplete.value &&
+    (hasUpdate.value || updateKind.value === 'custom' || updateKind.value === 'combined') &&
+    updateKind.value !== 'docs-only'
+)
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -797,9 +842,14 @@ const rollbackMessage = ref('')
 const restartCountdown = ref(0)
 const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const preparedCountdownTimer = ref<ReturnType<typeof setInterval> | null>(null)
 let updatePollInFlight = false
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<'update' | 'rollback'>('update')
+const preparedJobID = ref('')
+const preparedExpiresAt = ref('')
+const preparedRemainingSeconds = ref(0)
+const applying = ref(false)
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
@@ -846,6 +896,9 @@ const activeManualCommand = computed(() =>
 const isReleaseBuild = computed(() => buildType.value === 'release')
 
 function toggleDropdown() {
+  if (!dropdownOpen.value) {
+    resetTerminalUpdateFeedback()
+  }
   dropdownOpen.value = !dropdownOpen.value
 }
 
@@ -875,10 +928,44 @@ async function refreshVersion(force = true) {
   resolutionHint.value = ''
   rollbackMessage.value = ''
   needRestart.value = false
+  preparedJobID.value = ''
+  preparedExpiresAt.value = ''
+  preparedRemainingSeconds.value = 0
+  stopPreparedCountdown()
   stopUpdatePolling()
   resetRollbackState()
 
   await appStore.fetchVersion(force)
+}
+
+function resetTerminalUpdateFeedback() {
+  if (!updateSuccess.value && !updateError.value && !(updateStage.value && isTerminalUpdateStatus(updateStage.value))) {
+    return
+  }
+
+  updateSuccess.value = false
+  updateSuccessMessage.value = ''
+  updateError.value = ''
+  updateStage.value = ''
+  updateStageMessage.value = ''
+  published.value = false
+  publishedCommit.value = ''
+  releaseTag.value = ''
+  releaseCommit.value = ''
+  releasePublishedAt.value = ''
+  conflictFiles.value = []
+  conflictBase.value = ''
+  conflictUpstream.value = ''
+  conflictRelease.value = ''
+  conflictLog.value = ''
+  resolutionHint.value = ''
+  rollbackMessage.value = ''
+  preparedJobID.value = ''
+  preparedExpiresAt.value = ''
+  preparedRemainingSeconds.value = 0
+  stopPreparedCountdown()
+  needRestart.value = false
+  successKind.value = 'update'
 }
 
 async function handleUpdate() {
@@ -888,7 +975,7 @@ async function handleUpdate() {
   updateError.value = ''
   updateSuccess.value = false
   updateSuccessMessage.value = ''
-  updateStage.value = 'checking_release'
+  updateStage.value = 'checking_updates'
   updateStageMessage.value = ''
   published.value = false
   publishedCommit.value = ''
@@ -904,13 +991,32 @@ async function handleUpdate() {
   rollbackMessage.value = ''
 
   try {
-    const job = await performUpdate()
+    const job = await prepareUpdate()
     startUpdatePolling(job.job_id, job)
   } catch (error: unknown) {
     stopUpdatePolling()
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
     updating.value = false
+  }
+}
+
+async function handleApply() {
+  if (applying.value || !preparedJobID.value) return
+
+  applying.value = true
+  updateError.value = ''
+  try {
+    const job = await applyUpdate(preparedJobID.value)
+    preparedJobID.value = ''
+    preparedExpiresAt.value = ''
+    stopPreparedCountdown()
+    startUpdatePolling(job.job_id, job)
+  } catch (error: unknown) {
+    const err = error as { response?: { data?: { message?: string } }; message?: string }
+    updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
+  } finally {
+    applying.value = false
   }
 }
 
@@ -926,6 +1032,37 @@ function stopUpdatePolling() {
   updatePollInFlight = false
 }
 
+function stopPreparedCountdown() {
+  if (preparedCountdownTimer.value) {
+    clearInterval(preparedCountdownTimer.value)
+    preparedCountdownTimer.value = null
+  }
+}
+
+function updatePreparedCountdown() {
+  const expiresAt = Date.parse(preparedExpiresAt.value)
+  preparedRemainingSeconds.value = Number.isFinite(expiresAt)
+    ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000))
+    : 0
+  if (preparedRemainingSeconds.value === 0) stopPreparedCountdown()
+}
+
+function finishPrepared(status: Pick<UpdateJob, 'job_id' | 'message' | 'expires_at'>) {
+  stopUpdatePolling()
+  preparedJobID.value = status.job_id
+  preparedExpiresAt.value = status.expires_at || ''
+  updatePreparedCountdown()
+  stopPreparedCountdown()
+  if (preparedRemainingSeconds.value > 0) {
+    preparedCountdownTimer.value = setInterval(updatePreparedCountdown, 1000)
+  }
+  updateStage.value = 'prepared'
+  updateStageMessage.value = status.message
+  updateSuccess.value = false
+  updateError.value = ''
+  updating.value = false
+}
+
 function finishUpdateSuccess(
   status: Pick<
     UpdateJob,
@@ -939,6 +1076,10 @@ function finishUpdateSuccess(
   >
 ) {
   stopUpdatePolling()
+  preparedJobID.value = ''
+  preparedExpiresAt.value = ''
+  preparedRemainingSeconds.value = 0
+  stopPreparedCountdown()
   localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   successKind.value = 'update'
   updateSuccess.value = true
@@ -971,6 +1112,10 @@ function finishUpdateFailure(
   >
 ) {
   stopUpdatePolling()
+  preparedJobID.value = ''
+  preparedExpiresAt.value = ''
+  preparedRemainingSeconds.value = 0
+  stopPreparedCountdown()
   localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   updateError.value = status.message || t('version.updateFailed')
   conflictFiles.value = status.conflict_files || []
@@ -994,9 +1139,16 @@ async function pollUpdateStatus(jobID: string) {
     const status = await getUpdateStatus(jobID)
     updateStage.value = status.status
     updateStageMessage.value = status.message
-    if (status.status === 'success') {
+    if (status.status === 'prepared') {
+      finishPrepared(status)
+    } else if (status.status === 'success') {
       finishUpdateSuccess(status)
-    } else if (status.status === 'failed' || status.status === 'conflict') {
+    } else if (
+      status.status === 'failed' ||
+      status.status === 'conflict' ||
+      status.status === 'expired' ||
+      status.status === 'drifted'
+    ) {
       finishUpdateFailure(status)
     }
   } catch {
@@ -1014,7 +1166,11 @@ function startUpdatePolling(jobID: string, initial?: UpdateJob) {
     updateStage.value = initial.status
     updateStageMessage.value = initial.message
   }
-  if (!initial || !isTerminalUpdateStatus(initial.status)) {
+  if (initial?.status === 'prepared') {
+    finishPrepared(initial)
+    return
+  }
+  if (!initial || !isPollingSettledUpdateStatus(initial.status)) {
     void pollUpdateStatus(jobID)
   }
   updatePollTimer.value = setInterval(() => {
@@ -1029,17 +1185,18 @@ async function resumeUpdatePolling() {
   const storedJobID = localStorage.getItem(RELEASE_JOB_STORAGE_KEY) || undefined
   try {
     const status = await getUpdateStatus(storedJobID)
-    if (status.status === 'success') {
-      finishUpdateSuccess(status)
-      return
-    }
-    if (status.status === 'failed' || status.status === 'conflict') {
-      finishUpdateFailure(status)
+    if (isTerminalUpdateStatus(status.status)) {
+      // The latest terminal job is historical information. Do not replay it in
+      // the badge; only durable work that still needs attention is resumable.
+      localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+      resetTerminalUpdateFeedback()
+      await appStore.fetchVersion(true)
       return
     }
     startUpdatePolling(status.job_id, status)
-  } catch {
-    if (storedJobID) localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  } catch (error: unknown) {
+    const status = (error as { response?: { status?: number } }).response?.status
+    if (storedJobID && status === 404) localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   }
 }
 
@@ -1212,6 +1369,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopUpdatePolling()
+  stopPreparedCountdown()
   document.removeEventListener('click', handleClickOutside)
 })
 </script>

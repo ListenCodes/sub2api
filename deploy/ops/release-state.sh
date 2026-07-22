@@ -11,7 +11,7 @@ release_valid_job_id() {
 
 release_valid_status() {
   case "${1:-}" in
-    checking_release|validating_tag|merging_release|waiting_actions|waiting_images|promoting_release|backing_up|deploying_extensions|deploying_main|health_checking|rolling_back|success|failed|conflict)
+    checking_updates|checking_release|validating_tag|merging_release|waiting_actions|waiting_images|downloading_images|preparing_compose|promoting_release|backing_up|validating_backup|prepared|apply_queued|deploying_extensions|deploying_main|health_checking|rolling_back|success|failed|conflict|expired|drifted)
       return 0
       ;;
     *)
@@ -22,7 +22,7 @@ release_valid_status() {
 
 release_terminal_status() {
   case "${1:-}" in
-    success|failed|conflict) return 0 ;;
+    success|failed|conflict|expired|drifted) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -63,7 +63,8 @@ release_job_init() {
     --arg now "$now" \
     '{
       job_id:$job_id,
-      status:"checking_release",
+      action:"",
+      status:"checking_updates",
       message:"release job queued",
       ts:$now,
       updated_at:$now,
@@ -72,6 +73,11 @@ release_job_init() {
       integration_branch:"",
       base_commit:"",
       target_commit:"",
+      target_custom_commit:"",
+      update_kind:"none",
+      production_commit:"",
+      stable_release_tag:"",
+      stable_release_commit:"",
       release_tag:"",
       release_commit:"",
       release_published_at:"",
@@ -90,6 +96,11 @@ release_job_init() {
       published_commit:"",
       production_changed:false,
       error_code:"",
+      prepared_manifest:"",
+      prepared_manifest_sha256:"",
+      prepared_at:"",
+      expires_at:"",
+      backup_dir:"",
       rollback:{attempted:false,succeeded:false,message:""}
     }')"
   release_atomic_write "$job_path" "$payload"

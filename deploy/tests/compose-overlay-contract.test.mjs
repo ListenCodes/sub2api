@@ -107,13 +107,13 @@ test('rendered Compose keeps the production service and identity contract', (t) 
   }
 })
 
-test('publisher always uses and backs up the matching Compose pair', () => {
-  const publisher = read('deploy/ops/publish-custom.sh')
+test('prepare and apply always use the matching Compose pair', () => {
+  const publisher = `${read('deploy/ops/prepare-release.sh')}\n${read('deploy/ops/apply-release.sh')}`
   for (const marker of [
     'docker-compose.yml',
     'docker-compose.custom.yml',
-    'main-docker-compose.yml',
-    'custom-docker-compose.yml',
+    'docker-compose.yml',
+    'docker-compose.custom.yml',
     '-f "$COMPOSE_BASE"',
     '-f "$COMPOSE_CUSTOM"'
   ]) {
