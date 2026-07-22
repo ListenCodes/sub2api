@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +24,9 @@ function reportComposeFailure(error, result) {
     .replaceAll('\r', '%0D')
     .replaceAll('\n', '%0A')
   console.error(`::error file=deploy/docker-compose.custom.yml::${details}`)
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Compose contract failure\n\n\`\`\`text\n${[error?.stack, result?.stderr, result?.stdout].filter(Boolean).join('\n').slice(0, 12000)}\n\`\`\`\n`)
+  }
 }
 
 test('production base Compose remains byte-identical to Stable Release v0.1.163', () => {
