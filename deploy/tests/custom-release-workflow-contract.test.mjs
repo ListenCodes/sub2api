@@ -28,6 +28,11 @@ test('custom-release workflow gates paired images on every required validation j
     /\n      - name: golangci-lint\n        uses: golangci\/golangci-lint-action@v9\n        with:\n          version: v2\.9\.0\n          install-mode: goinstall\n/,
     'golangci-lint must be built with the configured Go toolchain'
   )
+  assert.match(
+    workflow,
+    /deployment:[\s\S]*?uses: actions\/checkout@v6\n        with:\n          fetch-depth: 0/,
+    'deployment contracts must fetch the Stable baseline commit'
+  )
 
   for (const marker of [
     'make test-unit',
