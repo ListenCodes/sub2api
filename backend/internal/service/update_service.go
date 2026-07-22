@@ -70,7 +70,7 @@ type UpdateService struct {
 	scriptPath     string
 	jobsDir        string
 	jobIDPath      string
-	startScript    func(string, string) (func() error, error)
+	startScript    func(string, string, string) (func() error, error)
 	performMu      sync.Mutex
 }
 
@@ -174,6 +174,15 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate starts the conflict-gated upstream sync/publish job and returns
 // before the host-side workflow completes.
 func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
+	return s.PrepareUpdate(ctx)
+}
+
+// PrepareUpdate queues only the non-mutating preparation phase.
+func (s *UpdateService) PrepareUpdate(ctx context.Context) (*UpdateJob, error) {
+	return s.queueUpdate(ctx, UpdateActionPrepare)
+}
+
+func (s *UpdateService) queueUpdate(ctx context.Context, action string) (*UpdateJob, error) {
 	s.performMu.Lock()
 	defer s.performMu.Unlock()
 
@@ -184,7 +193,10 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 		currentID := strings.TrimSpace(string(currentID))
 		if currentID != "" {
 			if currentPath, pathErr := updateJobPath(s.jobsDir, currentID); pathErr == nil {
-				if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && !IsTerminalUpdateStatus(existing.Status) {
+				if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && !IsPollingSettledUpdateStatus(existing.Status) {
+					return nil, ErrUpdateInProgress
+				}
+				if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && existing.Status == UpdateStatusPrepared && !preparedJobExpired(existing) {
 					return nil, ErrUpdateInProgress
 				}
 			}
@@ -203,7 +215,8 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	startedAt := time.Now().UTC()
 	job := &UpdateJob{
 		JobID:       jobID,
-		Status:      UpdateStatusCheckingRelease,
+		Action:      action,
+		Status:      UpdateStatusCheckingUpdates,
 		Message:     "release job queued",
 		NeedRestart: false,
 		Published:   false,
@@ -222,7 +235,7 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 		return nil, fmt.Errorf("write update job id: %w", err)
 	}
 
-	wait, err := s.startScript(s.scriptPath, jobID)
+	wait, err := s.startScript(s.scriptPath, action, jobID)
 	if err != nil {
 		finishedAt := time.Now().UTC()
 		_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "failed to start sync: "+err.Error(), &startedAt, &finishedAt)
@@ -235,8 +248,71 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
 	return job, nil
 }
 
-func startUpdateScript(scriptPath, jobID string) (func() error, error) {
-	cmd := exec.Command("/bin/sh", scriptPath, jobID)
+// ApplyUpdate queues the explicit production switch for a prepared job.
+func (s *UpdateService) ApplyUpdate(ctx context.Context, jobID string) (*UpdateJob, error) {
+	s.performMu.Lock()
+	defer s.performMu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil, ErrUpdateJobIDRequired
+	}
+	jobPath, err := updateJobPath(s.jobsDir, jobID)
+	if err != nil {
+		return nil, ErrUpdateJobNotFound
+	}
+	job, err := readUpdateStatus(jobPath, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job.Status == UpdateStatusPrepared {
+		if preparedJobExpired(job) {
+			job.Status = UpdateStatusExpired
+			job.Message = "prepared update expired; prepare again"
+			job.UpdatedAt = time.Now().UTC()
+			_ = writeUpdateStatus(jobPath, job)
+			return nil, ErrUpdateExpired
+		}
+		job.Action = UpdateActionApply
+		job.Status = UpdateStatusApplyQueued
+		job.Message = "update confirmation queued"
+		job.UpdatedAt = time.Now().UTC()
+		if err := writeUpdateStatus(jobPath, job); err != nil {
+			return nil, err
+		}
+		wait, startErr := s.startScript(s.scriptPath, UpdateActionApply, jobID)
+		if startErr != nil {
+			job.Status = UpdateStatusFailed
+			job.Message = "failed to start apply: " + startErr.Error()
+			job.UpdatedAt = time.Now().UTC()
+			_ = writeUpdateStatus(jobPath, job)
+			return nil, fmt.Errorf("start apply: %w", startErr)
+		}
+		go func() { _ = wait() }()
+		return job, nil
+	}
+	if job.Action == UpdateActionApply && !IsTerminalUpdateStatus(job.Status) {
+		return job, nil
+	}
+	if IsTerminalUpdateStatus(job.Status) && job.Status == UpdateStatusSuccess {
+		return job, nil
+	}
+	return nil, ErrUpdateNotPrepared
+}
+
+func preparedJobExpired(job *UpdateJob) bool {
+	if job == nil || strings.TrimSpace(job.ExpiresAt) == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, job.ExpiresAt)
+	return err == nil && !time.Now().UTC().Before(expiresAt)
+}
+
+func startUpdateScript(scriptPath, action, jobID string) (func() error, error) {
+	cmd := exec.Command("/bin/sh", scriptPath, action, jobID)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

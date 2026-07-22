@@ -31,7 +31,7 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 	svc.scriptPath = scriptPath
 	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
 	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
-	svc.startScript = func(string, string) (func() error, error) {
+	svc.startScript = func(string, string, string) (func() error, error) {
 		return func() error {
 			time.Sleep(2 * time.Second)
 			return nil
@@ -43,7 +43,7 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 
 	require.NoError(t, err)
 	require.NotEmpty(t, job.JobID)
-	require.Equal(t, UpdateStatusCheckingRelease, job.Status)
+	require.Equal(t, UpdateStatusCheckingUpdates, job.Status)
 	require.False(t, job.NeedRestart)
 	require.False(t, job.Published)
 	require.Less(t, time.Since(started), 500*time.Millisecond)
@@ -116,13 +116,19 @@ func TestWriteUpdateStatusAcceptsEveryReleaseState(t *testing.T) {
 	t.Parallel()
 
 	validStates := []string{
+		UpdateStatusCheckingUpdates,
 		UpdateStatusCheckingRelease,
 		UpdateStatusValidatingTag,
 		UpdateStatusMergingRelease,
 		UpdateStatusWaitingActions,
 		UpdateStatusWaitingImages,
+		UpdateStatusDownloadingImages,
+		UpdateStatusPreparingCompose,
 		UpdateStatusPromotingRelease,
 		UpdateStatusBackingUp,
+		UpdateStatusValidatingBackup,
+		UpdateStatusPrepared,
+		UpdateStatusApplyQueued,
 		UpdateStatusDeployingExtensions,
 		UpdateStatusDeployingMain,
 		UpdateStatusHealthChecking,
@@ -130,6 +136,8 @@ func TestWriteUpdateStatusAcceptsEveryReleaseState(t *testing.T) {
 		UpdateStatusSuccess,
 		UpdateStatusFailed,
 		UpdateStatusConflict,
+		UpdateStatusExpired,
+		UpdateStatusDrifted,
 	}
 	for _, state := range validStates {
 		state := state
@@ -142,6 +150,44 @@ func TestWriteUpdateStatusAcceptsEveryReleaseState(t *testing.T) {
 			}))
 		})
 	}
+}
+
+func TestPreparedJobIsPollingSettledButNotTerminal(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, IsPollingSettledUpdateStatus(UpdateStatusPrepared))
+	require.False(t, IsTerminalUpdateStatus(UpdateStatusPrepared))
+	require.True(t, IsTerminalUpdateStatus(UpdateStatusExpired))
+	require.True(t, IsTerminalUpdateStatus(UpdateStatusDrifted))
+}
+
+func TestReadUpdateStatusIncludesPreparedManifestMetadata(t *testing.T) {
+	t.Parallel()
+
+	statusPath := filepath.Join(t.TempDir(), "release-job.json")
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{
+		"job_id":"update-prepared",
+		"action":"prepare",
+		"status":"prepared",
+		"message":"ready for confirmation",
+		"prepared_manifest":"/app/data/release-prepared/update-prepared/manifest.json",
+		"prepared_manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"prepared_at":"2026-07-23T00:00:00Z",
+		"expires_at":"2026-07-23T00:15:00Z",
+		"need_restart":false,
+		"ts":"2026-07-23T00:00:00Z",
+		"updated_at":"2026-07-23T00:00:00Z",
+		"started_at":"2026-07-23T00:00:00Z"
+	}`), 0644))
+
+	job, err := readUpdateStatus(statusPath, "update-prepared")
+
+	require.NoError(t, err)
+	require.Equal(t, UpdateActionPrepare, job.Action)
+	require.Equal(t, UpdateStatusPrepared, job.Status)
+	require.Equal(t, "/app/data/release-prepared/update-prepared/manifest.json", job.PreparedManifest)
+	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", job.PreparedManifestSHA256)
+	require.Equal(t, "2026-07-23T00:15:00Z", job.ExpiresAt)
 }
 
 func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {

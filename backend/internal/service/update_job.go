@@ -16,13 +16,22 @@ import (
 )
 
 const (
+	UpdateActionPrepare = "prepare"
+	UpdateActionApply   = "apply"
+
+	UpdateStatusCheckingUpdates     = "checking_updates"
 	UpdateStatusCheckingRelease     = "checking_release"
 	UpdateStatusValidatingTag       = "validating_tag"
 	UpdateStatusMergingRelease      = "merging_release"
 	UpdateStatusWaitingActions      = "waiting_actions"
 	UpdateStatusWaitingImages       = "waiting_images"
+	UpdateStatusDownloadingImages   = "downloading_images"
+	UpdateStatusPreparingCompose    = "preparing_compose"
 	UpdateStatusPromotingRelease    = "promoting_release"
 	UpdateStatusBackingUp           = "backing_up"
+	UpdateStatusValidatingBackup    = "validating_backup"
+	UpdateStatusPrepared            = "prepared"
+	UpdateStatusApplyQueued         = "apply_queued"
 	UpdateStatusDeployingExtensions = "deploying_extensions"
 	UpdateStatusDeployingMain       = "deploying_main"
 	UpdateStatusHealthChecking      = "health_checking"
@@ -30,6 +39,8 @@ const (
 	UpdateStatusSuccess             = "success"
 	UpdateStatusFailed              = "failed"
 	UpdateStatusConflict            = "conflict"
+	UpdateStatusExpired             = "expired"
+	UpdateStatusDrifted             = "drifted"
 
 	defaultUpdateScriptPath = "/app/scripts/sync-upstream.sh"
 	defaultUpdateJobsDir    = "/app/data/release-jobs"
@@ -40,38 +51,50 @@ var (
 	ErrUpdateJobNotFound   = infraerrors.NotFound("UPDATE_JOB_NOT_FOUND", "update job not found")
 	ErrUpdateJobIDRequired = infraerrors.BadRequest("UPDATE_JOB_ID_REQUIRED", "job id is required")
 	ErrUpdateInProgress    = infraerrors.Conflict("UPDATE_IN_PROGRESS", "an upstream update is already running")
+	ErrUpdateNotPrepared   = infraerrors.Conflict("UPDATE_NOT_PREPARED", "update job is not prepared for confirmation")
+	ErrUpdateExpired       = infraerrors.Conflict("UPDATE_PREPARATION_EXPIRED", "prepared update has expired; prepare again")
 )
 
 type UpdateJob struct {
-	JobID              string         `json:"job_id"`
-	Status             string         `json:"status"`
-	Message            string         `json:"message"`
-	IntegrationBranch  string         `json:"integration_branch,omitempty"`
-	BaseCommit         string         `json:"base_commit,omitempty"`
-	ReleaseTag         string         `json:"release_tag,omitempty"`
-	ReleaseCommit      string         `json:"release_commit,omitempty"`
-	ReleasePublishedAt string         `json:"release_published_at,omitempty"`
-	ConflictFiles      []string       `json:"conflict_files,omitempty"`
-	ConflictBase       string         `json:"conflict_base,omitempty"`
-	ConflictUpstream   string         `json:"conflict_upstream,omitempty"`
-	ConflictRelease    string         `json:"conflict_release,omitempty"`
-	ConflictLog        string         `json:"conflict_log,omitempty"`
-	ResolutionHint     string         `json:"resolution_hint,omitempty"`
-	NeedRestart        bool           `json:"need_restart"`
-	Published          bool           `json:"published"`
-	PublishedCommit    string         `json:"published_commit,omitempty"`
-	TargetCommit       string         `json:"target_commit,omitempty"`
-	WorkflowURL        string         `json:"workflow_url,omitempty"`
-	MainDigest         string         `json:"main_digest,omitempty"`
-	ExtensionsDigest   string         `json:"extensions_digest,omitempty"`
-	ProductionChanged  bool           `json:"production_changed"`
-	ErrorCode          string         `json:"error_code,omitempty"`
-	ArtifactPath       string         `json:"artifact_path,omitempty"`
-	Rollback           UpdateRollback `json:"rollback"`
-	Timestamp          time.Time      `json:"ts"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	StartedAt          *time.Time     `json:"started_at"`
-	FinishedAt         *time.Time     `json:"finished_at"`
+	JobID                  string         `json:"job_id"`
+	Action                 string         `json:"action,omitempty"`
+	Status                 string         `json:"status"`
+	Message                string         `json:"message"`
+	IntegrationBranch      string         `json:"integration_branch,omitempty"`
+	BaseCommit             string         `json:"base_commit,omitempty"`
+	ReleaseTag             string         `json:"release_tag,omitempty"`
+	ReleaseCommit          string         `json:"release_commit,omitempty"`
+	ReleasePublishedAt     string         `json:"release_published_at,omitempty"`
+	ConflictFiles          []string       `json:"conflict_files,omitempty"`
+	ConflictBase           string         `json:"conflict_base,omitempty"`
+	ConflictUpstream       string         `json:"conflict_upstream,omitempty"`
+	ConflictRelease        string         `json:"conflict_release,omitempty"`
+	ConflictLog            string         `json:"conflict_log,omitempty"`
+	ResolutionHint         string         `json:"resolution_hint,omitempty"`
+	NeedRestart            bool           `json:"need_restart"`
+	Published              bool           `json:"published"`
+	PublishedCommit        string         `json:"published_commit,omitempty"`
+	TargetCommit           string         `json:"target_commit,omitempty"`
+	TargetCustomCommit     string         `json:"target_custom_commit,omitempty"`
+	UpdateKind             string         `json:"update_kind,omitempty"`
+	ProductionCommit       string         `json:"production_commit,omitempty"`
+	StableReleaseTag       string         `json:"stable_release_tag,omitempty"`
+	StableReleaseCommit    string         `json:"stable_release_commit,omitempty"`
+	WorkflowURL            string         `json:"workflow_url,omitempty"`
+	MainDigest             string         `json:"main_digest,omitempty"`
+	ExtensionsDigest       string         `json:"extensions_digest,omitempty"`
+	ProductionChanged      bool           `json:"production_changed"`
+	ErrorCode              string         `json:"error_code,omitempty"`
+	ArtifactPath           string         `json:"artifact_path,omitempty"`
+	PreparedManifest       string         `json:"prepared_manifest,omitempty"`
+	PreparedManifestSHA256 string         `json:"prepared_manifest_sha256,omitempty"`
+	PreparedAt             string         `json:"prepared_at,omitempty"`
+	ExpiresAt              string         `json:"expires_at,omitempty"`
+	Rollback               UpdateRollback `json:"rollback"`
+	Timestamp              time.Time      `json:"ts"`
+	UpdatedAt              time.Time      `json:"updated_at"`
+	StartedAt              *time.Time     `json:"started_at"`
+	FinishedAt             *time.Time     `json:"finished_at"`
 }
 
 type UpdateRollback struct {
@@ -82,20 +105,28 @@ type UpdateRollback struct {
 
 func isValidUpdateStatus(status string) bool {
 	switch status {
-	case UpdateStatusCheckingRelease,
+	case UpdateStatusCheckingUpdates,
+		UpdateStatusCheckingRelease,
 		UpdateStatusValidatingTag,
 		UpdateStatusMergingRelease,
 		UpdateStatusWaitingActions,
 		UpdateStatusWaitingImages,
+		UpdateStatusDownloadingImages,
+		UpdateStatusPreparingCompose,
 		UpdateStatusPromotingRelease,
 		UpdateStatusBackingUp,
+		UpdateStatusValidatingBackup,
+		UpdateStatusPrepared,
+		UpdateStatusApplyQueued,
 		UpdateStatusDeployingExtensions,
 		UpdateStatusDeployingMain,
 		UpdateStatusHealthChecking,
 		UpdateStatusRollingBack,
 		UpdateStatusSuccess,
 		UpdateStatusFailed,
-		UpdateStatusConflict:
+		UpdateStatusConflict,
+		UpdateStatusExpired,
+		UpdateStatusDrifted:
 		return true
 	default:
 		return false
@@ -103,7 +134,11 @@ func isValidUpdateStatus(status string) bool {
 }
 
 func IsTerminalUpdateStatus(status string) bool {
-	return status == UpdateStatusSuccess || status == UpdateStatusFailed || status == UpdateStatusConflict
+	return status == UpdateStatusSuccess || status == UpdateStatusFailed || status == UpdateStatusConflict || status == UpdateStatusExpired || status == UpdateStatusDrifted
+}
+
+func IsPollingSettledUpdateStatus(status string) bool {
+	return IsTerminalUpdateStatus(status) || status == UpdateStatusPrepared
 }
 
 func newUpdateJobID() (string, error) {

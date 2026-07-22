@@ -25,6 +25,9 @@ type systemHandlerUpdateServiceStub struct {
 	checkForces           []bool
 	statusJobIDs          []string
 	performCall           int
+	prepareCall           int
+	applyCall             int
+	applyJobIDs           []string
 	performCtxErr         error
 	performHasDeadline    bool
 	rollbackCall          int
@@ -45,6 +48,21 @@ func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bo
 
 func (s *systemHandlerUpdateServiceStub) PerformUpdate(ctx context.Context) (*service.UpdateJob, error) {
 	s.performCall++
+	s.performCtxErr = ctx.Err()
+	_, s.performHasDeadline = ctx.Deadline()
+	return s.performJob, s.performErr
+}
+
+func (s *systemHandlerUpdateServiceStub) PrepareUpdate(ctx context.Context) (*service.UpdateJob, error) {
+	s.prepareCall++
+	s.performCtxErr = ctx.Err()
+	_, s.performHasDeadline = ctx.Deadline()
+	return s.performJob, s.performErr
+}
+
+func (s *systemHandlerUpdateServiceStub) ApplyUpdate(ctx context.Context, jobID string) (*service.UpdateJob, error) {
+	s.applyCall++
+	s.applyJobIDs = append(s.applyJobIDs, jobID)
 	s.performCtxErr = ctx.Err()
 	_, s.performHasDeadline = ctx.Deadline()
 	return s.performJob, s.performErr
@@ -106,10 +124,60 @@ func newSystemHandlerTestRouter(t *testing.T, updateSvc *systemHandlerUpdateServ
 
 	router := gin.New()
 	router.POST("/api/v1/admin/system/update", handler.PerformUpdate)
+	router.POST("/api/v1/admin/system/update/prepare", handler.PrepareUpdate)
+	router.POST("/api/v1/admin/system/update/apply", handler.ApplyUpdate)
 	router.GET("/api/v1/admin/system/update/status", handler.GetUpdateStatus)
 	router.POST("/api/v1/admin/system/rollback", handler.Rollback)
 	router.GET("/api/v1/admin/system/rollback-versions", handler.GetRollbackVersions)
 	return router
+}
+
+func TestSystemHandlerPrepareAndApplyUseSeparateActions(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{performJob: &service.UpdateJob{
+		JobID:  "update-two-phase",
+		Action: service.UpdateActionPrepare,
+		Status: service.UpdateStatusCheckingUpdates,
+	}}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	prepareRec := httptest.NewRecorder()
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update/prepare", nil)
+	prepareReq.Header.Set("Idempotency-Key", "prepare-key")
+	router.ServeHTTP(prepareRec, prepareReq)
+	require.Equal(t, http.StatusAccepted, prepareRec.Code)
+	require.Equal(t, 1, updateSvc.prepareCall)
+	require.Equal(t, 0, updateSvc.applyCall)
+
+	updateSvc.performJob.Action = service.UpdateActionApply
+	updateSvc.performJob.Status = service.UpdateStatusApplyQueued
+	applyRec := httptest.NewRecorder()
+	applyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update/apply", strings.NewReader(`{"job_id":"update-two-phase"}`))
+	applyReq.Header.Set("Content-Type", "application/json")
+	applyReq.Header.Set("Idempotency-Key", "apply-key")
+	router.ServeHTTP(applyRec, applyReq)
+	require.Equal(t, http.StatusAccepted, applyRec.Code)
+	require.Equal(t, 1, updateSvc.applyCall)
+	require.Equal(t, []string{"update-two-phase"}, updateSvc.applyJobIDs)
+}
+
+func TestSystemHandlerLegacyUpdateAliasOnlyPrepares(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{performJob: &service.UpdateJob{
+		JobID:  "update-legacy-alias",
+		Action: service.UpdateActionPrepare,
+		Status: service.UpdateStatusCheckingUpdates,
+	}}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req.Header.Set("Idempotency-Key", "legacy-key")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Equal(t, 1, updateSvc.prepareCall)
+	require.Equal(t, 0, updateSvc.applyCall)
 }
 
 func requireSystemLockStatus(t *testing.T, repo *memoryIdempotencyRepoStub, wantStatus string) {
@@ -138,7 +206,7 @@ func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Equal(t, 1, updateSvc.performCall)
+	require.Equal(t, 1, updateSvc.prepareCall)
 	require.Empty(t, updateSvc.checkForces)
 	requireSystemLockStatus(t, repo, service.IdempotencyStatusFailedRetryable)
 
@@ -204,7 +272,7 @@ func TestSystemHandlerPerformUpdateSurvivesClientDisconnect(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
-	require.Equal(t, 1, updateSvc.performCall)
+	require.Equal(t, 1, updateSvc.prepareCall)
 	require.NoError(t, updateSvc.performCtxErr,
 		"update must not observe the canceled request context")
 	require.True(t, updateSvc.performHasDeadline,

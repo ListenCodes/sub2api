@@ -72,7 +72,7 @@ func TestUpdateServicePerformUpdateQueuesEvenWhenBinaryVersionIsCurrent(t *testi
 	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
 	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
 	var triggeredJobID string
-	svc.startScript = func(_ string, jobID string) (func() error, error) {
+	svc.startScript = func(_ string, _ string, jobID string) (func() error, error) {
 		triggeredJobID = jobID
 		return func() error { return nil }, nil
 	}
@@ -81,8 +81,82 @@ func TestUpdateServicePerformUpdateQueuesEvenWhenBinaryVersionIsCurrent(t *testi
 
 	require.NoError(t, err)
 	require.NotNil(t, job)
-	require.Equal(t, UpdateStatusCheckingRelease, job.Status)
+	require.Equal(t, UpdateStatusCheckingUpdates, job.Status)
 	require.Equal(t, job.JobID, triggeredJobID)
+}
+
+func TestUpdateServicePrepareUpdateCreatesPrepareJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "sync-trigger.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755))
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{}, "0.1.163", "release")
+	svc.scriptPath = scriptPath
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+	var action string
+	var triggeredJobID string
+	svc.startScript = func(_ string, gotAction string, jobID string) (func() error, error) {
+		action = gotAction
+		triggeredJobID = jobID
+		return func() error { return nil }, nil
+	}
+
+	job, err := svc.PrepareUpdate(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, UpdateActionPrepare, job.Action)
+	require.Equal(t, UpdateStatusCheckingUpdates, job.Status)
+	require.Equal(t, UpdateActionPrepare, action)
+	require.Equal(t, job.JobID, triggeredJobID)
+}
+
+func TestUpdateServiceApplyUpdateUsesPreparedJobAndSameID(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "sync-trigger.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755))
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+	svc.scriptPath = scriptPath
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
+	require.NoError(t, os.MkdirAll(svc.jobsDir, 0755))
+	preparedAt := time.Now().UTC()
+	require.NoError(t, writeUpdateStatus(filepath.Join(svc.jobsDir, "update-prepared.json"), &UpdateJob{
+		JobID:      "update-prepared",
+		Action:     UpdateActionPrepare,
+		Status:     UpdateStatusPrepared,
+		PreparedAt: preparedAt.Format(time.RFC3339),
+		ExpiresAt:  preparedAt.Add(15 * time.Minute).Format(time.RFC3339),
+	}))
+	var action string
+	svc.startScript = func(_ string, gotAction string, jobID string) (func() error, error) {
+		action = gotAction
+		require.Equal(t, "update-prepared", jobID)
+		return func() error { return nil }, nil
+	}
+
+	job, err := svc.ApplyUpdate(context.Background(), "update-prepared")
+
+	require.NoError(t, err)
+	require.Equal(t, "update-prepared", job.JobID)
+	require.Equal(t, UpdateActionApply, job.Action)
+	require.Equal(t, UpdateStatusApplyQueued, job.Status)
+	require.Equal(t, UpdateActionApply, action)
+}
+
+func TestUpdateServiceApplyUpdateRejectsNonPreparedJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
+	require.NoError(t, os.MkdirAll(svc.jobsDir, 0755))
+	require.NoError(t, writeUpdateStatus(filepath.Join(svc.jobsDir, "update-running.json"), &UpdateJob{
+		JobID:  "update-running",
+		Action: UpdateActionPrepare,
+		Status: UpdateStatusBackingUp,
+	}))
+
+	_, err := svc.ApplyUpdate(context.Background(), "update-running")
+
+	require.ErrorIs(t, err, ErrUpdateNotPrepared)
 }
 
 func TestUpdateServicePerformUpdateRejectsConcurrentRequests(t *testing.T) {
@@ -100,7 +174,7 @@ func TestUpdateServicePerformUpdateRejectsConcurrentRequests(t *testing.T) {
 	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
 
 	var starts atomic.Int32
-	svc.startScript = func(string, string) (func() error, error) {
+	svc.startScript = func(string, string, string) (func() error, error) {
 		starts.Add(1)
 		return func() error { return nil }, nil
 	}

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiClient } from '@/api/client'
 import {
+  applyUpdate,
+  prepareUpdate,
   performUpdate,
   rollback,
   isTerminalUpdateStatus,
@@ -15,7 +17,40 @@ afterEach(() => {
 })
 
 describe('upstream preparation jobs', () => {
-  it('starts a durable update with an idempotency key instead of a long browser timeout', async () => {
+	it('uses separate prepare and apply endpoints with independent idempotency keys', async () => {
+		const prepareJob: UpdateJob = {
+			job_id: 'update-two-phase',
+			action: 'prepare',
+			status: 'checking_updates',
+			message: 'queued',
+			need_restart: false
+		}
+		const applyJob: UpdateJob = {
+			...prepareJob,
+			action: 'apply',
+			status: 'apply_queued'
+		}
+		const post = vi.spyOn(apiClient, 'post')
+			.mockResolvedValueOnce({ data: prepareJob })
+			.mockResolvedValueOnce({ data: applyJob })
+
+		await expect(prepareUpdate()).resolves.toEqual(prepareJob)
+		await expect(applyUpdate('update-two-phase')).resolves.toEqual(applyJob)
+
+		expect(post).toHaveBeenNthCalledWith(1, '/admin/system/update/prepare', undefined, {
+			headers: { 'Idempotency-Key': expect.any(String) }
+		})
+		expect(post).toHaveBeenNthCalledWith(2, '/admin/system/update/apply', {
+			job_id: 'update-two-phase'
+		}, {
+			headers: { 'Idempotency-Key': expect.any(String) }
+		})
+		expect(post.mock.calls[0][2]?.headers?.['Idempotency-Key']).not.toBe(
+			post.mock.calls[1][2]?.headers?.['Idempotency-Key']
+		)
+	})
+
+	it('starts a durable update with an idempotency key instead of a long browser timeout', async () => {
     const job: UpdateJob = {
       job_id: 'update-async',
       status: 'checking_release',
@@ -46,23 +81,29 @@ describe('upstream preparation jobs', () => {
     )
   })
 
-  it('treats every release phase as non-terminal until success, failure, or conflict', () => {
-    const phases: UpdateJobStatus[] = [
+	it('treats every release phase as non-terminal until success, failure, or conflict', () => {
+		const phases: UpdateJobStatus[] = [
+			'checking_updates',
       'checking_release',
       'validating_tag',
       'merging_release',
       'waiting_actions',
-      'waiting_images',
+			'waiting_images',
+			'downloading_images',
+			'preparing_compose',
       'promoting_release',
-      'backing_up',
+			'backing_up',
+			'validating_backup',
+			'prepared',
+			'apply_queued',
       'deploying_extensions',
       'deploying_main',
       'health_checking',
       'rolling_back'
     ]
 
-    for (const phase of phases) expect(isTerminalUpdateStatus(phase)).toBe(false)
-    for (const phase of ['success', 'failed', 'conflict'] as const) {
+		for (const phase of phases) expect(isTerminalUpdateStatus(phase)).toBe(false)
+		for (const phase of ['success', 'failed', 'conflict', 'expired', 'drifted'] as const) {
       expect(isTerminalUpdateStatus(phase)).toBe(true)
     }
   })
