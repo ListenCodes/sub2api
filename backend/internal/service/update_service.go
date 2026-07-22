@@ -729,39 +729,6 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	return candidates, nil
 }
 
-func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
-	if err != nil {
-		return nil, err
-	}
-
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
-
-	assets := make([]Asset, len(release.Assets))
-	for i, a := range release.Assets {
-		assets[i] = Asset{
-			Name:        a.Name,
-			DownloadURL: a.BrowserDownloadURL,
-			Size:        a.Size,
-		}
-	}
-
-	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  latestVersion,
-		HasUpdate:      compareVersions(s.currentVersion, latestVersion) < 0,
-		ReleaseInfo: &ReleaseInfo{
-			Name:        release.Name,
-			Body:        release.Body,
-			PublishedAt: release.PublishedAt,
-			HTMLURL:     release.HTMLURL,
-			Assets:      assets,
-		},
-		Cached:    false,
-		BuildType: s.buildType,
-	}, nil
-}
-
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {
 	return s.githubClient.DownloadFile(ctx, downloadURL, dest, maxDownloadSize)
 }
@@ -921,38 +888,6 @@ func (s *UpdateService) extractBinary(archivePath, destPath string) error {
 		return err
 	}
 	return out.Close()
-}
-
-func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
-	if s.cache == nil {
-		return nil, fmt.Errorf("update cache unavailable")
-	}
-	data, err := s.cache.GetUpdateInfo(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var cached struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
-	}
-	if err := json.Unmarshal([]byte(data), &cached); err != nil {
-		return nil, err
-	}
-
-	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
-		return nil, fmt.Errorf("cache expired")
-	}
-
-	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  cached.Latest,
-		HasUpdate:      compareVersions(s.currentVersion, cached.Latest) < 0,
-		ReleaseInfo:    cached.ReleaseInfo,
-		Cached:         true,
-		BuildType:      s.buildType,
-	}, nil
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
