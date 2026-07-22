@@ -15,6 +15,17 @@ function read(relativePath) {
   return readFileSync(resolve(repoRoot, relativePath), 'utf8')
 }
 
+function reportComposeFailure(error, result) {
+  if (!process.env.GITHUB_ACTIONS) return
+  const details = [error?.message, result?.stderr, result?.stdout]
+    .filter(Boolean)
+    .join('\n')
+    .replaceAll('%', '%25')
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A')
+  console.error(`::error file=deploy/docker-compose.custom.yml::${details}`)
+}
+
 test('production base Compose remains byte-identical to Stable Release v0.1.163', () => {
   const upstream = execFileSync('git', [
     'show',
@@ -69,23 +80,28 @@ test('rendered Compose keeps the production service and identity contract', (t) 
     t.skip('Docker CLI is unavailable')
     return
   }
-  assert.equal(result.status, 0, result.stderr)
-  const rendered = JSON.parse(result.stdout)
-  assert.deepEqual(Object.keys(rendered.services).sort(), [
-    'extensions-self',
-    'postgres',
-    'redis',
-    'risk-control-postgres',
-    'sub2api'
-  ])
-  assert.equal(rendered.services.sub2api.image, process.env.SUB2API_IMAGE ?? 'ghcr.io/listencodes/sub2api-custom@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
-  assert.equal(rendered.services['extensions-self'].image, process.env.EXTENSIONS_SELF_IMAGE ?? 'ghcr.io/listencodes/sub2api-extensions@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
-  assert.equal(rendered.services['risk-control-postgres'].container_name, 'risk-control-postgres')
-  assert.ok(rendered.volumes.risk_control_postgres_data)
-  assert.ok(rendered.networks['sub2api-network'])
-  assert.ok(rendered.services.sub2api.volumes.some((volume) => volume.source === '/root/sub2api' && volume.target === '/repo'))
-  assert.equal(rendered.services.sub2api.environment.RISK_CONTROL_URL, 'http://extensions-self:8090')
-  assert.equal(rendered.services['extensions-self'].depends_on['risk-control-postgres'].condition, 'service_healthy')
+  try {
+    assert.equal(result.status, 0, result.stderr)
+    const rendered = JSON.parse(result.stdout)
+    assert.deepEqual(Object.keys(rendered.services).sort(), [
+      'extensions-self',
+      'postgres',
+      'redis',
+      'risk-control-postgres',
+      'sub2api'
+    ])
+    assert.equal(rendered.services.sub2api.image, process.env.SUB2API_IMAGE ?? 'ghcr.io/listencodes/sub2api-custom@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+    assert.equal(rendered.services['extensions-self'].image, process.env.EXTENSIONS_SELF_IMAGE ?? 'ghcr.io/listencodes/sub2api-extensions@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+    assert.equal(rendered.services['risk-control-postgres'].container_name, 'risk-control-postgres')
+    assert.ok(rendered.volumes.risk_control_postgres_data)
+    assert.ok(rendered.networks['sub2api-network'])
+    assert.ok(rendered.services.sub2api.volumes.some((volume) => volume.source === '/root/sub2api' && volume.target === '/repo'))
+    assert.equal(rendered.services.sub2api.environment.RISK_CONTROL_URL, 'http://extensions-self:8090')
+    assert.equal(rendered.services['extensions-self'].depends_on['risk-control-postgres'].condition, 'service_healthy')
+  } catch (error) {
+    reportComposeFailure(error, result)
+    throw error
+  }
 })
 
 test('publisher always uses and backs up the matching Compose pair', () => {
