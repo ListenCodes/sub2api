@@ -47,6 +47,7 @@ printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 
 bash "$ROOT_DIR/deploy/ops/tests/test-sync-upstream-behind.sh"
 bash "$ROOT_DIR/deploy/ops/tests/test-release-ledger.sh"
+bash "$ROOT_DIR/deploy/ops/tests/test-prepare-release-ledger.sh"
 
 cat > "$TMP_DIR/checks-success.json" <<'JSON'
 {

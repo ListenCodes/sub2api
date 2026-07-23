@@ -51,6 +51,7 @@ $ledger = Read-RepoFile 'deploy\ops\release-ledger.sh'
 $ledgerMigration = Read-RepoFile 'deploy\ops\migrate-release-ledger.sh'
 $imageVerifier = Read-RepoFile 'deploy\ops\verify-release-images.sh'
 $actionsWaiter = Read-RepoFile 'deploy\ops\wait-for-actions.sh'
+$prepareSurface = "$prepare`n$common"
 
 foreach ($executor in @($prepare, $apply, $common)) {
     Assert-Matches $executor 'SUB2API_ENV_FILE:-\$REPO/deploy/\.env' 'release executors must default to the production deploy/.env path'
@@ -86,18 +87,29 @@ Assert-Matches $promoter 'refs/heads/\$BRANCH' 'promoter targets only the approv
 Assert-NotMatches $promoter 'git\s+merge(?:\s|$)|git\s+reset|--force' 'promoter must not move local source or rewrite history'
 # Preparation owns remote gates, immutable evidence, Compose rendering, and backups.
 foreach ($marker in @('wait-for-actions.sh', 'verify-release-images.sh', 'docker pull', 'pg_dump', 'pg_restore --list', 'SHA256SUMS', 'prepared_manifest', 'expires_at', 'prepared')) {
-    Assert-Matches $prepare ([regex]::Escape($marker)) "prepare executor is missing $marker"
+    Assert-Matches $prepareSurface ([regex]::Escape($marker)) "prepare executor surface is missing $marker"
 }
 Assert-NotMatches $prepare 'compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'prepare must not mutate container lifecycle'
 Assert-NotMatches $prepare 'release_production_state_write' 'prepare must not write production release state'
-Assert-Matches $prepare 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
+Assert-Matches $prepareSurface 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
+foreach ($marker in @(
+    'worktree add --detach', '$BACKUP_DIR/target', 'release_stage_target_env',
+    'release_render_explicit_compose', 'release_create_complete_backup',
+    'base_custom_high_water', 'proposed_custom_sequence', 'advances_custom_version',
+    'target_official_version', 'target_custom_version', 'REUSE_VERIFIED_EVIDENCE'
+)) {
+    Assert-Matches $prepare ([regex]::Escape($marker)) "ledger-aware prepare is missing $marker"
+}
+Assert-Matches $common 'target_artifact_manifest_sha256' 'shared manifest validation must bind the immutable target artifact manifest'
+Assert-Matches $common 'ledger_validate_backup_contract' 'the shared complete backup helper must use the ledger backup contract'
+Assert-NotMatches $prepare 'compose[^\r\n]*-f\s+"\$COMPOSE_BASE"' 'prepare must render the staged target Compose pair, not the production pair'
 
 # Apply is local-only, immutable, and extensions-first.
 foreach ($marker in @('release_manifest_valid', 'origin/$BRANCH', 'drifted', '--pull never', 'deploying_extensions', 'deploying_main', 'health_checking', 'release_production_state_write', 'rolling_back', 'restore_source', 'rollback:{attempted:true')) {
     Assert-Matches $apply ([regex]::Escape($marker)) "apply executor is missing $marker"
 }
 foreach ($marker in @('config --quiet', 'config --format json', '.name ==', 'healthcheck', 'nginx', 'container-metadata', 'rollback-tags.txt', 'SUB2API_IMAGE=')) {
-    Assert-Matches $prepare ([regex]::Escape($marker)) "prepare executor is missing $marker"
+    Assert-Matches $prepareSurface ([regex]::Escape($marker)) "prepare executor surface is missing $marker"
 }
 Assert-NotMatches $apply 'git\s+fetch|docker\s+pull|pg_dump|pg_restore|api\.github\.com' 'apply must not access GitHub, pull images, or redo backups'
 Assert-NotMatches $apply 'up[^\r\n]*risk-control-postgres|(?:rm|down)[^\r\n]*risk-control-postgres' 'apply must not lifecycle-manage risk-control-postgres'
