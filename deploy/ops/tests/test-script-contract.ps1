@@ -42,6 +42,7 @@ $orchestrator = Read-RepoFile 'deploy\ops\sync-and-publish.sh'
 $prepare = Read-RepoFile 'deploy\ops\prepare-release.sh'
 $apply = Read-RepoFile 'deploy\ops\apply-release.sh'
 $prepareRollback = Read-RepoFile 'deploy\ops\prepare-rollback.sh'
+$applyRollback = Read-RepoFile 'deploy\ops\apply-rollback.sh'
 $common = Read-RepoFile 'deploy\ops\release-common.sh'
 $trigger = Read-RepoFile 'deploy\ops\sync-trigger.sh'
 $promoter = Read-RepoFile 'deploy\ops\promote-release.sh'
@@ -97,6 +98,10 @@ foreach ($marker in @('ledger_list_rollback_release_ids 3', 'verifying_snapshot'
     Assert-Matches $prepareRollback ([regex]::Escape($marker)) "rollback prepare is missing $marker"
 }
 Assert-NotMatches $prepareRollback 'api\.github\.com|wait-for-actions|verify-release-images|compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'rollback prepare must not query remote release gates or mutate containers'
+foreach ($marker in @('release_checkout_exact_commit', 'switching_extensions', 'switching_main', '--pull never', 'run_complete_health', 'ledger_commit_rollback', 'ledger_restore_failed_rollback')) {
+    Assert-Matches $applyRollback ([regex]::Escape($marker)) "rollback apply is missing $marker"
+}
+Assert-NotMatches $applyRollback 'docker\s+pull|pg_dump|pg_restore|api\.github\.com|wait-for-actions|verify-release-images' 'rollback apply must be local-only and must not back up or restore databases'
 Assert-Matches $prepareSurface 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
 foreach ($marker in @(
     'worktree add --detach', '$BACKUP_DIR/target', 'release_stage_target_env',
