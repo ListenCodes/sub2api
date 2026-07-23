@@ -199,9 +199,19 @@ ledger_projection_for_release() {
 }
 
 ledger_with_lock() {
-  local function_name="$1" result=0
+  local function_name="$1" result=0 inherited_fd="${SUB2API_RELEASE_LOCK_FD:-9}" inherited_path lock_path
   shift
   mkdir -p "$(dirname "$RELEASE_LEDGER_LOCK_FILE")"
+  touch "$RELEASE_LEDGER_LOCK_FILE" || return 1
+  if [[ "$inherited_fd" =~ ^[0-9]+$ && -e "/proc/$$/fd/$inherited_fd" ]]; then
+    inherited_path="$(readlink -f "/proc/$$/fd/$inherited_fd" 2>/dev/null || true)"
+    lock_path="$(readlink -f "$RELEASE_LEDGER_LOCK_FILE" 2>/dev/null || true)"
+    if [[ -n "$inherited_path" && "$inherited_path" == "$lock_path" ]]; then
+      flock -n "$inherited_fd" || return 1
+      "$function_name" "$@" || result=$?
+      return "$result"
+    fi
+  fi
   exec 8>"$RELEASE_LEDGER_LOCK_FILE"
   if ! flock -x 8; then
     exec 8>&-
@@ -231,9 +241,84 @@ ledger_set_active_operation() {
   ledger_with_lock _ledger_set_active_operation_unlocked "$1"
 }
 
+_ledger_clear_active_operation_unlocked() {
+  local operation_id="$1" state_path state current now
+  [[ "$operation_id" =~ ^(update|rollback)-[A-Za-z0-9-]+$ ]] || return 1
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  state="$(cat "$state_path")"
+  current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  [[ "$current" == "$operation_id" ]] || { [[ -z "$current" ]] && return 0; return 1; }
+  now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  state="$(jq --arg now "$now" '.active_operation_id=null | .updated_at=$now' <<< "$state")" || return 1
+  ledger_atomic_write "$state_path" "$state"
+}
+
+ledger_clear_active_operation() {
+  ledger_with_lock _ledger_clear_active_operation_unlocked "$1"
+}
+
+_ledger_settle_pre_mutation_failure_unlocked() {
+  local operation_id="$1" status="$2" message="$3" metadata="$4"
+  local state_path state current operation_path operation current_status
+  [[ "$operation_id" =~ ^(update|rollback)-[A-Za-z0-9-]+$ ]] || return 1
+  release_terminal_status "$status" || return 1
+  [[ "$status" != success && "$status" != rollback_failed ]] || return 1
+  jq -e 'type == "object" and .published == false and .production_changed == false' <<< "$metadata" >/dev/null || return 1
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  state="$(cat "$state_path")"
+  current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  [[ -z "$current" || "$current" == "$operation_id" ]] || return 1
+  operation_path="$(ledger_operation_path "$operation_id")"
+  [[ -f "$operation_path" && ! -L "$operation_path" ]] || return 1
+  operation="$(cat "$operation_path")"
+  current_status="$(jq -er '.status' <<< "$operation")" || return 1
+  if release_terminal_status "$current_status"; then
+    [[ "$current_status" == "$status" ]] || return 1
+  else
+    [[ "$current" == "$operation_id" ]] || return 1
+    release_job_update "$operation_id" "$status" "$message" "$metadata" || return 1
+    operation="$(cat "$operation_path")"
+  fi
+  jq -e --arg status "$status" '
+    .status == $status and .published == false and .production_changed == false
+  ' <<< "$operation" >/dev/null || return 1
+  [[ "$current" != "$operation_id" ]] || _ledger_clear_active_operation_unlocked "$operation_id"
+}
+
+ledger_settle_pre_mutation_failure() {
+  ledger_with_lock _ledger_settle_pre_mutation_failure_unlocked "$@"
+}
+
+_ledger_recover_pre_mutation_terminal_unlocked() {
+  local operation_id="$1" state_path state current operation_path operation
+  [[ "$operation_id" =~ ^(update|rollback)-[A-Za-z0-9-]+$ ]] || return 1
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  state="$(cat "$state_path")"
+  current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  [[ -z "$current" || "$current" == "$operation_id" ]] || return 1
+  operation_path="$(ledger_operation_path "$operation_id")"
+  [[ -f "$operation_path" && ! -L "$operation_path" ]] || return 1
+  operation="$(cat "$operation_path")"
+  jq -e '
+    (.status | IN("failed", "conflict", "expired", "drifted", "failed_rolled_back"))
+    and .published == false
+    and .production_changed == false
+  ' <<< "$operation" >/dev/null || return 1
+  [[ "$current" != "$operation_id" ]] || _ledger_clear_active_operation_unlocked "$operation_id"
+}
+
+ledger_recover_pre_mutation_terminal() {
+  ledger_with_lock _ledger_recover_pre_mutation_terminal_unlocked "$1"
+}
+
 _ledger_commit_release_unlocked() {
   local record_content="$1" advance_high_water="${2:-0}"
   local release_id sequence operation_id state_path state current_record current_sequence projection now
+  local operation_path operation update_kind base_release_id base_high_water proposed_sequence advances source_kind
+  local stable_tag target_custom_commit current_official_version current_official_commit current_custom_version current_custom_commit
   [[ "$advance_high_water" == 0 || "$advance_high_water" == 1 ]] || return 1
   release_id="$(jq -er '.release_id' <<< "$record_content")" || return 1
   sequence="$(jq -er '.custom_version_sequence' <<< "$record_content")" || return 1
@@ -245,14 +330,86 @@ _ledger_commit_release_unlocked() {
   current_record="$(ledger_release_path "$(jq -r '.current_release_id' <<< "$state")")"
   ledger_validate_release "$current_record" || return 1
   current_sequence="$(jq -r '.custom_version_sequence' "$current_record")"
+  operation_path="$(ledger_operation_path "$operation_id")"
+  [[ -f "$operation_path" && ! -L "$operation_path" ]] || return 1
+  operation="$(cat "$operation_path")"
+  jq -e --arg operation "$operation_id" --arg release "$release_id" '
+    type == "object"
+    and .job_id == $operation
+    and .operation_kind == "update"
+    and .action == "apply"
+    and .status == "health_checking"
+    and .target_release_id == $release
+  ' <<< "$operation" >/dev/null || return 1
+  base_release_id="$(jq -er '.base_release_id' <<< "$operation")" || return 1
+  base_high_water="$(jq -er '.base_custom_high_water' <<< "$operation")" || return 1
+  proposed_sequence="$(jq -er '.proposed_custom_sequence' <<< "$operation")" || return 1
+  advances="$(jq -r '.advances_custom_version' <<< "$operation")" || return 1
+  [[ "$advances" == true || "$advances" == false ]] || return 1
+  update_kind="$(jq -er '.update_kind' <<< "$operation")" || return 1
+  source_kind="$(jq -er '.source_kind' <<< "$record_content")" || return 1
+  stable_tag="$(jq -er '.stable_release_tag' <<< "$operation")" || return 1
+  target_custom_commit="$(jq -er '.target_custom_commit' <<< "$operation")" || return 1
+  [[ "$target_custom_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  current_official_version="$(jq -r '.official_version' "$current_record")"
+  current_official_commit="$(jq -r '.official_commit' "$current_record")"
+  current_custom_version="$(jq -r '.custom_version' "$current_record")"
+  current_custom_commit="$(jq -r '.custom_commit' "$current_record")"
+  [[ "$base_release_id" == "$(jq -r '.current_release_id' <<< "$state")" ]] || return 1
+  [[ "$base_high_water" -eq "$(jq -r '.custom_version_high_water' <<< "$state")" ]] || return 1
+  [[ "$proposed_sequence" -eq "$sequence" && "$update_kind" == "$source_kind" ]] || return 1
+  jq -e --argjson record "$record_content" '
+    .target_official_version == $record.official_version
+    and .target_custom_version == $record.custom_version
+    and .target_commit == $record.custom_commit
+    and .stable_release_commit == $record.official_commit
+    and .main_digest == $record.main_digest
+    and .extensions_digest == $record.extensions_digest
+  ' <<< "$operation" >/dev/null || return 1
+  [[ "$stable_tag" == "$(jq -r '.official_version' <<< "$record_content")" ]] || return 1
+  case "$source_kind" in
+    official)
+      [[ "$advances" == false ]] || return 1
+      [[ "$(jq -r '.official_version' <<< "$record_content")" != "$current_official_version" ]] || return 1
+      [[ "$(jq -r '.official_commit' <<< "$record_content")" != "$current_official_commit" ]] || return 1
+      [[ "$(jq -r '.custom_version' <<< "$record_content")" == "$current_custom_version" ]] || return 1
+      [[ "$target_custom_commit" == "$current_custom_commit" ]] || return 1
+      ;;
+    custom)
+      [[ "$advances" == true ]] || return 1
+      [[ "$(jq -r '.official_version' <<< "$record_content")" == "$current_official_version" ]] || return 1
+      [[ "$(jq -r '.official_commit' <<< "$record_content")" == "$current_official_commit" ]] || return 1
+      [[ "$target_custom_commit" == "$(jq -r '.custom_commit' <<< "$record_content")" ]] || return 1
+      [[ "$target_custom_commit" != "$current_custom_commit" ]] || return 1
+      ;;
+    combined)
+      [[ "$advances" == true ]] || return 1
+      [[ "$(jq -r '.official_version' <<< "$record_content")" != "$current_official_version" ]] || return 1
+      [[ "$(jq -r '.official_commit' <<< "$record_content")" != "$current_official_commit" ]] || return 1
+      [[ "$target_custom_commit" != "$current_custom_commit" ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
   if [[ "$advance_high_water" == 1 ]]; then
+    [[ "$advances" == true && ("$source_kind" == custom || "$source_kind" == combined) ]] || return 1
     [[ "$sequence" -eq $(( $(jq -r '.custom_version_high_water' <<< "$state") + 1 )) ]] || return 1
   else
+    [[ "$advances" == false && "$source_kind" == official ]] || return 1
     [[ "$sequence" -eq "$current_sequence" ]] || return 1
   fi
   ledger_create_release "$record_content" || return 1
+  if [[ "${SUB2API_LEDGER_COMMIT_FAILPOINT:-}" == before_projection ]]; then
+    SUB2API_LEDGER_COMMIT_FAILPOINT=''
+    export SUB2API_LEDGER_COMMIT_FAILPOINT
+    return 97
+  fi
   projection="$(ledger_projection_for_release "$record_content")" || return 1
   ledger_write_projection "$projection" || return 1
+  if [[ "${SUB2API_LEDGER_COMMIT_FAILPOINT:-}" == before_state ]]; then
+    SUB2API_LEDGER_COMMIT_FAILPOINT=''
+    export SUB2API_LEDGER_COMMIT_FAILPOINT
+    return 98
+  fi
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   state="$(jq --arg release "$release_id" --arg now "$now" --argjson sequence "$sequence" --argjson advance "$advance_high_water" '
     .current_release_id=$release
@@ -260,11 +417,62 @@ _ledger_commit_release_unlocked() {
     | .updated_at=$now
     | if $advance == 1 then .custom_version_high_water=$sequence else . end
   ' <<< "$state")"
-  ledger_atomic_write "$state_path" "$state"
+  ledger_atomic_write "$state_path" "$state" || return 1
+  operation="$(jq --arg now "$now" --arg published "$(jq -r '.published_at' <<< "$record_content")" \
+    --arg release "$release_id" --arg backup "$(jq -r '.backup_dir' <<< "$record_content")" '
+    .status="success"
+    | .message="release published and committed to the production ledger"
+    | .ts=$now
+    | .updated_at=$now
+    | .finished_at=$now
+    | .published=true
+    | .published_commit=.target_commit
+    | .published_at=$published
+    | .target_release_id=$release
+    | .production_changed=true
+    | .artifact_path=$backup
+    | .rollback={attempted:false,succeeded:false,message:""}
+  ' <<< "$operation")" || return 1
+  ledger_atomic_write "$operation_path" "$operation"
 }
 
 ledger_commit_release() {
   ledger_with_lock _ledger_commit_release_unlocked "$@"
+}
+
+_ledger_restore_failed_apply_unlocked() {
+  local base_release_id="$1" base_high_water="$2" operation_id="$3" base_projection="$4"
+  local state_path state base_record now
+  [[ "$base_release_id" =~ ^release-[A-Za-z0-9-]+$ ]] || return 1
+  [[ "$base_high_water" =~ ^[0-9]+$ ]] || return 1
+  [[ "$operation_id" =~ ^update-[A-Za-z0-9-]+$ ]] || return 1
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  state="$(cat "$state_path")"
+  [[ "$(jq -r '.current_release_id' <<< "$state")" == "$base_release_id" ]] || return 1
+  [[ "$(jq -r '.custom_version_high_water' <<< "$state")" -eq "$base_high_water" ]] || return 1
+  [[ "$(jq -r '.active_operation_id // empty' <<< "$state")" == "$operation_id" ]] || return 1
+  base_record="$(ledger_release_path "$base_release_id")"
+  ledger_validate_release "$base_record" || return 1
+  ledger_validate_projection "$base_projection" || return 1
+  jq -e --argjson record "$(cat "$base_record")" '
+    .production_commit == $record.custom_commit
+    and .stable_release_commit == $record.official_commit
+    and .main_digest == $record.main_digest
+    and .extensions_digest == $record.extensions_digest
+    and .release_id == $record.release_id
+    and .official_version == $record.official_version
+    and .custom_version == $record.custom_version
+    and .custom_version_sequence == $record.custom_version_sequence
+  ' <<< "$base_projection" >/dev/null || return 1
+  ledger_write_projection "$base_projection" || return 1
+  now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  state="$(jq --arg now "$now" '.active_operation_id=null | .updated_at=$now' <<< "$state")" || return 1
+  ledger_atomic_write "$state_path" "$state"
+}
+
+ledger_restore_failed_apply() {
+  ledger_with_lock _ledger_restore_failed_apply_unlocked "$@"
 }
 
 _ledger_commit_rollback_unlocked() {
@@ -391,6 +599,17 @@ _ledger_recover_or_refuse_unlocked() {
     [[ "$expected_high_water" -eq "$base_high_water" && "$target_sequence" -le "$base_high_water" ]] || return 2
   fi
 
+  if [[ "$operation_status" == success && "$operation_kind" == update ]]; then
+    jq -e --argjson record "$expected_record" '
+      .published == true
+      and .published_commit == $record.custom_commit
+      and .published_at == $record.published_at
+      and .production_changed == true
+      and .artifact_path == $record.backup_dir
+      and .rollback == {attempted:false,succeeded:false,message:""}
+    ' <<< "$operation" >/dev/null || return 2
+  fi
+
   if [[ "$state_release_id" == "$base_release_id" && "$state_high_water" -eq "$base_high_water" && "$state_operation_id" == "$expected_operation_id" ]]; then
     now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     state="$(jq --arg release "$expected_release_id" --arg now "$now" --argjson high_water "$expected_high_water" '
@@ -407,7 +626,25 @@ _ledger_recover_or_refuse_unlocked() {
   fi
 
   if [[ "$operation_status" != success ]]; then
-    operation="$(jq --arg now "$now" '.status="success" | .message="release recovered after exact ledger publication" | .ts=$now | .updated_at=$now | .finished_at=$now' <<< "$operation")" || return 2
+    if [[ "$operation_kind" == update ]]; then
+      operation="$(jq --arg now "$now" --arg published "$(jq -r '.published_at' <<< "$expected_record")" \
+        --arg commit "$(jq -r '.custom_commit' <<< "$expected_record")" \
+        --arg backup "$(jq -r '.backup_dir' <<< "$expected_record")" '
+          .status="success"
+          | .message="release recovered after exact ledger publication"
+          | .ts=$now
+          | .updated_at=$now
+          | .finished_at=$now
+          | .published=true
+          | .published_commit=$commit
+          | .published_at=$published
+          | .production_changed=true
+          | .artifact_path=$backup
+          | .rollback={attempted:false,succeeded:false,message:""}
+        ' <<< "$operation")" || return 2
+    else
+      operation="$(jq --arg now "$now" '.status="success" | .message="rollback recovered after exact ledger publication" | .ts=$now | .updated_at=$now | .finished_at=$now' <<< "$operation")" || return 2
+    fi
     ledger_atomic_write "$operation_path" "$operation" || return 2
   fi
 }

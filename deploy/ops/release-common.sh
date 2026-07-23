@@ -100,6 +100,43 @@ release_json_hash() {
   jq -cS . "$1" | sha256sum | awk '{print $1}'
 }
 
+release_source_snapshot() {
+  local status
+  SOURCE_HEAD="$(git -C "$REPO" rev-parse HEAD)" || return 1
+  SOURCE_REF="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  status="$(git -C "$REPO" status --porcelain --untracked-files=all)" || return 1
+  [[ -z "$status" ]]
+}
+
+release_checkout_exact_commit() {
+  local target="$1" status
+  [[ "$target" =~ ^[0-9a-f]{40}$ ]] || return 1
+  status="$(git -C "$REPO" status --porcelain --untracked-files=all)" || return 1
+  [[ -z "$status" ]] || return 1
+  git -C "$REPO" cat-file -e "$target^{commit}" >/dev/null 2>&1 || return 1
+  git -C "$REPO" switch --detach "$target"
+}
+
+release_restore_source_snapshot() {
+  local source_head="$1" source_ref="${2:-}"
+  [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] || return 1
+  git -C "$REPO" switch --detach "$source_head" || return 1
+  if [[ -n "$source_ref" ]]; then
+    [[ "$source_ref" =~ ^[A-Za-z0-9._/-]+$ && "$source_ref" != -* ]] || return 1
+    git -C "$REPO" branch -f "$source_ref" "$source_head" || return 1
+    git -C "$REPO" switch "$source_ref" || return 1
+  fi
+}
+
+release_install_snapshot_artifacts() {
+  local artifact_dir="$1"
+  [[ -s "$artifact_dir/docker-compose.yml" && -s "$artifact_dir/docker-compose.custom.yml" && -s "$artifact_dir/.env" ]] || return 1
+  cp -p "$artifact_dir/docker-compose.yml" "$COMPOSE_BASE" || return 1
+  cp -p "$artifact_dir/docker-compose.custom.yml" "$COMPOSE_CUSTOM" || return 1
+  cp -p "$artifact_dir/.env" "$ENV_FILE" || return 1
+  chmod 0600 "$ENV_FILE"
+}
+
 release_stage_target_env() {
   local source_env="$1" target_env="$2" main_image="$3" extensions_image="$4" temporary
   [[ -r "$source_env" ]] || return 1
@@ -164,6 +201,16 @@ release_verify_local_image_identity() {
   [[ "$architecture" == amd64 ]] || return 1
   repo_digests="$(docker image inspect "$canonical" --format '{{json .RepoDigests}}')" || return 1
   jq -e --arg canonical "$canonical" 'index($canonical) != null' <<< "$repo_digests" >/dev/null
+}
+
+release_running_container_matches_image() {
+  local container="$1" canonical="$2" configured_image running_image expected_image
+  [[ "$container" == sub2api || "$container" == extensions-self ]] || return 1
+  configured_image="$(docker inspect --format '{{.Config.Image}}' "$container")" || return 1
+  [[ "$configured_image" == "$canonical" ]] || return 1
+  running_image="$(docker inspect --format '{{.Image}}' "$container")" || return 1
+  expected_image="$(docker image inspect "$canonical" --format '{{.Id}}')" || return 1
+  [[ -n "$expected_image" && "$running_image" == "$expected_image" ]]
 }
 
 release_create_complete_backup() {
