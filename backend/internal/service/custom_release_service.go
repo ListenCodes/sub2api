@@ -35,6 +35,11 @@ type customReleaseGitHubClient interface {
 type CustomReleaseInfo struct {
 	CurrentVersion         string       `json:"current_version"`
 	LatestVersion          string       `json:"latest_version"`
+	ReleaseID              string       `json:"release_id,omitempty"`
+	CurrentOfficialVersion string       `json:"current_official_version,omitempty"`
+	CurrentCustomVersion   string       `json:"current_custom_version,omitempty"`
+	TargetOfficialVersion  string       `json:"target_official_version,omitempty"`
+	TargetCustomVersion    string       `json:"target_custom_version,omitempty"`
 	HasUpdate              bool         `json:"has_update"`
 	ReleaseInfo            *ReleaseInfo `json:"release_info,omitempty"`
 	Cached                 bool         `json:"cached"`
@@ -104,21 +109,34 @@ func customReleaseLedgerRoot() string {
 func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*CustomReleaseInfo, error) {
 	_ = force
 	info := &CustomReleaseInfo{
-		CurrentVersion:    s.currentVersion,
-		LatestVersion:     s.currentVersion,
-		BuildType:         s.buildType,
-		UpdateKind:        UpdateKindNone,
-		DetectionComplete: true,
+		CurrentVersion: s.currentVersion,
+		LatestVersion:  s.currentVersion,
+		BuildType:      s.buildType,
+		UpdateKind:     UpdateKindNone,
 	}
 	warnings := make([]string, 0, 3)
-	state, stateErr := readProductionReleaseState(customReleaseStatePath())
+	ledger := newReleaseLedgerStore(customReleaseLedgerRoot())
+	state, stateErr := ledger.ReadState()
+	var current *ReleaseRecord
 	if stateErr != nil {
-		warnings = append(warnings, "production state: "+stateErr.Error())
-		info.DetectionComplete = false
-	} else if state != nil {
-		info.ProductionCommit = state.ProductionCommit
-		info.ProductionStableTag = state.StableReleaseTag
-		info.ProductionStableCommit = state.StableReleaseCommit
+		warnings = append(warnings, "release ledger: "+stateErr.Error())
+	} else {
+		current, stateErr = ledger.currentReleaseFromState(state)
+		if stateErr != nil {
+			warnings = append(warnings, "current release: "+stateErr.Error())
+		} else {
+			info.DetectionComplete = true
+			info.ReleaseID = current.ReleaseID
+			info.CurrentOfficialVersion = current.OfficialVersion
+			info.CurrentCustomVersion = current.CustomVersion
+			info.TargetOfficialVersion = current.OfficialVersion
+			info.TargetCustomVersion = current.CustomVersion
+			info.CurrentVersion = strings.TrimPrefix(current.OfficialVersion, "v")
+			info.LatestVersion = info.CurrentVersion
+			info.ProductionCommit = current.CustomCommit
+			info.ProductionStableTag = current.OfficialVersion
+			info.ProductionStableCommit = current.OfficialCommit
+		}
 	}
 
 	client, ok := s.githubClient.(customReleaseGitHubClient)
@@ -153,14 +171,10 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 		}
 	}
 
-	if release != nil {
-		if state != nil && state.StableReleaseTag != "" {
-			info.OfficialUpdate = release.TagName != state.StableReleaseTag
-			if releaseCommit != "" && state.StableReleaseCommit != "" {
-				info.OfficialUpdate = info.OfficialUpdate || releaseCommit != state.StableReleaseCommit
-			}
-		} else {
-			info.OfficialUpdate = compareVersions(s.currentVersion, strings.TrimPrefix(release.TagName, "v")) < 0
+	if release != nil && current != nil {
+		info.OfficialUpdate = release.TagName != current.OfficialVersion
+		if releaseCommit != "" {
+			info.OfficialUpdate = info.OfficialUpdate || releaseCommit != current.OfficialCommit
 		}
 	}
 
@@ -174,12 +188,12 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 	} else {
 		info.TargetCustomCommit = strings.TrimSpace(customHead.SHA)
 		info.TargetCustomShortSHA = info.TargetCustomCommit[:8]
-		if state == nil || strings.TrimSpace(state.ProductionCommit) == "" {
-			warnings = append(warnings, "production commit is unavailable; custom update cannot be safely classified")
+		if current == nil {
+			warnings = append(warnings, "current release is unavailable; custom update cannot be safely classified")
 			info.DetectionComplete = false
-		} else if info.TargetCustomCommit != state.ProductionCommit {
+		} else if info.TargetCustomCommit != current.CustomCommit {
 			info.CustomUpdate = true
-			files, compareErr := client.CompareCommits(ctx, githubCustomRepo, state.ProductionCommit, info.TargetCustomCommit)
+			files, compareErr := client.CompareCommits(ctx, githubCustomRepo, current.CustomCommit, info.TargetCustomCommit)
 			if compareErr != nil {
 				info.CustomScopeError = compareErr.Error()
 				warnings = append(warnings, "custom scope probe: "+compareErr.Error())
@@ -204,6 +218,17 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 	default:
 		info.UpdateKind = UpdateKindCustom
 	}
+	if current != nil {
+		if info.OfficialUpdate && release != nil {
+			info.TargetOfficialVersion = release.TagName
+			info.LatestVersion = strings.TrimPrefix(release.TagName, "v")
+		}
+		if info.CustomUpdate && !info.DocsOnly {
+			info.TargetCustomVersion = fmt.Sprintf("v1.0.%d", state.CustomVersionHighWater+1)
+		} else if info.DocsOnly {
+			info.TargetCustomVersion = ""
+		}
+	}
 	if len(warnings) > 0 {
 		info.Warning = strings.Join(warnings, "; ")
 	}
@@ -226,10 +251,14 @@ func (s *UpdateService) queueCustomRelease(ctx context.Context, action string) (
 	if currentID, readErr := os.ReadFile(jobIDPath); readErr == nil {
 		currentID := strings.TrimSpace(string(currentID))
 		if currentPath, pathErr := updateJobPath(jobsDir, currentID); currentID != "" && pathErr == nil {
-			if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && !IsPollingSettledUpdateStatus(existing.Status) {
+			existing, statusErr := readUpdateStatus(currentPath, currentID)
+			if statusErr != nil && !errors.Is(statusErr, ErrUpdateJobNotFound) {
+				return nil, statusErr
+			}
+			if statusErr == nil && !IsPollingSettledUpdateStatus(existing.Status) {
 				return nil, ErrUpdateInProgress
 			}
-			if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && existing.Status == UpdateStatusPrepared && !preparedJobExpired(existing) {
+			if statusErr == nil && existing.Status == UpdateStatusPrepared && !preparedJobExpired(existing) {
 				return nil, ErrUpdateInProgress
 			}
 		}
@@ -246,7 +275,7 @@ func (s *UpdateService) queueCustomRelease(ctx context.Context, action string) (
 		return nil, err
 	}
 	startedAt := time.Now().UTC()
-	job := &UpdateJob{JobID: jobID, Action: action, Status: UpdateStatusCheckingUpdates, Message: "release job queued", Timestamp: startedAt, UpdatedAt: startedAt, StartedAt: &startedAt}
+	job := &UpdateJob{JobID: jobID, OperationKind: ReleaseOperationUpdate, Action: action, Status: UpdateStatusCheckingUpdates, Message: "release job queued", Timestamp: startedAt, UpdatedAt: startedAt, StartedAt: &startedAt}
 	jobPath, err := updateJobPath(jobsDir, jobID)
 	if err != nil {
 		return nil, err

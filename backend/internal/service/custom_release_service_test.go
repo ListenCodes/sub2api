@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,9 +69,12 @@ func TestCustomReleaseCheckClassifiesRuntimeAndDocumentationChanges(t *testing.T
 	productionCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	customCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	stableCommit := "cccccccccccccccccccccccccccccccccccccccc"
-	statePath := filepath.Join(t.TempDir(), "release-state.json")
-	require.NoError(t, os.WriteFile(statePath, []byte(`{"production_commit":"`+productionCommit+`","stable_release_tag":"v0.1.163","stable_release_commit":"`+stableCommit+`"}`), 0644))
-	t.Setenv("SUB2API_PRODUCTION_RELEASE_STATE_PATH", statePath)
+	root := t.TempDir()
+	current := releaseLedgerTestRecord(root, "release-current", 4, "2026-07-23T08:00:00Z")
+	current.CustomCommit = productionCommit
+	current.OfficialCommit = stableCommit
+	writeReleaseLedgerFixture(t, root, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", root)
 
 	client := &customReleaseGitHubClientStub{
 		release:      &GitHubRelease{TagName: "v0.1.163"},
@@ -85,6 +89,7 @@ func TestCustomReleaseCheckClassifiesRuntimeAndDocumentationChanges(t *testing.T
 	require.Equal(t, UpdateKindCustom, info.UpdateKind)
 	require.True(t, info.RuntimeUpdate)
 	require.Equal(t, customCommit, info.TargetCustomCommit)
+	require.Equal(t, "v1.0.5", info.TargetCustomVersion)
 
 	client.compareFiles = []ChangedFile{{Filename: "docs/guide.md", Status: "modified"}}
 	info, err = svc.CheckCustomRelease(context.Background(), true)
@@ -92,6 +97,74 @@ func TestCustomReleaseCheckClassifiesRuntimeAndDocumentationChanges(t *testing.T
 	require.Equal(t, UpdateKindDocsOnly, info.UpdateKind)
 	require.True(t, info.DocsOnly)
 	require.False(t, info.RuntimeUpdate)
+	require.Empty(t, info.TargetCustomVersion)
+}
+
+func TestUpdateServiceCheckUpdateDualVersionMatrix(t *testing.T) {
+	currentCustomCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	newCustomCommit := "dddddddddddddddddddddddddddddddddddddddd"
+	newOfficialCommit := "cccccccccccccccccccccccccccccccccccccccc"
+	tests := []struct {
+		name          string
+		releaseTag    string
+		releaseCommit string
+		customCommit  string
+		files         []ChangedFile
+		wantKind      string
+		wantOfficial  string
+		wantCustom    string
+		wantRuntime   bool
+		wantHasUpdate bool
+	}{
+		{name: "official", releaseTag: "v0.1.164", releaseCommit: newOfficialCommit, customCommit: currentCustomCommit, wantKind: UpdateKindOfficial, wantOfficial: "v0.1.164", wantCustom: "v1.0.4", wantRuntime: true, wantHasUpdate: true},
+		{name: "custom", releaseTag: "v0.1.163", releaseCommit: strings.Repeat("a", 40), customCommit: newCustomCommit, files: []ChangedFile{{Filename: "backend/main.go"}}, wantKind: UpdateKindCustom, wantOfficial: "v0.1.163", wantCustom: "v1.0.5", wantRuntime: true, wantHasUpdate: true},
+		{name: "combined", releaseTag: "v0.1.164", releaseCommit: newOfficialCommit, customCommit: newCustomCommit, files: []ChangedFile{{Filename: "frontend/src/main.ts"}}, wantKind: UpdateKindCombined, wantOfficial: "v0.1.164", wantCustom: "v1.0.5", wantRuntime: true, wantHasUpdate: true},
+		{name: "docs only", releaseTag: "v0.1.163", releaseCommit: strings.Repeat("a", 40), customCommit: newCustomCommit, files: []ChangedFile{{Filename: "docs/guide.md"}}, wantKind: UpdateKindDocsOnly, wantOfficial: "v0.1.163", wantCustom: "", wantRuntime: false, wantHasUpdate: true},
+		{name: "none", releaseTag: "v0.1.163", releaseCommit: strings.Repeat("a", 40), customCommit: currentCustomCommit, wantKind: UpdateKindNone, wantOfficial: "v0.1.163", wantCustom: "v1.0.4", wantRuntime: false, wantHasUpdate: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			current := releaseLedgerTestRecord(root, "release-current", 4, "2026-07-23T08:00:00Z")
+			current.CustomCommit = currentCustomCommit
+			writeReleaseLedgerFixture(t, root, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
+			t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", root)
+			client := &customReleaseGitHubClientStub{
+				release:      &GitHubRelease{TagName: test.releaseTag},
+				customHead:   &GitRef{SHA: test.customCommit},
+				compareFiles: test.files,
+				tagCommits:   map[string]string{test.releaseTag: test.releaseCommit},
+			}
+
+			info, err := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.163", "release").CheckCustomRelease(context.Background(), true)
+			require.NoError(t, err)
+			require.True(t, info.DetectionComplete)
+			require.Equal(t, current.ReleaseID, info.ReleaseID)
+			require.Equal(t, "v0.1.163", info.CurrentOfficialVersion)
+			require.Equal(t, "v1.0.4", info.CurrentCustomVersion)
+			require.Equal(t, test.wantOfficial, info.TargetOfficialVersion)
+			require.Equal(t, test.wantCustom, info.TargetCustomVersion)
+			require.Equal(t, test.wantKind, info.UpdateKind)
+			require.Equal(t, test.wantRuntime, info.RuntimeUpdate)
+			require.Equal(t, test.wantHasUpdate, info.HasUpdate)
+		})
+	}
+}
+
+func TestUpdateServiceCheckUpdateFailsClosedWithoutLedger(t *testing.T) {
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", filepath.Join(t.TempDir(), "missing"))
+	client := &customReleaseGitHubClientStub{
+		release:    &GitHubRelease{TagName: "v0.1.164"},
+		customHead: &GitRef{SHA: strings.Repeat("b", 40)},
+		tagCommits: map[string]string{"v0.1.164": strings.Repeat("c", 40)},
+	}
+
+	info, err := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.163", "release").CheckCustomRelease(context.Background(), true)
+	require.NoError(t, err)
+	require.False(t, info.DetectionComplete)
+	require.Empty(t, info.CurrentCustomVersion)
+	require.Empty(t, info.TargetCustomVersion)
 }
 
 func TestCustomReleasePrepareAndApplyUseTheSameDurableJob(t *testing.T) {

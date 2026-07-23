@@ -85,6 +85,13 @@ func (s *releaseLedgerStore) CurrentRelease() (*ReleaseRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.currentReleaseFromState(state)
+}
+
+func (s *releaseLedgerStore) currentReleaseFromState(state *ReleaseLedgerState) (*ReleaseRecord, error) {
+	if state == nil {
+		return nil, ledgerInconsistent("state is required", nil)
+	}
 	record, err := s.readRecord(state.CurrentReleaseID)
 	if err != nil {
 		return nil, err

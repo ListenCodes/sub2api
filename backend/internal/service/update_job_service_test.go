@@ -10,8 +10,70 @@ import (
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReleaseOperationAcceptsBothKindsAndEveryState(t *testing.T) {
+	valid := []string{
+		"resolving_target", "resolving_snapshot", "verifying_snapshot",
+		"verifying_images", "downloading_images", "rendering_compose",
+		"backing_up", "validating_backup", "prepared", "apply_queued",
+		"validating_manifest", "switching_extensions", "switching_main",
+		"health_checking", "rolling_back", "success", "failed", "conflict",
+		"expired", "drifted", "failed_rolled_back", "rollback_failed",
+	}
+	for _, kind := range []string{ReleaseOperationUpdate, ReleaseOperationRollback} {
+		for _, status := range valid {
+			path := filepath.Join(t.TempDir(), kind+"-operation.json")
+			require.NoError(t, writeUpdateStatus(path, &UpdateJob{
+				JobID:         kind + "-valid-operation",
+				OperationKind: kind,
+				Action:        ReleasePhasePrepare,
+				Status:        status,
+			}))
+		}
+	}
+
+	rollbackID, err := newReleaseOperationID(ReleaseOperationRollback)
+	require.NoError(t, err)
+	require.Regexp(t, `^rollback-[0-9]+-[0-9a-f]{16}$`, rollbackID)
+}
+
+func TestReleaseOperationRejectsLegacyRecordWithoutKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"job_id":"update-legacy","action":"prepare","status":"prepared","message":"legacy"}`), 0644))
+
+	_, err := readUpdateStatus(path, "update-legacy")
+	require.Error(t, err)
+	require.Equal(t, "LEGACY_SINGLE_PHASE_UNSUPPORTED", infraerrors.Reason(err))
+}
+
+func TestReleaseOperationPrepareDoesNotTriggerOverLegacyCurrentJob(t *testing.T) {
+	root := t.TempDir()
+	jobsDir := filepath.Join(root, "release-jobs")
+	jobIDPath := filepath.Join(root, "release-current-job-id")
+	scriptPath := filepath.Join(root, "sync-trigger.sh")
+	require.NoError(t, os.MkdirAll(jobsDir, 0755))
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755))
+	require.NoError(t, os.WriteFile(jobIDPath, []byte("update-legacy\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(jobsDir, "update-legacy.json"), []byte(`{"job_id":"update-legacy","action":"prepare","status":"prepared","message":"legacy"}`), 0644))
+	t.Setenv("SUB2API_RELEASE_SCRIPT_PATH", scriptPath)
+	t.Setenv("SUB2API_RELEASE_JOBS_DIR", jobsDir)
+	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", jobIDPath)
+
+	starts := 0
+	previousStart := customReleaseStartScript
+	customReleaseStartScript = func(string, string, string) (func() error, error) {
+		starts++
+		return func() error { return nil }, nil
+	}
+	t.Cleanup(func() { customReleaseStartScript = previousStart })
+
+	_, err := NewUpdateService(nil, nil, "0.1.163", "release").PrepareUpdate(context.Background())
+	require.ErrorIs(t, err, ErrLegacySinglePhase)
+	require.Zero(t, starts)
+}
 
 func TestUpdateServicePrepareUpdateReturnsJobBeforeScriptCompletes(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -43,6 +105,7 @@ func TestUpdateServicePrepareUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 
 	require.NoError(t, err)
 	require.NotEmpty(t, job.JobID)
+	require.Equal(t, ReleaseOperationUpdate, job.OperationKind)
 	require.Equal(t, UpdateStatusCheckingUpdates, job.Status)
 	require.False(t, job.NeedRestart)
 	require.False(t, job.Published)
@@ -53,7 +116,7 @@ func TestReadUpdateStatusIncludesPreparationMetadata(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","status":"success","message":"branch ready","integration_branch":"integration/upstream-20260713","need_restart":false,"ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","operation_kind":"update","action":"prepare","status":"success","message":"branch ready","integration_branch":"integration/upstream-20260713","need_restart":false,"ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
 
 	job, err := readUpdateStatus(statusPath, "update-a")
 
@@ -66,7 +129,7 @@ func TestReadUpdateStatusIncludesPublishedMetadata(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-published","status":"success","message":"PUBLISH OK: commit=abc123","integration_branch":"integration/release-v0.1.158-20260716","base_commit":"base123","release_tag":"v0.1.158","release_commit":"26abd19a2812edba02bbef93c3e2a620141cc257","release_published_at":"2026-07-16T12:37:06Z","need_restart":false,"published":true,"published_commit":"abc123","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-published","operation_kind":"update","action":"apply","status":"success","message":"PUBLISH OK: commit=abc123","integration_branch":"integration/release-v0.1.158-20260716","base_commit":"base123","release_tag":"v0.1.158","release_commit":"26abd19a2812edba02bbef93c3e2a620141cc257","release_published_at":"2026-07-16T12:37:06Z","need_restart":false,"published":true,"published_commit":"abc123","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z"}`), 0644))
 
 	job, err := readUpdateStatus(statusPath, "update-published")
 
@@ -84,7 +147,7 @@ func TestReadUpdateStatusIncludesConflictMetadata(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-conflict","status":"failed","message":"stable Release merge conflict","conflict_files":["backend/internal/server/routes/gateway.go","deploy/README.md"],"conflict_base":"custom123","conflict_upstream":"upstream456","release_tag":"v0.1.158","release_commit":"26abd19a2812edba02bbef93c3e2a620141cc257","release_published_at":"2026-07-16T12:37:06Z","conflict_release":"v0.1.158@26abd19a2812edba02bbef93c3e2a620141cc257","conflict_log":"/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json","resolution_hint":"Resolve conflicts and retry.","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z","finished_at":"2026-07-13T00:01:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-conflict","operation_kind":"update","action":"prepare","status":"failed","message":"stable Release merge conflict","conflict_files":["backend/internal/server/routes/gateway.go","deploy/README.md"],"conflict_base":"custom123","conflict_upstream":"upstream456","release_tag":"v0.1.158","release_commit":"26abd19a2812edba02bbef93c3e2a620141cc257","release_published_at":"2026-07-16T12:37:06Z","conflict_release":"v0.1.158@26abd19a2812edba02bbef93c3e2a620141cc257","conflict_log":"/var/lib/docker/volumes/deploy_sub2api_data/_data/sync-conflicts/update-conflict/metadata.json","resolution_hint":"Resolve conflicts and retry.","ts":"2026-07-13T00:00:00Z","started_at":"2026-07-13T00:00:00Z","finished_at":"2026-07-13T00:01:00Z"}`), 0644))
 
 	job, err := readUpdateStatus(statusPath, "update-conflict")
 
@@ -104,7 +167,7 @@ func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {
 	t.Parallel()
 
 	statusPath := filepath.Join(t.TempDir(), "sync-status")
-	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","status":"waiting_actions","message":"syncing","ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{"job_id":"update-a","operation_kind":"update","action":"prepare","status":"resolving_target","message":"syncing","ts":"2026-07-11T00:00:00Z","started_at":"2026-07-11T00:00:00Z"}`), 0644))
 
 	_, err := readUpdateStatus(statusPath, "update-b")
 
@@ -145,8 +208,10 @@ func TestWriteUpdateStatusAcceptsEveryReleaseState(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "release-job.json")
 			require.NoError(t, writeUpdateStatus(path, &UpdateJob{
-				JobID:  "update-valid-state",
-				Status: state,
+				JobID:         "update-valid-state",
+				OperationKind: ReleaseOperationUpdate,
+				Action:        ReleasePhasePrepare,
+				Status:        state,
 			}))
 		})
 	}
@@ -167,6 +232,7 @@ func TestReadUpdateStatusIncludesPreparedManifestMetadata(t *testing.T) {
 	statusPath := filepath.Join(t.TempDir(), "release-job.json")
 	require.NoError(t, os.WriteFile(statusPath, []byte(`{
 		"job_id":"update-prepared",
+		"operation_kind":"update",
 		"action":"prepare",
 		"status":"prepared",
 		"message":"ready for confirmation",
@@ -200,8 +266,10 @@ func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {
 	require.NoError(t, os.MkdirAll(jobsDir, 0755))
 	require.NoError(t, os.WriteFile(jobIDPath, []byte("update-current\n"), 0644))
 	require.NoError(t, writeUpdateStatus(filepath.Join(jobsDir, "update-current.json"), &UpdateJob{
-		JobID:  "update-current",
-		Status: UpdateStatusWaitingActions,
+		JobID:         "update-current",
+		OperationKind: ReleaseOperationUpdate,
+		Action:        ReleasePhasePrepare,
+		Status:        UpdateStatusWaitingActions,
 	}))
 
 	job, err := svc.GetUpdateStatus(context.Background(), " ")
@@ -219,8 +287,10 @@ func TestUpdateServiceGetUpdateStatusReadsSpecificDurableJob(t *testing.T) {
 	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", filepath.Join(tmpDir, "release-current-job-id"))
 	require.NoError(t, os.MkdirAll(jobsDir, 0755))
 	require.NoError(t, writeUpdateStatus(filepath.Join(jobsDir, "update-old.json"), &UpdateJob{
-		JobID:  "update-old",
-		Status: UpdateStatusSuccess,
+		JobID:         "update-old",
+		OperationKind: ReleaseOperationUpdate,
+		Action:        ReleasePhaseApply,
+		Status:        UpdateStatusSuccess,
 	}))
 
 	job, err := svc.GetUpdateStatus(context.Background(), "update-old")
