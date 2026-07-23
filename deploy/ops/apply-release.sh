@@ -12,11 +12,11 @@ COMPOSE_BASE="${SUB2API_COMPOSE_BASE:-$REPO/deploy/docker-compose.yml}"
 COMPOSE_CUSTOM="${SUB2API_COMPOSE_CUSTOM:-$REPO/deploy/docker-compose.custom.yml}"
 MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
 EXTENSIONS_REPOSITORY="${SUB2API_EXTENSIONS_REPOSITORY:-ghcr.io/listencodes/sub2api-extensions}"
-INTERNAL_HEALTH_URL="${SUB2API_INTERNAL_HEALTH_URL:-http://127.0.0.1:8080/health}"
+INTERNAL_HEALTH_URL="${SUB2API_INTERNAL_HEALTH_URL:-http://127.0.0.1:8081/health}"
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://sub.ailisten.top/health}"
-ADMIN_HEALTH_URL="${SUB2API_ADMIN_HEALTH_URL:-http://127.0.0.1:8080/admin}"
-EXTENSION_ROUTE_URL="${SUB2API_EXTENSION_ROUTE_URL:-http://127.0.0.1:8080/admin/extensions/account-monitor}"
-DATA_QUALITY_URL="${SUB2API_DATA_QUALITY_URL:-}"
+ADMIN_HEALTH_URL="${SUB2API_ADMIN_HEALTH_URL:-http://127.0.0.1:8081/admin}"
+EXTENSION_ROUTE_URL="${SUB2API_EXTENSION_ROUTE_URL:-http://127.0.0.1:8081/admin/extensions/account-monitor}"
+HOMEPAGE_HEALTH_URL="${SUB2API_HOMEPAGE_HEALTH_URL:-http://127.0.0.1:8081/api/v1/extensions-self/homepage/}"
 LOG="${SUB2API_SYNC_PUBLISH_LOG:-/var/log/sub2api-release.log}"
 HEALTH_WAIT_TIMEOUT_SECONDS="${SUB2API_HEALTH_WAIT_TIMEOUT_SECONDS:-180}"
 HEALTH_WAIT_INTERVAL_SECONDS="${SUB2API_HEALTH_WAIT_INTERVAL_SECONDS:-2}"
@@ -102,6 +102,8 @@ pin_image_env() {
 
 rollback_started=0
 rollback_message=''
+apply_failure_message=''
+apply_failure_code=''
 
 wait_container_healthy() {
   local container="$1" deadline status
@@ -117,6 +119,33 @@ wait_container_healthy() {
   return 1
 }
 
+check_data_quality() {
+  local compose_json="$DATA_DIR/.prepared-$JOB_ID-compose.json"
+  local enabled secret timestamp nonce signature quality
+  [[ -r "$compose_json" ]] || return 1
+  enabled="$(jq -r '.services["extensions-self"].environment.ACCOUNT_MONITOR_ENABLED // "false" | ascii_downcase' "$compose_json")"
+  [[ "$enabled" == false ]] && return 0
+  [[ "$enabled" == true ]] || return 1
+  secret="$(jq -r '.services["extensions-self"].environment.RISK_CONTROL_INTERNAL_SECRET // empty' "$compose_json")"
+  [[ -n "$secret" ]] || return 1
+  timestamp="$(date +%s)"
+  nonce="apply-$JOB_ID-$timestamp"
+  signature="$(
+    MONITOR_SECRET="$secret" MONITOR_TIMESTAMP="$timestamp" MONITOR_NONCE="$nonce" python3 -c '
+import hashlib, hmac, os
+message = (os.environ["MONITOR_TIMESTAMP"] + "\n" + os.environ["MONITOR_NONCE"] + "\n").encode()
+print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).hexdigest())
+'
+  )" || return 1
+  quality="$(docker exec extensions-self wget -qO- -T 10 \
+    --header="X-Risk-Timestamp: $timestamp" \
+    --header="X-Risk-Nonce: $nonce" \
+    --header="X-Risk-Signature: $signature" \
+    --header='X-Risk-Actor-ID: 1' \
+    http://extensions-self:8090/api/v1/admin/account-monitor/data-quality)" || return 1
+  jq -e '.source_connected == true and .missing_group_requests == 0 and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null
+}
+
 restore_source() {
   local source_head="$1"
   [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] || return 1
@@ -129,11 +158,13 @@ restore_source() {
 }
 
 rollback_on_error() {
-  local code="$?"
+  local code="${1:-$?}"
+  local failure_message="${apply_failure_message:-production switch failed}"
+  local failure_code="${apply_failure_code:-APPLY_FAILED}"
   trap - ERR
   if [[ "$rollback_started" -eq 1 ]]; then
-    rollback_message='automatic rollback attempted using the prepared local images, source, and Compose pair'
-    release_job_update "$JOB_ID" rolling_back 'Production switch failed; restoring prepared rollback pair' "$(jq -n --arg message "$rollback_message" '{rollback:{attempted:true,succeeded:false,message:$message}}')" || true
+    rollback_message="automatic rollback after: $failure_message"
+    release_job_update "$JOB_ID" rolling_back 'Production switch failed; restoring prepared rollback pair' "$(jq -n --arg message "$rollback_message" --arg cause "$failure_code" '{cause_error_code:$cause,rollback:{attempted:true,succeeded:false,message:$message}}')" || true
     old_main="$(jq -r '.main_digest // empty' "$PRODUCTION_RELEASE_STATE_FILE" 2>/dev/null || true)"
     old_ext="$(jq -r '.extensions_digest // empty' "$PRODUCTION_RELEASE_STATE_FILE" 2>/dev/null || true)"
     rollback_ok=0
@@ -150,12 +181,18 @@ rollback_on_error() {
       rollback_ok=1
     fi
     if [[ "$rollback_ok" -eq 1 ]]; then
-      release_job_update "$JOB_ID" failed 'Production switch failed and previous source, Compose, and digest pair was restored' "$(jq -n '{error_code:"APPLY_FAILED_ROLLED_BACK",production_changed:false,rollback:{attempted:true,succeeded:true,message:"automatic rollback completed"}}')" || true
+      release_job_update "$JOB_ID" failed "$failure_message; previous source, Compose, and digest pair was restored" "$(jq -n --arg cause "$failure_code" '{error_code:"APPLY_FAILED_ROLLED_BACK",cause_error_code:$cause,production_changed:false,rollback:{attempted:true,succeeded:true,message:"automatic rollback completed"}}')" || true
     else
-      release_job_update "$JOB_ID" failed 'Production switch failed and automatic rollback was incomplete' "$(jq -n '{error_code:"APPLY_FAILED_ROLLBACK_FAILED",production_changed:false,rollback:{attempted:true,succeeded:false,message:"automatic rollback failed; inspect the prepared backup"}}')" || true
+      release_job_update "$JOB_ID" failed "$failure_message; automatic rollback was incomplete" "$(jq -n --arg cause "$failure_code" '{error_code:"APPLY_FAILED_ROLLBACK_FAILED",cause_error_code:$cause,production_changed:true,rollback:{attempted:true,succeeded:false,message:"automatic rollback failed; inspect the prepared backup"}}')" || true
     fi
   fi
   exit "$code"
+}
+
+abort_apply() {
+  apply_failure_message="$1"
+  apply_failure_code="${2:-APPLY_FAILED}"
+  rollback_on_error 1
 }
 trap 'rollback_on_error' ERR
 
@@ -175,16 +212,16 @@ wait_container_healthy sub2api
 release_job_update "$JOB_ID" health_checking 'Checking internal, public, admin, extension, and data-quality health' '{}'
 docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" ps --status running >/dev/null
 if [[ "${SUB2API_SKIP_EXTERNAL_HEALTH_CHECKS:-0}" != 1 ]]; then
-  curl -fsS --max-time 15 "$INTERNAL_HEALTH_URL" >/dev/null || fail_apply 'internal health check failed' INTERNAL_HEALTH_FAILED
-  curl -fsS --max-time 15 "$PUBLIC_HEALTH_URL" >/dev/null || fail_apply 'public health check failed' PUBLIC_HEALTH_FAILED
-  curl -fsS --max-time 15 "$ADMIN_HEALTH_URL" >/dev/null || fail_apply 'native admin page health check failed' ADMIN_HEALTH_FAILED
-  curl -fsS --max-time 15 "$EXTENSION_ROUTE_URL" >/dev/null || fail_apply 'extension route health check failed' EXTENSION_ROUTE_HEALTH_FAILED
-  if [[ -n "$DATA_QUALITY_URL" ]]; then
-    curl -fsS --max-time 15 "$DATA_QUALITY_URL" >/dev/null || fail_apply 'data-quality health check failed' DATA_QUALITY_HEALTH_FAILED
-  fi
+  curl -fsS --max-time 15 "$INTERNAL_HEALTH_URL" >/dev/null || abort_apply 'internal health check failed' INTERNAL_HEALTH_FAILED
+  docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null || abort_apply 'extensions internal health check failed' EXTENSIONS_HEALTH_FAILED
+  curl -fsS --max-time 15 "$HOMEPAGE_HEALTH_URL" >/dev/null || abort_apply 'custom homepage health check failed' HOMEPAGE_HEALTH_FAILED
+  curl -fsS --max-time 15 "$PUBLIC_HEALTH_URL" >/dev/null || abort_apply 'public health check failed' PUBLIC_HEALTH_FAILED
+  curl -fsS --max-time 15 "$ADMIN_HEALTH_URL" >/dev/null || abort_apply 'native admin page health check failed' ADMIN_HEALTH_FAILED
+  curl -fsS --max-time 15 "$EXTENSION_ROUTE_URL" >/dev/null || abort_apply 'extension route health check failed' EXTENSION_ROUTE_HEALTH_FAILED
+  check_data_quality || abort_apply 'signed data-quality health check failed' DATA_QUALITY_HEALTH_FAILED
 fi
 
 published_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 production_state="$(jq -n --arg production_commit "$TARGET_COMMIT" --arg stable_release_tag "$(jq -r '.stable_tag' "$manifest")" --arg stable_release_commit "$(jq -r '.stable_commit' "$manifest")" --arg main_digest "$MAIN_DIGEST" --arg extensions_digest "$EXTENSIONS_DIGEST" --arg published_at "$published_at" --arg backup_dir "$BACKUP_DIR" '{production_commit:$production_commit,stable_release_tag:$stable_release_tag,stable_release_commit:$stable_release_commit,main_digest:$main_digest,extensions_digest:$extensions_digest,published_at:$published_at,backup_dir:$backup_dir}')"
-release_production_state_write "$production_state" || fail_apply 'Could not atomically persist release-state.json' RELEASE_STATE_WRITE_FAILED
+release_production_state_write "$production_state" || abort_apply 'Could not atomically persist release-state.json' RELEASE_STATE_WRITE_FAILED
 release_job_update "$JOB_ID" success "Published prepared commit $TARGET_COMMIT" "$(jq -n --arg commit "$TARGET_COMMIT" --arg main "$MAIN_DIGEST" --arg ext "$EXTENSIONS_DIGEST" --arg dir "$BACKUP_DIR" '{published:true,published_commit:$commit,main_digest:$main,extensions_digest:$ext,production_changed:true,artifact_path:$dir,rollback:{attempted:false,succeeded:false,message:""}}')"
