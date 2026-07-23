@@ -80,6 +80,42 @@ The production ledger directly records what actually passed production health
 checks and preserves the separation between source history and deployment
 history.
 
+## Upstream Conflict Isolation
+
+Custom release behavior must live in additive files so later Stable Release
+merges do not repeatedly conflict in official update and sidebar code. The
+implementation first moves the already deployed two-phase custom updater out of
+the following upstream-owned hot files, then restores those files to the exact
+current Stable baseline wherever no unrelated custom behavior remains:
+
+- `backend/internal/service/update_service.go`;
+- `backend/internal/handler/admin/system_handler.go`;
+- `frontend/src/components/common/VersionBadge.vue`;
+- `frontend/src/api/admin/system.ts`;
+- `frontend/src/stores/app.ts`.
+
+New release behavior belongs in focused additive modules such as
+`custom_release_service.go`, `custom_release_handler.go`, a custom release API
+and Pinia store, and `features/custom-release/CustomReleaseBadge.vue`. Host
+release scripts and their fixtures are already custom-owned and remain the
+production mutation boundary.
+
+The unavoidable official-code touchpoints are deliberately small:
+
+1. the existing system route table redirects the legacy `/update` route to the
+   custom prepare-only handler and makes the two old binary rollback routes fail
+   closed;
+2. the sidebar imports the custom release badge in place of the official badge;
+3. the existing custom-extension registration call remains the single backend
+   route integration point.
+
+No ledger schema, state machine, GitHub detection, backup, rollback, or UI state
+logic may be added to those touchpoints. Deployment contracts compare the five
+restored hot files with the pinned Stable commit and reject renewed custom logic
+there. This isolation is subordinate only to security: a small route-table
+change is preferable to leaving the old single-binary update or rollback path
+capable of bypassing the complete-snapshot workflow.
+
 ## Ledger State
 
 `state.json` is the mutable pointer and global counter. Its logical schema is:
