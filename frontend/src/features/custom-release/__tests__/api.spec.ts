@@ -10,7 +10,7 @@ import {
   updateWasPublished,
   type UpdateJob,
   type UpdateJobStatus
-} from '@/api/admin/system'
+} from '@/features/custom-release/api'
 
 afterEach(() => {
   vi.restoreAllMocks()

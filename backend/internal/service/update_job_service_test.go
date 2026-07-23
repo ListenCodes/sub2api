@@ -13,9 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T) {
-	t.Parallel()
-
+func TestUpdateServicePrepareUpdateReturnsJobBeforeScriptCompletes(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "sync-upstream.sh")
 	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 2\n"), 0755))
@@ -28,18 +26,20 @@ func TestUpdateServicePerformUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 		"0.1.132",
 		"source",
 	)
-	svc.scriptPath = scriptPath
-	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
-	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
-	svc.startScript = func(string, string, string) (func() error, error) {
+	t.Setenv("SUB2API_RELEASE_SCRIPT_PATH", scriptPath)
+	t.Setenv("SUB2API_RELEASE_JOBS_DIR", filepath.Join(tmpDir, "release-jobs"))
+	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", filepath.Join(tmpDir, "release-current-job-id"))
+	previousStart := customReleaseStartScript
+	customReleaseStartScript = func(string, string, string) (func() error, error) {
 		return func() error {
 			time.Sleep(2 * time.Second)
 			return nil
 		}, nil
 	}
+	t.Cleanup(func() { customReleaseStartScript = previousStart })
 
 	started := time.Now()
-	job, err := svc.PerformUpdate(context.Background())
+	job, err := svc.PrepareUpdate(context.Background())
 
 	require.NoError(t, err)
 	require.NotEmpty(t, job.JobID)
@@ -191,15 +191,15 @@ func TestReadUpdateStatusIncludesPreparedManifestMetadata(t *testing.T) {
 }
 
 func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {
-	t.Parallel()
-
 	tmpDir := t.TempDir()
 	svc := NewUpdateService(nil, nil, "0.1.132", "source")
-	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
-	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
-	require.NoError(t, os.MkdirAll(svc.jobsDir, 0755))
-	require.NoError(t, os.WriteFile(svc.jobIDPath, []byte("update-current\n"), 0644))
-	require.NoError(t, writeUpdateStatus(filepath.Join(svc.jobsDir, "update-current.json"), &UpdateJob{
+	jobsDir := filepath.Join(tmpDir, "release-jobs")
+	jobIDPath := filepath.Join(tmpDir, "release-current-job-id")
+	t.Setenv("SUB2API_RELEASE_JOBS_DIR", jobsDir)
+	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", jobIDPath)
+	require.NoError(t, os.MkdirAll(jobsDir, 0755))
+	require.NoError(t, os.WriteFile(jobIDPath, []byte("update-current\n"), 0644))
+	require.NoError(t, writeUpdateStatus(filepath.Join(jobsDir, "update-current.json"), &UpdateJob{
 		JobID:  "update-current",
 		Status: UpdateStatusWaitingActions,
 	}))
@@ -212,14 +212,13 @@ func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {
 }
 
 func TestUpdateServiceGetUpdateStatusReadsSpecificDurableJob(t *testing.T) {
-	t.Parallel()
-
 	tmpDir := t.TempDir()
 	svc := NewUpdateService(nil, nil, "0.1.132", "source")
-	svc.jobsDir = filepath.Join(tmpDir, "release-jobs")
-	svc.jobIDPath = filepath.Join(tmpDir, "release-current-job-id")
-	require.NoError(t, os.MkdirAll(svc.jobsDir, 0755))
-	require.NoError(t, writeUpdateStatus(filepath.Join(svc.jobsDir, "update-old.json"), &UpdateJob{
+	jobsDir := filepath.Join(tmpDir, "release-jobs")
+	t.Setenv("SUB2API_RELEASE_JOBS_DIR", jobsDir)
+	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", filepath.Join(tmpDir, "release-current-job-id"))
+	require.NoError(t, os.MkdirAll(jobsDir, 0755))
+	require.NoError(t, writeUpdateStatus(filepath.Join(jobsDir, "update-old.json"), &UpdateJob{
 		JobID:  "update-old",
 		Status: UpdateStatusSuccess,
 	}))

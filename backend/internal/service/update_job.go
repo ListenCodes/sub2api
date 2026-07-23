@@ -226,7 +226,7 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 	}
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
-		current, err := os.ReadFile(s.jobIDPath)
+		current, err := os.ReadFile(customReleaseJobIDPath())
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, ErrUpdateJobNotFound
@@ -238,7 +238,7 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 			return nil, ErrUpdateJobNotFound
 		}
 	}
-	path, err := updateJobPath(s.jobsDir, jobID)
+	path, err := updateJobPath(customReleaseJobsDir(), jobID)
 	if err != nil {
 		return nil, ErrUpdateJobNotFound
 	}
@@ -246,7 +246,11 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 }
 
 func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
-	path, err := updateJobPath(s.jobsDir, jobID)
+	return setCustomReleaseStatus(jobID, status, message, startedAt, finishedAt)
+}
+
+func setCustomReleaseStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
+	path, err := updateJobPath(customReleaseJobsDir(), jobID)
 	if err != nil {
 		return err
 	}
