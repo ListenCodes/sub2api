@@ -27,12 +27,14 @@ release_manifest_sha_path() {
 }
 
 release_manifest_valid() {
-  local job_id="$1" manifest expected actual expires backup_dir backup_root_real backup_dir_real
+  local job_id="$1" manifest expected actual expires backup_dir backup_root_real backup_dir_real operation_kind
   manifest="$(release_manifest_path "$job_id")"
   expected="$(cat "$(release_manifest_sha_path "$job_id")" 2>/dev/null | awk '{print $1}' || true)"
   actual="$(sha256sum "$manifest" 2>/dev/null | awk '{print $1}' || true)"
   [[ -n "$expected" && "$expected" == "$actual" ]] || return 1
-  jq -e '
+  operation_kind="$(jq -r '.operation_kind // empty' "$manifest" 2>/dev/null || true)"
+  if [[ "$operation_kind" == update ]]; then
+    jq -e '
     type == "object"
     and .schema_version == 1
     and .operation_kind == "update"
@@ -73,7 +75,38 @@ release_manifest_valid() {
       and .proposed_custom_sequence == (.base_custom_high_water + 1)
       and .target_custom_version == ("v1.0." + (.proposed_custom_sequence | tostring))
     end)
-  ' "$manifest" >/dev/null || return 1
+    ' "$manifest" >/dev/null || return 1
+  elif [[ "$operation_kind" == rollback ]]; then
+    jq -e '
+      type == "object"
+      and .schema_version == 1
+      and .operation_kind == "rollback"
+      and (.base_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
+      and (.target_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
+      and .base_release_id != .target_release_id
+      and (.base_custom_high_water | type == "number" and floor == . and . >= 0)
+      and (.source_commit | type == "string" and test("^[0-9a-f]{40}$"))
+      and (.target_commit | type == "string" and test("^[0-9a-f]{40}$"))
+      and (.target_official_version | type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+      and (.target_custom_version | type == "string" and test("^v1\\.0\\.[0-9]+$"))
+      and (.main_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+      and (.extensions_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+      and (.current_main_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+      and (.current_extensions_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+      and ([.current_base_compose_sha256,.current_custom_compose_sha256,
+        .target_base_compose_sha256,.target_custom_compose_sha256,
+        .target_rendered_compose_sha256,.target_env_sha256,.target_artifact_manifest_sha256,
+        .backup_manifest_sha256] | all(type == "string" and test("^[0-9a-f]{64}$")))
+      and (.backup_dir | type == "string" and length > 0)
+      and (.prepared_at | fromdateiso8601 > 0)
+      and (.expires_at | fromdateiso8601 > 0)
+      and .images_verified == true
+      and .compose_contract == "deploy-explicit-pair-v1"
+      and .backup_contract == "complete-paired-snapshot-v1"
+    ' "$manifest" >/dev/null || return 1
+  else
+    return 1
+  fi
   expires="$(jq -r '.expires_at // empty' "$manifest")"
   [[ -n "$expires" ]] || return 1
   backup_dir="$(jq -r '.backup_dir' "$manifest")"
@@ -187,6 +220,21 @@ release_env_matches_digest_pair() {
   local env_file="$1" main_image="$2" extensions_image="$3"
   [[ "$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file" | tail -n 1)" == "$main_image" ]] || return 1
   [[ "$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file" | tail -n 1)" == "$extensions_image" ]] || return 1
+}
+
+release_validate_snapshot_against_record() {
+  local base_compose="$1" custom_compose="$2" env_file="$3" rendered_json="$4" record="$5" log_file="$6"
+  local main_image extensions_image
+  [[ -r "$base_compose" && -r "$custom_compose" && -r "$env_file" ]] || return 1
+  [[ "$(sha256sum "$base_compose" | awk '{print $1}')" == "$(jq -r '.base_compose_sha256' <<< "$record")" ]] || return 1
+  [[ "$(sha256sum "$custom_compose" | awk '{print $1}')" == "$(jq -r '.custom_compose_sha256' <<< "$record")" ]] || return 1
+  [[ "$(sha256sum "$env_file" | awk '{print $1}')" == "$(jq -r '.env_sha256' <<< "$record")" ]] || return 1
+  main_image="$MAIN_REPOSITORY@$(jq -r '.main_digest' <<< "$record")"
+  extensions_image="$EXTENSIONS_REPOSITORY@$(jq -r '.extensions_digest' <<< "$record")"
+  release_env_matches_digest_pair "$env_file" "$main_image" "$extensions_image" || return 1
+  release_render_explicit_compose "$base_compose" "$custom_compose" "$env_file" "$rendered_json" "$log_file" || return 1
+  release_validate_rendered_compose "$rendered_json" "$main_image" "$extensions_image" || return 1
+  [[ "$(sha256sum "$rendered_json" | awk '{print $1}')" == "$(jq -r '.rendered_compose_sha256' <<< "$record")" ]]
 }
 
 release_verify_local_image_identity() {

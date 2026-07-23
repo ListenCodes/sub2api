@@ -121,6 +121,44 @@ ledger_validate_backup_contract() {
   ledger_validate_manifest_exact "$canonical" SHA256SUMS || return 1
 }
 
+ledger_validate_release_artifacts() {
+  local record_path="$1" record backup_dir
+  ledger_validate_release "$record_path" || return 1
+  record="$(cat "$record_path")"
+  backup_dir="$(jq -r '.backup_dir' <<< "$record")"
+  ledger_validate_backup_contract "$backup_dir" || return 1
+  [[ "$(jq -r '.backup_manifest_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/SHA256SUMS" | awk '{print $1}')" ]] || return 1
+  [[ "$(jq -r '.base_compose_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/target/docker-compose.yml" | awk '{print $1}')" ]] || return 1
+  [[ "$(jq -r '.custom_compose_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/target/docker-compose.custom.yml" | awk '{print $1}')" ]] || return 1
+  [[ "$(jq -r '.rendered_compose_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/target/rendered-compose.json" | awk '{print $1}')" ]] || return 1
+  [[ "$(jq -r '.env_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/target/.env" | awk '{print $1}')" ]]
+}
+
+ledger_list_rollback_release_ids() {
+  local limit="${1:-3}" state_path current path record release_id published count=0
+  local -a candidates=()
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || return 1
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  current="$(jq -r '.current_release_id' "$state_path")"
+  shopt -s nullglob
+  for path in "$RELEASE_LEDGER_ROOT"/releases/*.json; do
+    ledger_validate_release_artifacts "$path" || continue
+    record="$(cat "$path")"
+    release_id="$(jq -r '.release_id' <<< "$record")"
+    [[ "$release_id" != "$current" ]] || continue
+    published="$(jq -r '.published_at' <<< "$record")"
+    candidates+=("$published $release_id")
+  done
+  shopt -u nullglob
+  while IFS=' ' read -r published release_id; do
+    [[ -n "$release_id" ]] || continue
+    printf '%s\n' "$release_id"
+    count=$((count + 1))
+    [[ "$count" -lt "$limit" ]] || break
+  done < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -r)
+}
+
 ledger_atomic_write() {
   local path="$1" content="$2" directory temporary
   directory="$(dirname "$path")"

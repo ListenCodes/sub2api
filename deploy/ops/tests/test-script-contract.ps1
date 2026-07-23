@@ -41,6 +41,7 @@ $sync = Read-RepoFile 'deploy\ops\sync-upstream.sh'
 $orchestrator = Read-RepoFile 'deploy\ops\sync-and-publish.sh'
 $prepare = Read-RepoFile 'deploy\ops\prepare-release.sh'
 $apply = Read-RepoFile 'deploy\ops\apply-release.sh'
+$prepareRollback = Read-RepoFile 'deploy\ops\prepare-rollback.sh'
 $common = Read-RepoFile 'deploy\ops\release-common.sh'
 $trigger = Read-RepoFile 'deploy\ops\sync-trigger.sh'
 $promoter = Read-RepoFile 'deploy\ops\promote-release.sh'
@@ -92,6 +93,10 @@ foreach ($marker in @('wait-for-actions.sh', 'verify-release-images.sh', 'docker
 }
 Assert-NotMatches $prepare 'compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'prepare must not mutate container lifecycle'
 Assert-NotMatches $prepare 'release_production_state_write' 'prepare must not write production release state'
+foreach ($marker in @('ledger_list_rollback_release_ids 3', 'verifying_snapshot', 'release_create_complete_backup', 'prepared_at', 'expires_at')) {
+    Assert-Matches $prepareRollback ([regex]::Escape($marker)) "rollback prepare is missing $marker"
+}
+Assert-NotMatches $prepareRollback 'api\.github\.com|wait-for-actions|verify-release-images|compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'rollback prepare must not query remote release gates or mutate containers'
 Assert-Matches $prepareSurface 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
 foreach ($marker in @(
     'worktree add --detach', '$BACKUP_DIR/target', 'release_stage_target_env',
