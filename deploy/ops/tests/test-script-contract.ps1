@@ -87,6 +87,7 @@ foreach ($marker in @('wait-for-actions.sh', 'verify-release-images.sh', 'docker
 }
 Assert-NotMatches $prepare 'compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'prepare must not mutate container lifecycle'
 Assert-NotMatches $prepare 'release_production_state_write' 'prepare must not write production release state'
+Assert-Matches $prepare 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
 
 # Apply is local-only, immutable, and extensions-first.
 foreach ($marker in @('release_manifest_valid', 'origin/$BRANCH', 'drifted', '--pull never', 'deploying_extensions', 'deploying_main', 'health_checking', 'release_production_state_write', 'rolling_back', 'restore_source', 'rollback:{attempted:true')) {
