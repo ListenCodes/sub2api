@@ -4,7 +4,9 @@ import {
   checkUpdates as checkUpdatesAPI,
   type ReleaseInfo,
   type UpdateKind,
-  type VersionInfo
+  type VersionInfo,
+  getCurrentRelease,
+  type ReleaseIdentity
 } from './api'
 
 export const useCustomReleaseStore = defineStore('custom-release', () => {
@@ -27,6 +29,22 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
   const productionStableTag = ref('')
   const productionStableCommit = ref('')
   const updateWarning = ref('')
+  const currentOfficialVersion = ref('')
+  const currentCustomVersion = ref('')
+  const currentReleaseID = ref('')
+  const targetOfficialVersion = ref('')
+  const targetCustomVersion = ref('')
+
+  async function fetchCurrentRelease(): Promise<ReleaseIdentity | null> {
+    try {
+      const identity = await getCurrentRelease()
+      currentOfficialVersion.value = identity.official_version
+      currentCustomVersion.value = identity.custom_version
+      currentReleaseID.value = identity.release_id
+      currentVersion.value = identity.official_version.replace(/^v/, '')
+      return identity
+    } catch { return null }
+  }
 
   async function fetchVersion(force = false): Promise<VersionInfo | null> {
     if (versionLoaded.value && !force) {
@@ -72,7 +90,9 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
       targetCustomShortSHA.value = data.target_custom_short_sha || ''
       productionStableTag.value = data.production_stable_tag || ''
       productionStableCommit.value = data.production_stable_commit || ''
-      updateWarning.value = data.warning || ''
+    updateWarning.value = data.warning || ''
+      targetOfficialVersion.value = data.release_tag || data.latest_version || ''
+      targetCustomVersion.value = data.target_custom_commit || ''
       versionLoaded.value = true
       return data
     } catch (error) {
@@ -87,6 +107,8 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
     versionLoaded.value = false
     hasUpdate.value = false
     updateKind.value = 'none'
+    targetOfficialVersion.value = ''
+    targetCustomVersion.value = ''
   }
 
   return {
@@ -109,6 +131,12 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
     productionStableTag,
     productionStableCommit,
     updateWarning,
+    currentOfficialVersion,
+    currentCustomVersion,
+    currentReleaseID,
+    targetOfficialVersion,
+    targetCustomVersion,
+    fetchCurrentRelease,
     fetchVersion,
     clearVersionCache
   }

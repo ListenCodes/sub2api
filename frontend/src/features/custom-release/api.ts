@@ -30,10 +30,22 @@ export interface VersionInfo {
   production_stable_commit?: string
   target_custom_commit?: string
   target_custom_short_sha?: string
+  release_tag?: string
   custom_scope_error?: string
 }
 
 export type UpdateKind = 'none' | 'official' | 'custom' | 'combined' | 'docs-only'
+export interface ReleaseIdentity {
+  release_id: string
+  official_version: string
+  official_commit: string
+  custom_version: string
+  custom_version_sequence: number
+  custom_commit: string
+  published_at: string
+}
+export type ReleaseOperationKind = 'update' | 'rollback'
+export type ReleaseOperationAction = 'prepare' | 'apply'
 
 /**
  * Get current version
@@ -77,6 +89,8 @@ export type UpdateJobStatus =
   | 'conflict'
   | 'expired'
   | 'drifted'
+  | 'failed_rolled_back'
+  | 'rollback_failed'
 
 export type UpdateAction = 'prepare' | 'apply'
 
@@ -88,6 +102,7 @@ export interface UpdateRollback {
 
 export interface UpdateJob {
   job_id: string
+  operation_kind?: ReleaseOperationKind
   action?: UpdateAction
   status: UpdateJobStatus
   message: string
@@ -166,10 +181,8 @@ export interface RollbackVersionInfo {
  * Get versions available for rollback (up to 3 versions older than current)
  */
 export async function getRollbackVersions(): Promise<{ versions: RollbackVersionInfo[] }> {
-  const { data } = await apiClient.get<{ versions: RollbackVersionInfo[] }>(
-    '/admin/system/rollback-versions'
-  )
-  return data
+  const releases = await getRollbackReleases()
+  return { versions: releases.map((release) => ({ version: release.release_id, published_at: release.published_at, html_url: '' })) }
 }
 
 /**
@@ -178,8 +191,6 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
  * abort the request mid-download (#4504), so these calls wait as long as the
  * backend allows (15 minutes server-side).
  */
-const UPDATE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
-
 /**
  * Perform system update
  * Downloads and applies the latest version
@@ -214,24 +225,27 @@ export async function getUpdateStatus(jobID?: string): Promise<UpdateJob> {
   return data
 }
 
-export interface UpdateResult {
-  message: string
-  need_restart: boolean
+export async function prepareRollback(releaseID: string): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>('/admin/system/rollback/prepare', { release_id: releaseID }, {
+    headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() }
+  })
+  return data
 }
 
-/**
- * Rollback to a previous version
- * @param version - Target version (e.g. "0.1.146"); omit to restore the local backup binary
- */
-export async function rollback(version?: string): Promise<UpdateResult> {
-  const { data } = await apiClient.post<UpdateResult>(
-    '/admin/system/rollback',
-    version ? { version } : undefined,
-    {
-      headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() },
-      timeout: UPDATE_REQUEST_TIMEOUT_MS
-    }
-  )
+export async function applyRollback(jobID: string): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>('/admin/system/rollback/apply', { job_id: jobID }, {
+    headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() }
+  })
+  return data
+}
+
+export async function getCurrentRelease(): Promise<ReleaseIdentity> {
+  const { data } = await apiClient.get<ReleaseIdentity>('/admin/system/release')
+  return data
+}
+
+export async function getRollbackReleases(): Promise<ReleaseIdentity[]> {
+  const { data } = await apiClient.get<ReleaseIdentity[]>('/admin/system/releases/rollback')
   return data
 }
 
@@ -251,7 +265,10 @@ export const systemAPI = {
   applyUpdate,
   getUpdateStatus,
   getRollbackVersions,
-  rollback,
+  prepareRollback,
+  applyRollback,
+  getCurrentRelease,
+  getRollbackReleases,
   restartService
 }
 

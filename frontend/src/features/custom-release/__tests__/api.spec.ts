@@ -4,7 +4,8 @@ import {
   applyUpdate,
   prepareUpdate,
   performUpdate,
-  rollback,
+  prepareRollback,
+  applyRollback,
   isTerminalUpdateStatus,
   updateNeedsRestart,
   updateWasPublished,
@@ -65,20 +66,12 @@ describe('upstream preparation jobs', () => {
     })
   })
 
-  it('keeps the official long timeout for versioned rollback downloads', async () => {
-    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
-      data: { message: 'rolled back', need_restart: true }
-    })
-
-    await rollback('0.1.161')
-    expect(post).toHaveBeenCalledWith(
-      '/admin/system/rollback',
-      { version: '0.1.161' },
-      {
-        headers: { 'Idempotency-Key': expect.any(String) },
-        timeout: 15 * 60 * 1000
-      }
-    )
+  it('uses separate prepare and apply endpoints for complete snapshot rollback', async () => {
+    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: { job_id: 'rollback-1' } })
+    await prepareRollback('release-1')
+    await applyRollback('rollback-1')
+    expect(post).toHaveBeenNthCalledWith(1, '/admin/system/rollback/prepare', { release_id: 'release-1' }, { headers: { 'Idempotency-Key': expect.any(String) } })
+    expect(post).toHaveBeenNthCalledWith(2, '/admin/system/rollback/apply', { job_id: 'rollback-1' }, { headers: { 'Idempotency-Key': expect.any(String) } })
   })
 
 	it('treats every release phase as non-terminal until success, failure, or conflict', () => {

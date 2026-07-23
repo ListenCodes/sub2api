@@ -771,7 +771,8 @@ import {
   updateNeedsRestart,
   restartService,
   getRollbackVersions,
-  rollback as rollbackAPI,
+  prepareRollback,
+  applyRollback,
   type RollbackVersionInfo,
   type UpdateJob,
   type UpdateJobStatus,
@@ -951,6 +952,7 @@ const rollbackVersions = ref<RollbackVersionInfo[]>([])
 const rollbackVersionsLoading = ref(false)
 const rollbackVersionsError = ref('')
 const selectedRollbackVersion = ref('')
+const preparedRollbackJobID = ref('')
 const rollingBack = ref(false)
 const rollbackError = ref('')
 
@@ -1373,7 +1375,12 @@ async function handleRollback() {
   rollbackError.value = ''
 
   try {
-    const result = await rollbackAPI(selectedRollbackVersion.value)
+    if (!preparedRollbackJobID.value) {
+      const prepared = await prepareRollback(selectedRollbackVersion.value)
+      preparedRollbackJobID.value = prepared.job_id
+      return
+    }
+    const result = await applyRollback(preparedRollbackJobID.value)
     successKind.value = 'rollback'
     updateSuccess.value = true
     needRestart.value = result.need_restart
@@ -1383,6 +1390,7 @@ async function handleRollback() {
     rollbackPanelOpen.value = false
     // Clear version cache so the next check reflects the rolled-back version
     appStore.clearVersionCache()
+    preparedRollbackJobID.value = ''
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
