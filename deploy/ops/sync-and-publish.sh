@@ -6,6 +6,8 @@ DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}
 STATE_HELPER="${SUB2API_RELEASE_STATE_HELPER:-$SCRIPT_DIR/release-state.sh}"
 PREPARE_SCRIPT="${SUB2API_PREPARE_SCRIPT:-$SCRIPT_DIR/prepare-release.sh}"
 APPLY_SCRIPT="${SUB2API_APPLY_SCRIPT:-$SCRIPT_DIR/apply-release.sh}"
+PREPARE_ROLLBACK_SCRIPT="${SUB2API_PREPARE_ROLLBACK_SCRIPT:-$SCRIPT_DIR/prepare-rollback.sh}"
+APPLY_ROLLBACK_SCRIPT="${SUB2API_APPLY_ROLLBACK_SCRIPT:-$SCRIPT_DIR/apply-rollback.sh}"
 LOCK_FILE="${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-release.lock}"
 LOG="${SUB2API_SYNC_PUBLISH_LOG:-/var/log/sub2api-release.log}"
 TRIGGER_FILE="$DATA_DIR/release-trigger"
@@ -47,8 +49,24 @@ fi
 claim_job || { log 'No durable release trigger is pending'; exit 0; }
 release_valid_job_id "$JOB_ID" || { log 'Invalid release job id'; exit 1; }
 JOB_FILE="$(release_job_path "$JOB_ID")"
-[[ -r "$JOB_FILE" ]] || { log 'Release job file is missing'; exit 1; }
+if [[ ! -r "$JOB_FILE" ]]; then
+  if [[ -r "$(release_legacy_job_path "$JOB_ID")" ]]; then
+    log "LEGACY_SINGLE_PHASE_UNSUPPORTED: legacy release job $JOB_ID cannot be resumed"
+  else
+    log 'Release job file is missing'
+  fi
+  exit 1
+fi
 JOB_ACTION="$(jq -r '.action // empty' "$JOB_FILE")"
+OPERATION_KIND="$(jq -r '.operation_kind // empty' "$JOB_FILE")"
+[[ "$OPERATION_KIND" == update || "$OPERATION_KIND" == rollback ]] || {
+  release_job_update "$JOB_ID" failed 'Release operation kind is invalid' '{"error_code":"INVALID_OPERATION_KIND","production_changed":false}' || true
+  exit 1
+}
+[[ "$JOB_ID" == "$OPERATION_KIND-"* ]] || {
+  release_job_update "$JOB_ID" failed 'Release operation kind does not match its id' '{"error_code":"OPERATION_KIND_MISMATCH","production_changed":false}' || true
+  exit 1
+}
 if [[ "$ACTION" == legacy || -z "$JOB_ACTION" ]]; then
   release_job_update "$JOB_ID" failed 'Legacy single-phase release job rejected; prepare a new update' '{"error_code":"LEGACY_SINGLE_PHASE_UNSUPPORTED","production_changed":false}' || true
   log "Rejected legacy release job $JOB_ID"
@@ -59,26 +77,30 @@ fi
   exit 1
 }
 export SUB2API_JOB_ID="$JOB_ID"
+status="$(jq -r '.status // empty' "$JOB_FILE")"
+if release_terminal_status "$status"; then
+  release_reconcile_active_operation "$JOB_ID" "$status" || true
+  log "Release operation $JOB_ID is already terminal: $status"
+  exit 0
+fi
 
-case "$ACTION" in
-  prepare)
-    [[ -x "$PREPARE_SCRIPT" ]] || { release_job_update "$JOB_ID" failed 'Prepare executor is missing' '{"error_code":"PREPARE_EXECUTOR_MISSING"}'; exit 1; }
-    log "Starting prepare phase for administrator job $JOB_ID"
-    exec "$PREPARE_SCRIPT" --job-id "$JOB_ID"
-    ;;
-  apply)
-    [[ -x "$APPLY_SCRIPT" ]] || { release_job_update "$JOB_ID" failed 'Apply executor is missing' '{"error_code":"APPLY_EXECUTOR_MISSING"}'; exit 1; }
-    status="$(jq -r '.status // empty' "$JOB_FILE")"
-    [[ "$status" == apply_queued || "$status" == prepared ]] || {
-      [[ "$status" == success ]] && exit 0
-      release_job_update "$JOB_ID" failed 'Apply requires a prepared job' '{"error_code":"APPLY_REQUIRES_PREPARED","production_changed":false}' || true
-      exit 1
-    }
-    log "Starting apply phase for administrator job $JOB_ID"
-    exec "$APPLY_SCRIPT" --job-id "$JOB_ID"
-    ;;
+case "$OPERATION_KIND:$ACTION" in
+  update:prepare) EXECUTOR="$PREPARE_SCRIPT" ;;
+  update:apply) EXECUTOR="$APPLY_SCRIPT" ;;
+  rollback:prepare) EXECUTOR="$PREPARE_ROLLBACK_SCRIPT" ;;
+  rollback:apply) EXECUTOR="$APPLY_ROLLBACK_SCRIPT" ;;
   *)
-    release_job_update "$JOB_ID" failed 'Unknown release action' '{"error_code":"INVALID_RELEASE_ACTION","production_changed":false}' || true
+    release_job_update "$JOB_ID" failed 'Unknown release operation/action pair' '{"error_code":"INVALID_RELEASE_ACTION","production_changed":false}' || true
     exit 1
     ;;
 esac
+
+if [[ "$ACTION" == apply ]]; then
+    [[ "$status" == apply_queued || "$status" == prepared ]] || {
+      release_job_update "$JOB_ID" failed 'Apply requires a prepared job' '{"error_code":"APPLY_REQUIRES_PREPARED","production_changed":false}' || true
+      exit 1
+    }
+fi
+[[ -x "$EXECUTOR" ]] || { release_job_update "$JOB_ID" failed 'Release executor is missing' '{"error_code":"RELEASE_EXECUTOR_MISSING"}'; exit 1; }
+log "Starting $OPERATION_KIND $ACTION phase for administrator job $JOB_ID"
+exec "$EXECUTOR" --job-id "$JOB_ID"

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,31 +17,59 @@ import (
 )
 
 const (
-	UpdateActionPrepare = "prepare"
-	UpdateActionApply   = "apply"
+	ReleaseOperationUpdate   = "update"
+	ReleaseOperationRollback = "rollback"
+	ReleasePhasePrepare      = "prepare"
+	ReleasePhaseApply        = "apply"
 
-	UpdateStatusCheckingUpdates     = "checking_updates"
-	UpdateStatusCheckingRelease     = "checking_release"
-	UpdateStatusValidatingTag       = "validating_tag"
-	UpdateStatusMergingRelease      = "merging_release"
-	UpdateStatusWaitingActions      = "waiting_actions"
-	UpdateStatusWaitingImages       = "waiting_images"
-	UpdateStatusDownloadingImages   = "downloading_images"
-	UpdateStatusPreparingCompose    = "preparing_compose"
-	UpdateStatusPromotingRelease    = "promoting_release"
-	UpdateStatusBackingUp           = "backing_up"
-	UpdateStatusValidatingBackup    = "validating_backup"
-	UpdateStatusPrepared            = "prepared"
-	UpdateStatusApplyQueued         = "apply_queued"
-	UpdateStatusDeployingExtensions = "deploying_extensions"
-	UpdateStatusDeployingMain       = "deploying_main"
-	UpdateStatusHealthChecking      = "health_checking"
-	UpdateStatusRollingBack         = "rolling_back"
-	UpdateStatusSuccess             = "success"
-	UpdateStatusFailed              = "failed"
-	UpdateStatusConflict            = "conflict"
-	UpdateStatusExpired             = "expired"
-	UpdateStatusDrifted             = "drifted"
+	ReleaseStatusResolvingTarget     = "resolving_target"
+	ReleaseStatusResolvingSnapshot   = "resolving_snapshot"
+	ReleaseStatusVerifyingSnapshot   = "verifying_snapshot"
+	ReleaseStatusVerifyingImages     = "verifying_images"
+	ReleaseStatusDownloadingImages   = "downloading_images"
+	ReleaseStatusRenderingCompose    = "rendering_compose"
+	ReleaseStatusBackingUp           = "backing_up"
+	ReleaseStatusValidatingBackup    = "validating_backup"
+	ReleaseStatusPrepared            = "prepared"
+	ReleaseStatusApplyQueued         = "apply_queued"
+	ReleaseStatusValidatingManifest  = "validating_manifest"
+	ReleaseStatusSwitchingExtensions = "switching_extensions"
+	ReleaseStatusSwitchingMain       = "switching_main"
+	ReleaseStatusHealthChecking      = "health_checking"
+	ReleaseStatusRollingBack         = "rolling_back"
+	ReleaseStatusSuccess             = "success"
+	ReleaseStatusFailed              = "failed"
+	ReleaseStatusConflict            = "conflict"
+	ReleaseStatusExpired             = "expired"
+	ReleaseStatusDrifted             = "drifted"
+	ReleaseStatusFailedRolledBack    = "failed_rolled_back"
+	ReleaseStatusRollbackFailed      = "rollback_failed"
+
+	UpdateActionPrepare = ReleasePhasePrepare
+	UpdateActionApply   = ReleasePhaseApply
+
+	UpdateStatusCheckingUpdates     = ReleaseStatusResolvingTarget
+	UpdateStatusCheckingRelease     = ReleaseStatusResolvingTarget
+	UpdateStatusValidatingTag       = ReleaseStatusResolvingTarget
+	UpdateStatusMergingRelease      = ReleaseStatusResolvingTarget
+	UpdateStatusWaitingActions      = ReleaseStatusResolvingTarget
+	UpdateStatusWaitingImages       = ReleaseStatusVerifyingImages
+	UpdateStatusDownloadingImages   = ReleaseStatusDownloadingImages
+	UpdateStatusPreparingCompose    = ReleaseStatusRenderingCompose
+	UpdateStatusPromotingRelease    = ReleaseStatusResolvingTarget
+	UpdateStatusBackingUp           = ReleaseStatusBackingUp
+	UpdateStatusValidatingBackup    = ReleaseStatusValidatingBackup
+	UpdateStatusPrepared            = ReleaseStatusPrepared
+	UpdateStatusApplyQueued         = ReleaseStatusApplyQueued
+	UpdateStatusDeployingExtensions = ReleaseStatusSwitchingExtensions
+	UpdateStatusDeployingMain       = ReleaseStatusSwitchingMain
+	UpdateStatusHealthChecking      = ReleaseStatusHealthChecking
+	UpdateStatusRollingBack         = ReleaseStatusRollingBack
+	UpdateStatusSuccess             = ReleaseStatusSuccess
+	UpdateStatusFailed              = ReleaseStatusFailed
+	UpdateStatusConflict            = ReleaseStatusConflict
+	UpdateStatusExpired             = ReleaseStatusExpired
+	UpdateStatusDrifted             = ReleaseStatusDrifted
 
 	defaultUpdateScriptPath = "/app/scripts/sync-upstream.sh"
 	defaultUpdateJobsDir    = "/app/data/release-jobs"
@@ -53,12 +82,22 @@ var (
 	ErrUpdateInProgress    = infraerrors.Conflict("UPDATE_IN_PROGRESS", "an upstream update is already running")
 	ErrUpdateNotPrepared   = infraerrors.Conflict("UPDATE_NOT_PREPARED", "update job is not prepared for confirmation")
 	ErrUpdateExpired       = infraerrors.Conflict("UPDATE_PREPARATION_EXPIRED", "prepared update has expired; prepare again")
+	ErrLegacySinglePhase   = infraerrors.Conflict("LEGACY_SINGLE_PHASE_UNSUPPORTED", "legacy single-phase release jobs cannot be resumed")
 )
 
 type UpdateJob struct {
 	JobID                  string         `json:"job_id"`
+	OperationKind          string         `json:"operation_kind"`
 	Action                 string         `json:"action,omitempty"`
 	Status                 string         `json:"status"`
+	BaseReleaseID          string         `json:"base_release_id,omitempty"`
+	TargetReleaseID        string         `json:"target_release_id,omitempty"`
+	CurrentOfficialVersion string         `json:"current_official_version,omitempty"`
+	CurrentCustomVersion   string         `json:"current_custom_version,omitempty"`
+	TargetOfficialVersion  string         `json:"target_official_version,omitempty"`
+	TargetCustomVersion    string         `json:"target_custom_version,omitempty"`
+	ProposedCustomSequence *int           `json:"proposed_custom_sequence,omitempty"`
+	AdvancesCustomVersion  bool           `json:"advances_custom_version"`
 	Message                string         `json:"message"`
 	IntegrationBranch      string         `json:"integration_branch,omitempty"`
 	BaseCommit             string         `json:"base_commit,omitempty"`
@@ -105,28 +144,28 @@ type UpdateRollback struct {
 
 func isValidUpdateStatus(status string) bool {
 	switch status {
-	case UpdateStatusCheckingUpdates,
-		UpdateStatusCheckingRelease,
-		UpdateStatusValidatingTag,
-		UpdateStatusMergingRelease,
-		UpdateStatusWaitingActions,
-		UpdateStatusWaitingImages,
-		UpdateStatusDownloadingImages,
-		UpdateStatusPreparingCompose,
-		UpdateStatusPromotingRelease,
-		UpdateStatusBackingUp,
-		UpdateStatusValidatingBackup,
-		UpdateStatusPrepared,
-		UpdateStatusApplyQueued,
-		UpdateStatusDeployingExtensions,
-		UpdateStatusDeployingMain,
-		UpdateStatusHealthChecking,
-		UpdateStatusRollingBack,
-		UpdateStatusSuccess,
-		UpdateStatusFailed,
-		UpdateStatusConflict,
-		UpdateStatusExpired,
-		UpdateStatusDrifted:
+	case ReleaseStatusResolvingTarget,
+		ReleaseStatusResolvingSnapshot,
+		ReleaseStatusVerifyingSnapshot,
+		ReleaseStatusVerifyingImages,
+		ReleaseStatusDownloadingImages,
+		ReleaseStatusRenderingCompose,
+		ReleaseStatusBackingUp,
+		ReleaseStatusValidatingBackup,
+		ReleaseStatusPrepared,
+		ReleaseStatusApplyQueued,
+		ReleaseStatusValidatingManifest,
+		ReleaseStatusSwitchingExtensions,
+		ReleaseStatusSwitchingMain,
+		ReleaseStatusHealthChecking,
+		ReleaseStatusRollingBack,
+		ReleaseStatusSuccess,
+		ReleaseStatusFailed,
+		ReleaseStatusConflict,
+		ReleaseStatusExpired,
+		ReleaseStatusDrifted,
+		ReleaseStatusFailedRolledBack,
+		ReleaseStatusRollbackFailed:
 		return true
 	default:
 		return false
@@ -134,7 +173,7 @@ func isValidUpdateStatus(status string) bool {
 }
 
 func IsTerminalUpdateStatus(status string) bool {
-	return status == UpdateStatusSuccess || status == UpdateStatusFailed || status == UpdateStatusConflict || status == UpdateStatusExpired || status == UpdateStatusDrifted
+	return status == ReleaseStatusSuccess || status == ReleaseStatusFailed || status == ReleaseStatusConflict || status == ReleaseStatusExpired || status == ReleaseStatusDrifted || status == ReleaseStatusFailedRolledBack || status == ReleaseStatusRollbackFailed
 }
 
 func IsPollingSettledUpdateStatus(status string) bool {
@@ -142,11 +181,18 @@ func IsPollingSettledUpdateStatus(status string) bool {
 }
 
 func newUpdateJobID() (string, error) {
+	return newReleaseOperationID(ReleaseOperationUpdate)
+}
+
+func newReleaseOperationID(kind string) (string, error) {
+	if !isValidReleaseOperationKind(kind) {
+		return "", fmt.Errorf("invalid release operation kind %q", kind)
+	}
 	var random [8]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", fmt.Errorf("generate update job id: %w", err)
 	}
-	return fmt.Sprintf("update-%d-%s", time.Now().UnixNano(), hex.EncodeToString(random[:])), nil
+	return fmt.Sprintf("%s-%d-%s", kind, time.Now().UnixNano(), hex.EncodeToString(random[:])), nil
 }
 
 func readUpdateStatus(path, expectedJobID string) (*UpdateJob, error) {
@@ -165,6 +211,15 @@ func readUpdateStatus(path, expectedJobID string) (*UpdateJob, error) {
 	if strings.TrimSpace(job.JobID) == "" {
 		return nil, fmt.Errorf("update status has no job id")
 	}
+	if strings.TrimSpace(job.OperationKind) == "" {
+		return nil, ErrLegacySinglePhase
+	}
+	if !isValidReleaseOperationKind(job.OperationKind) || !operationIDPattern.MatchString(job.JobID) || !strings.HasPrefix(job.JobID, job.OperationKind+"-") {
+		return nil, fmt.Errorf("invalid release operation identity")
+	}
+	if !isValidReleasePhase(job.Action) {
+		return nil, fmt.Errorf("invalid release operation phase %q", job.Action)
+	}
 	if !isValidUpdateStatus(job.Status) {
 		return nil, fmt.Errorf("invalid update status %q", job.Status)
 	}
@@ -177,6 +232,12 @@ func readUpdateStatus(path, expectedJobID string) (*UpdateJob, error) {
 func writeUpdateStatus(path string, job *UpdateJob) error {
 	if job == nil || strings.TrimSpace(job.JobID) == "" {
 		return fmt.Errorf("update status job is required")
+	}
+	if !isValidReleaseOperationKind(job.OperationKind) || !operationIDPattern.MatchString(job.JobID) || !strings.HasPrefix(job.JobID, job.OperationKind+"-") {
+		return fmt.Errorf("invalid release operation identity")
+	}
+	if !isValidReleasePhase(job.Action) {
+		return fmt.Errorf("invalid release operation phase %q", job.Action)
 	}
 	if !isValidUpdateStatus(job.Status) {
 		return fmt.Errorf("invalid update status %q", job.Status)
@@ -211,13 +272,24 @@ func writeUpdateStatus(path string, job *UpdateJob) error {
 	if _, err := tmp.Write(raw); err != nil {
 		return fmt.Errorf("write temporary update status: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary update status: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary update status: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace update status: %w", err)
 	}
-	return nil
+	return syncReleaseDirectory(path)
+}
+
+func isValidReleaseOperationKind(kind string) bool {
+	return kind == ReleaseOperationUpdate || kind == ReleaseOperationRollback
+}
+
+func isValidReleasePhase(phase string) bool {
+	return phase == ReleasePhasePrepare || phase == ReleasePhaseApply
 }
 
 func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*UpdateJob, error) {
@@ -226,7 +298,7 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 	}
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
-		current, err := os.ReadFile(s.jobIDPath)
+		current, err := os.ReadFile(customReleaseJobIDPath())
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, ErrUpdateJobNotFound
@@ -238,15 +310,22 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 			return nil, ErrUpdateJobNotFound
 		}
 	}
-	path, err := updateJobPath(s.jobsDir, jobID)
+	path, err := customReleaseOperationPath(jobID)
 	if err != nil {
+		if errors.Is(err, ErrLegacySinglePhase) {
+			return nil, ErrLegacySinglePhase
+		}
 		return nil, ErrUpdateJobNotFound
 	}
 	return readUpdateStatus(path, jobID)
 }
 
 func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
-	path, err := updateJobPath(s.jobsDir, jobID)
+	return setCustomReleaseStatus(jobID, status, message, startedAt, finishedAt)
+}
+
+func setCustomReleaseStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
+	path, err := customReleaseOperationPath(jobID)
 	if err != nil {
 		return err
 	}
@@ -269,7 +348,7 @@ func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt
 
 func updateJobPath(jobsDir, jobID string) (string, error) {
 	jobID = strings.TrimSpace(jobID)
-	if !strings.HasPrefix(jobID, "update-") || len(jobID) > 128 {
+	if (!strings.HasPrefix(jobID, "update-") && !strings.HasPrefix(jobID, "rollback-")) || len(jobID) > 128 {
 		return "", fmt.Errorf("invalid update job id")
 	}
 	for _, char := range jobID {
@@ -304,11 +383,29 @@ func writeCurrentUpdateJobID(path, jobID string) error {
 	if _, err := tmp.WriteString(jobID + "\n"); err != nil {
 		return fmt.Errorf("write temporary current update job id: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary current update job id: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary current update job id: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace current update job id: %w", err)
+	}
+	return syncReleaseDirectory(path)
+}
+
+func syncReleaseDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open release state directory: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync release state directory: %w", err)
 	}
 	return nil
 }

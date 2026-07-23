@@ -41,13 +41,20 @@ $sync = Read-RepoFile 'deploy\ops\sync-upstream.sh'
 $orchestrator = Read-RepoFile 'deploy\ops\sync-and-publish.sh'
 $prepare = Read-RepoFile 'deploy\ops\prepare-release.sh'
 $apply = Read-RepoFile 'deploy\ops\apply-release.sh'
+$prepareRollback = Read-RepoFile 'deploy\ops\prepare-rollback.sh'
+$applyRollback = Read-RepoFile 'deploy\ops\apply-rollback.sh'
 $common = Read-RepoFile 'deploy\ops\release-common.sh'
 $trigger = Read-RepoFile 'deploy\ops\sync-trigger.sh'
 $promoter = Read-RepoFile 'deploy\ops\promote-release.sh'
 $publisher = Read-RepoFile 'deploy\ops\publish-custom.sh'
 $state = Read-RepoFile 'deploy\ops\release-state.sh'
+$updateJob = Read-RepoFile 'backend\internal\service\update_job.go'
+$ledger = Read-RepoFile 'deploy\ops\release-ledger.sh'
+$ledgerMigration = Read-RepoFile 'deploy\ops\migrate-release-ledger.sh'
 $imageVerifier = Read-RepoFile 'deploy\ops\verify-release-images.sh'
 $actionsWaiter = Read-RepoFile 'deploy\ops\wait-for-actions.sh'
+$prepareSurface = "$prepare`n$common"
+$applySurface = "$apply`n$common`n$ledger"
 
 foreach ($executor in @($prepare, $apply, $common)) {
     Assert-Matches $executor 'SUB2API_ENV_FILE:-\$REPO/deploy/\.env' 'release executors must default to the production deploy/.env path'
@@ -69,7 +76,8 @@ Assert-NotMatches $sync 'docker\s+(build|compose\s+up)' 'sync never builds or de
 # The host orchestrator owns only locking, action dispatch, and one-at-a-time trigger consumption.
 foreach ($marker in @(
     'release-trigger', 'flock -n', 'prepare-release.sh', 'apply-release.sh',
-    'ACTION', 'LEGACY_SINGLE_PHASE_UNSUPPORTED'
+    'prepare-rollback.sh', 'apply-rollback.sh', 'operation_kind', 'ACTION',
+    'LEGACY_SINGLE_PHASE_UNSUPPORTED'
 )) {
     Assert-Matches $orchestrator ([regex]::Escape($marker)) "orchestrator is missing $marker"
 }
@@ -83,24 +91,55 @@ Assert-Matches $promoter 'refs/heads/\$BRANCH' 'promoter targets only the approv
 Assert-NotMatches $promoter 'git\s+merge(?:\s|$)|git\s+reset|--force' 'promoter must not move local source or rewrite history'
 # Preparation owns remote gates, immutable evidence, Compose rendering, and backups.
 foreach ($marker in @('wait-for-actions.sh', 'verify-release-images.sh', 'docker pull', 'pg_dump', 'pg_restore --list', 'SHA256SUMS', 'prepared_manifest', 'expires_at', 'prepared')) {
-    Assert-Matches $prepare ([regex]::Escape($marker)) "prepare executor is missing $marker"
+    Assert-Matches $prepareSurface ([regex]::Escape($marker)) "prepare executor surface is missing $marker"
 }
 Assert-NotMatches $prepare 'compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'prepare must not mutate container lifecycle'
 Assert-NotMatches $prepare 'release_production_state_write' 'prepare must not write production release state'
-Assert-Matches $prepare 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
+foreach ($marker in @('ledger_list_rollback_release_ids 3', 'verifying_snapshot', 'release_create_complete_backup', 'prepared_at', 'expires_at')) {
+    Assert-Matches $prepareRollback ([regex]::Escape($marker)) "rollback prepare is missing $marker"
+}
+Assert-NotMatches $prepareRollback 'api\.github\.com|wait-for-actions|verify-release-images|compose[^\r\n]*\b(?:up|down|rm|restart|stop|kill)\b' 'rollback prepare must not query remote release gates or mutate containers'
+foreach ($marker in @('release_checkout_exact_commit', 'switching_extensions', 'switching_main', '--pull never', 'run_complete_health', 'ledger_commit_rollback', 'ledger_restore_failed_rollback')) {
+    Assert-Matches $applyRollback ([regex]::Escape($marker)) "rollback apply is missing $marker"
+}
+Assert-NotMatches $applyRollback 'docker\s+pull|pg_dump|pg_restore|api\.github\.com|wait-for-actions|verify-release-images' 'rollback apply must be local-only and must not back up or restore databases'
+Assert-Matches $prepareSurface 'docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self' 'prepare must back up metadata for the exact production container names'
+foreach ($marker in @(
+    'worktree add --detach', '$BACKUP_DIR/target', 'release_stage_target_env',
+    'release_render_explicit_compose', 'release_create_complete_backup',
+    'base_custom_high_water', 'proposed_custom_sequence', 'advances_custom_version',
+    'target_official_version', 'target_custom_version', 'REUSE_VERIFIED_EVIDENCE'
+)) {
+    Assert-Matches $prepare ([regex]::Escape($marker)) "ledger-aware prepare is missing $marker"
+}
+Assert-Matches $common 'target_artifact_manifest_sha256' 'shared manifest validation must bind the immutable target artifact manifest'
+Assert-Matches $common 'ledger_validate_backup_contract' 'the shared complete backup helper must use the ledger backup contract'
+Assert-NotMatches $prepare 'compose[^\r\n]*-f\s+"\$COMPOSE_BASE"' 'prepare must render the staged target Compose pair, not the production pair'
 
 # Apply is local-only, immutable, and extensions-first.
-foreach ($marker in @('release_manifest_valid', 'origin/$BRANCH', 'drifted', '--pull never', 'deploying_extensions', 'deploying_main', 'health_checking', 'release_production_state_write', 'rolling_back', 'restore_source', 'rollback:{attempted:true')) {
+foreach ($marker in @(
+    'release_manifest_valid', 'ledger_validate_state', 'ledger_validate_release',
+    'origin/$BRANCH', 'drifted', '--pull never', 'switching_extensions',
+    'switching_main', 'health_checking', 'ledger_commit_release', 'rolling_back',
+    'release_restore_source_snapshot', 'ledger_restore_failed_apply',
+    'ledger_settle_pre_mutation_failure', 'ledger_recover_pre_mutation_terminal',
+    'validate_update_identity_contract',
+    'release_running_container_matches_image', 'rollback:{attempted:true'
+)) {
     Assert-Matches $apply ([regex]::Escape($marker)) "apply executor is missing $marker"
 }
 foreach ($marker in @('config --quiet', 'config --format json', '.name ==', 'healthcheck', 'nginx', 'container-metadata', 'rollback-tags.txt', 'SUB2API_IMAGE=')) {
-    Assert-Matches $prepare ([regex]::Escape($marker)) "prepare executor is missing $marker"
+    Assert-Matches $prepareSurface ([regex]::Escape($marker)) "prepare executor surface is missing $marker"
 }
-Assert-NotMatches $apply 'git\s+fetch|docker\s+pull|pg_dump|pg_restore|api\.github\.com' 'apply must not access GitHub, pull images, or redo backups'
+Assert-NotMatches $applySurface 'git\s+(?:fetch|merge|reset|pull)|docker\s+pull|api\.github\.com|wait-for-actions|verify-release-images' 'apply helpers must not access remote gates, move refs, or pull images'
+Assert-NotMatches $apply 'pg_dump|pg_restore' 'apply must not invoke database backup or restore commands'
 Assert-NotMatches $apply 'up[^\r\n]*risk-control-postgres|(?:rm|down)[^\r\n]*risk-control-postgres' 'apply must not lifecycle-manage risk-control-postgres'
-Assert-Before $apply 'deploying_extensions' 'deploying_main' 'apply deploys extensions before the main application'
-Assert-Before $apply 'SOURCE_HEAD=' 'merge --ff-only' 'apply must snapshot the production source before advancing it'
-Assert-Before $apply 'status --porcelain' 'merge --ff-only' 'apply must reject a dirty production worktree before advancing it'
+Assert-Before $apply 'switching_extensions' 'switching_main' 'apply deploys extensions before the main application'
+Assert-Before $apply 'release_source_snapshot' 'release_checkout_exact_commit' 'apply must snapshot and validate the production source before exact checkout'
+Assert-Matches $common 'status --porcelain --untracked-files=all' 'exact source checkout must reject a dirty production worktree'
+Assert-Matches $common 'switch --detach' 'exact source checkout must detach at the immutable prepared commit'
+Assert-NotMatches $common 'reset --hard|merge --ff-only' 'source switching and restoration must not reset or merge the production worktree'
+Assert-Matches $apply 'docker compose --project-name deploy -f "\$COMPOSE_BASE" -f "\$COMPOSE_CUSTOM" --env-file "\$ENV_FILE"' 'apply must use the explicit production Compose pair and environment'
 Assert-Matches $apply 'HEALTH_WAIT_TIMEOUT_SECONDS' 'apply health waits must be bounded'
 Assert-Matches $apply 'wait_container_healthy extensions-self' 'apply must wait for extensions health before switching the main application'
 Assert-Matches $apply 'wait_container_healthy sub2api' 'apply must wait for main application health before reporting success'
@@ -111,8 +150,15 @@ Assert-Matches $apply 'docker exec extensions-self[^\r\n]*http://extensions-self
 Assert-Matches $apply 'RISK_CONTROL_INTERNAL_SECRET' 'apply must load the prepared signing secret for data-quality health'
 Assert-Matches $apply '/api/v1/admin/account-monitor/data-quality' 'apply must execute the signed data-quality health gate'
 Assert-Matches $apply 'abort_apply' 'apply must route explicit post-mutation failures through rollback'
+Assert-Matches $apply 'run_complete_health "\$TARGET_DIR/rendered-compose\.json"[^\r\n]*\|\| abort_apply[\s\S]*live_target_identity_matches[^\r\n]*\|\| abort_apply[\s\S]*if ! ledger_commit_release' 'normal apply must publish the ledger only after complete health and exact runtime identity'
+Assert-Matches $apply 'operation_status[^\r\n]*health_checking[\s\S]*live_target_identity_matches; then[\s\S]*run_complete_health "\$TARGET_DIR/rendered-compose\.json"[\s\S]*ledger_commit_release' 'interrupted apply recovery must recheck complete health before ledger publication'
+Assert-Matches $ledger 'ledger_create_release' 'ledger publication must create an immutable release record'
+Assert-Matches $ledger 'active_operation_id=null' 'ledger publication must settle ownership atomically'
+Assert-Matches $ledger '/proc/\$\$/fd/\$inherited_fd' 'ledger mutations must reuse the inherited orchestrator lock descriptor'
+Assert-Matches $ledger 'published_commit=\$commit' 'exact recovery must restore complete publication audit metadata'
+Assert-Matches $ledger 'if \[\[ "\$operation_status" == success[\s\S]*published_commit == \$record\.custom_commit[\s\S]*if \[\[ "\$state_release_id"' 'exact recovery must validate terminal publication metadata before moving the ledger pointer'
 Assert-NotMatches $apply 'curl[^\r\n]*\|\| fail_apply' 'post-mutation HTTP failures must not bypass rollback'
-Assert-NotMatches $apply 'release_production_state_write[^\r\n]*\|\| fail_apply' 'release-state write failures must not bypass rollback'
+Assert-NotMatches $apply 'release_production_state_write' 'apply must publish compatibility state only through the ledger transaction'
 
 Assert-Matches $publisher 'deprecated' 'publisher is a fail-closed compatibility shim'
 Assert-Matches $publisher 'exit 64' 'publisher rejects direct invocation'
@@ -134,6 +180,23 @@ foreach ($status in @(
 }
 Assert-Matches $actionsWaiter 'EXPECTED_CHECKS' 'Actions waiter requires the complete validation suite'
 Assert-Matches $actionsWaiter 'TIMEOUT_SECONDS' 'Actions waiter has a bounded long-running wait'
+
+foreach ($marker in @('ledger_state_path', 'ledger_release_path', 'ledger_operation_path', 'ledger_validate_state', 'ledger_validate_release', 'ledger_atomic_write', 'ledger_create_release')) {
+    Assert-Matches $ledger ([regex]::Escape($marker)) "release ledger helper is missing $marker"
+}
+Assert-Matches $ledger 'ln\s+"\$temporary"\s+"\$path"' 'immutable records must use atomic hard-link creation'
+Assert-Matches $ledger 'flock\s+-x' 'ledger mutations must acquire an exclusive release-ledger lock'
+Assert-Matches $ledger '/var/lock/sub2api-release\.lock' 'ledger mutations must share the production release lock outside the ledger root'
+Assert-Matches $state 'release-ledger[/\\]operations|RELEASE_OPERATIONS_DIR' 'new operations must live under the release ledger'
+Assert-Matches $state 'LEGACY_SINGLE_PHASE_UNSUPPORTED' 'legacy release-jobs must fail closed with an explicit error'
+Assert-Matches $state 'sync\s+-f' 'operation writes must fsync before and after rename'
+Assert-Matches $state 'rm\s+-f\s+"\$temporary"' 'operation writes must remove a failed temporary file'
+Assert-Matches $updateJob '\.Sync\(\)' 'Go operation and current-pointer writes must be crash durable'
+Assert-NotMatches $ledger 'cat[^\r\n]*\.env|source[^\r\n]*\.env' 'ledger helper must not read environment contents'
+foreach ($marker in @('aa2d24106cab0a03785330d8e0ff4e02b0474a0e', 'v0.1.163', 'v1.0.0', 'after_release_record', 'after_projection')) {
+    Assert-Matches $ledgerMigration ([regex]::Escape($marker)) "ledger migration is missing $marker"
+}
+Assert-NotMatches $ledgerMigration 'compose[^\r\n]*\b(?:up|down|restart|stop|kill)\b|docker\s+pull|pg_restore|git\s+(?:reset|merge|rebase)' 'ledger migration must not mutate production runtime or source'
 
 # The application helper only creates an atomic trigger and returns.
 Assert-Matches $trigger 'release-trigger' 'container helper writes the systemd path trigger'

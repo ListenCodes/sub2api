@@ -59,7 +59,7 @@ SH
 chmod +x "$TMP_DIR/resolver.sh"
 
 export SUB2API_DATA_DIR="$DATA_DIR"
-export SUB2API_RELEASE_JOBS_DIR="$DATA_DIR/release-jobs"
+export SUB2API_RELEASE_OPERATIONS_DIR="$DATA_DIR/release-ledger/operations"
 export SUB2API_CURRENT_RELEASE_JOB_FILE="$DATA_DIR/release-current-job-id"
 source "$ROOT_DIR/deploy/ops/release-state.sh"
 release_job_init update-behind
@@ -72,7 +72,7 @@ SUB2API_SYNC_CONFLICT_DIR="$TMP_DIR/conflicts" \
 SUB2API_SYNC_LOG="$TMP_DIR/release.log" \
   "$ROOT_DIR/deploy/ops/sync-upstream.sh" --job-id update-behind
 
-job_file="$DATA_DIR/release-jobs/update-behind.json"
+job_file="$DATA_DIR/release-ledger/operations/update-behind.json"
 [[ "$(jq -r '.status' "$job_file")" == waiting_actions ]]
 [[ "$(jq -r '.base_commit' "$job_file")" == "$origin_commit" ]]
 [[ "$(jq -r '.target_commit' "$job_file")" == "$origin_commit" ]]

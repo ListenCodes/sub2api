@@ -3,7 +3,7 @@ set -eu
 
 DATA_DIR=${SUB2API_DATA_DIR:-/app/data}
 JOB_ID_FILE=$DATA_DIR/release-current-job-id
-JOBS_DIR=$DATA_DIR/release-jobs
+JOBS_DIR=${SUB2API_RELEASE_OPERATIONS_DIR:-$DATA_DIR/release-ledger/operations}
 TRIGGER_FILE=$DATA_DIR/release-trigger
 
 action=${1:-}
@@ -25,6 +25,7 @@ if [ -z "$job_id" ]; then
 fi
 case "$job_id" in
   update-*) job_suffix=${job_id#update-} ;;
+  rollback-*) job_suffix=${job_id#rollback-} ;;
   *) echo "release job id is invalid" >&2; exit 1 ;;
 esac
 case "$job_suffix" in

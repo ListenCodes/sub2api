@@ -1,5 +1,14 @@
 # Sub2API Release Runbook
 
+Dual-version baseline: Official v0.1.163 / Custom v1.0.0 belongs to production
+commit `aa2d24106cab0a03785330d8e0ff4e02b0474a0e`. The first successful custom
+runtime release is v1.0.1. Official-only releases retain the custom version;
+combined releases advance it once. Failed, expired, drifted, unconfirmed, and
+docs-only operations allocate no number. Complete rollback uses prepare then
+explicit apply within 15 minutes, only the last three complete snapshots
+excluding current, never lowers/reuses high-water, and normally restores neither
+database. Legacy single-stage and official binary rollback endpoints fail closed.
+
 This runbook defines how to change and publish Sub2API and its unified custom
 extensions service.
 

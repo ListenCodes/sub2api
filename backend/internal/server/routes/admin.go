@@ -607,9 +607,9 @@ func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		system.GET("/version", h.Admin.System.GetVersion)
 		system.GET("/check-updates", h.Admin.System.CheckUpdates)
-		system.GET("/rollback-versions", h.Admin.System.GetRollbackVersions)
-		system.POST("/update", h.Admin.System.PerformUpdate)
-		system.POST("/rollback", h.Admin.System.Rollback)
+		system.GET("/rollback-versions", h.Admin.System.LegacyRollbackUnsupported)
+		system.POST("/update", h.Admin.System.PrepareUpdate)
+		system.POST("/rollback", h.Admin.System.LegacyRollbackUnsupported)
 		system.POST("/restart", h.Admin.System.RestartService)
 	}
 }

@@ -21,8 +21,8 @@ export SUB2API_DATA_DIR="$TMP_DIR/data"
 source "$ROOT_DIR/deploy/ops/release-state.sh"
 
 release_job_init update-fixture
-release_job_update update-fixture waiting_actions 'Waiting for Actions' '{"target_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
-job_file="$SUB2API_DATA_DIR/release-jobs/update-fixture.json"
+release_job_update update-fixture waiting_actions 'Waiting for Actions' '{"action":"prepare","target_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+job_file="$SUB2API_DATA_DIR/release-ledger/operations/update-fixture.json"
 assert_eq waiting_actions "$(jq -r '.status' "$job_file")" 'job state was not persisted'
 assert_eq aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$(jq -r '.target_commit' "$job_file")" 'job metadata was not merged'
 assert_eq update-fixture "$(cat "$SUB2API_DATA_DIR/release-current-job-id")" 'current job id was not persisted'
@@ -31,20 +31,54 @@ if release_job_update update-fixture unknown_state invalid '{}' >/dev/null 2>&1;
 fi
 
 trigger_output="$(SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh")"
-assert_eq update-fixture "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger did not carry the durable job id'
+assert_eq 'prepare update-fixture' "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger did not carry phase and durable job id'
 [[ "$trigger_output" == *'release triggered: update-fixture'* ]] || fail 'trigger did not return immediately with the job id'
 release_job_init update-explicit
+release_job_update update-explicit checking_updates queued '{"action":"apply"}'
 printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
-SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" update-explicit >/dev/null
-assert_eq update-explicit "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger ignored the explicit durable job id'
+SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" apply update-explicit >/dev/null
+assert_eq 'apply update-explicit' "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger ignored the explicit phase and durable job id'
 printf 'update-a.b\n' > "$SUB2API_DATA_DIR/release-current-job-id"
-touch "$SUB2API_DATA_DIR/release-jobs/update-a.b.json"
+mkdir -p "$SUB2API_DATA_DIR/release-ledger/operations"
+touch "$SUB2API_DATA_DIR/release-ledger/operations/update-a.b.json"
 if SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" >/dev/null 2>&1; then
   fail 'trigger accepted a job id containing a forbidden character'
 fi
 printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 
+DISPATCH_DIR="$TMP_DIR/dispatch"
+mkdir -p "$DISPATCH_DIR/bin"
+for executor in prepare-release apply-release prepare-rollback apply-rollback; do
+  printf '#!/usr/bin/env sh\nprintf "%%s %%s\\n" "%s" "$2" >> "$DISPATCH_CALLS"\n' "$executor" > "$DISPATCH_DIR/bin/$executor.sh"
+  chmod +x "$DISPATCH_DIR/bin/$executor.sh"
+done
+printf '#!/usr/bin/env sh\nexit 0\n' > "$DISPATCH_DIR/bin/flock"
+chmod +x "$DISPATCH_DIR/bin/flock"
+run_dispatch() {
+  local kind="$1" action="$2" status="$3" job_id expected
+  job_id="$kind-$action"
+  SUB2API_DATA_DIR="$DISPATCH_DIR/data" RELEASE_LEDGER_ROOT="$DISPATCH_DIR/data/release-ledger" RELEASE_OPERATIONS_DIR="$DISPATCH_DIR/data/release-ledger/operations" RELEASE_JOBS_DIR="$DISPATCH_DIR/data/release-ledger/operations" CURRENT_RELEASE_JOB_FILE="$DISPATCH_DIR/data/release-current-job-id"
+  mkdir -p "$RELEASE_OPERATIONS_DIR"
+  release_job_init "$job_id"
+  release_job_update "$job_id" "$status" queued "$(jq -n --arg action "$action" '{action:$action}')"
+  printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger"
+  : > "$DISPATCH_DIR/calls"
+  PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+    SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/prepare-release.sh" SUB2API_APPLY_SCRIPT="$DISPATCH_DIR/bin/apply-release.sh" \
+    SUB2API_PREPARE_ROLLBACK_SCRIPT="$DISPATCH_DIR/bin/prepare-rollback.sh" SUB2API_APPLY_ROLLBACK_SCRIPT="$DISPATCH_DIR/bin/apply-rollback.sh" \
+    SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+    "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
+  if [[ "$kind" == update ]]; then expected="$action-release"; else expected="$action-rollback"; fi
+  assert_eq "$expected $job_id" "$(cat "$DISPATCH_DIR/calls")" "$kind $action dispatched to wrong executor"
+}
+run_dispatch update prepare checking_updates
+run_dispatch update apply apply_queued
+run_dispatch rollback prepare checking_updates
+run_dispatch rollback apply apply_queued
+
 bash "$ROOT_DIR/deploy/ops/tests/test-sync-upstream-behind.sh"
+bash "$ROOT_DIR/deploy/ops/tests/test-release-ledger.sh"
+bash "$ROOT_DIR/deploy/ops/tests/test-prepare-release-ledger.sh"
 
 cat > "$TMP_DIR/checks-success.json" <<'JSON'
 {
@@ -270,7 +304,7 @@ run_scenario() {
   mkdir -p "$scenario_dir/data"
   : > "$scenario_dir/calls"
   SUB2API_DATA_DIR="$scenario_dir/data"
-  RELEASE_JOBS_DIR="$SUB2API_DATA_DIR/release-jobs"
+  RELEASE_JOBS_DIR="$SUB2API_DATA_DIR/release-ledger/operations"
   CURRENT_RELEASE_JOB_FILE="$SUB2API_DATA_DIR/release-current-job-id"
   PRODUCTION_RELEASE_STATE_FILE="$SUB2API_DATA_DIR/release-state.json"
   release_job_init "$job_id"
@@ -315,7 +349,7 @@ sha_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 sha_c=cccccccccccccccccccccccccccccccccccccccc
 
 run_scenario no-change "$sha_a" "$sha_a" "$sha_a"
-assert_eq success "$(jq -r '.status' "$SCENARIO_DIR/data/release-jobs/update-no-change.json")" 'no-change job did not finish successfully'
+assert_eq success "$(jq -r '.status' "$SCENARIO_DIR/data/release-ledger/operations/update-no-change.json")" 'no-change job did not finish successfully'
 assert_eq '' "$(cat "$SCENARIO_DIR/calls")" 'no-change job called downstream publication tools'
 
 run_scenario custom "$sha_b" "$sha_a" "$sha_a"
@@ -325,10 +359,10 @@ grep -q '^publish ' "$SCENARIO_DIR/calls" || fail 'custom commit was not publish
 if grep -q '^promote ' "$SCENARIO_DIR/calls"; then fail 'custom commit path unexpectedly promoted a Release branch'; fi
 
 run_scenario docs-only "$sha_b" "$sha_b" "$sha_c"
-assert_eq success "$(jq -r '.status' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only job did not finish successfully'
-assert_eq true "$(jq -r '.docs_only' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only scope was not persisted'
-assert_eq false "$(jq -r '.published' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only job was marked published'
-assert_eq false "$(jq -r '.production_changed' "$SCENARIO_DIR/data/release-jobs/update-docs-only.json")" 'docs-only job changed production'
+assert_eq success "$(jq -r '.status' "$SCENARIO_DIR/data/release-ledger/operations/update-docs-only.json")" 'docs-only job did not finish successfully'
+assert_eq true "$(jq -r '.docs_only' "$SCENARIO_DIR/data/release-ledger/operations/update-docs-only.json")" 'docs-only scope was not persisted'
+assert_eq false "$(jq -r '.published' "$SCENARIO_DIR/data/release-ledger/operations/update-docs-only.json")" 'docs-only job was marked published'
+assert_eq false "$(jq -r '.production_changed' "$SCENARIO_DIR/data/release-ledger/operations/update-docs-only.json")" 'docs-only job changed production'
 assert_eq '' "$(cat "$SCENARIO_DIR/calls")" 'docs-only job called Actions, image verification, or publication tools'
 
 run_scenario release "$sha_b" "$sha_b" "$sha_c"
@@ -338,13 +372,13 @@ release_calls="$(cat "$SCENARIO_DIR/calls")"
 if run_scenario base-race "$sha_b" "$sha_b" "$sha_c" >/dev/null 2>&1; then
   fail 'base race scenario unexpectedly succeeded'
 fi
-assert_eq failed "$(jq -r '.status' "$SCENARIO_DIR/data/release-jobs/update-base-race.json")" 'base race did not persist failure'
+assert_eq failed "$(jq -r '.status' "$SCENARIO_DIR/data/release-ledger/operations/update-base-race.json")" 'base race did not persist failure'
 if grep -q '^publish ' "$SCENARIO_DIR/calls"; then fail 'base race called the publisher'; fi
 
 if run_scenario publisher-failure "$sha_b" "$sha_a" "$sha_a" >/dev/null 2>&1; then
   fail 'publisher failure scenario unexpectedly succeeded'
 fi
-publisher_failure_job="$SCENARIO_DIR/data/release-jobs/update-publisher-failure.json"
+publisher_failure_job="$SCENARIO_DIR/data/release-ledger/operations/update-publisher-failure.json"
 assert_eq MAIN_HEALTH_FAILED "$(jq -r '.error_code' "$publisher_failure_job")" 'orchestrator overwrote the publisher error code'
 assert_eq true "$(jq -r '.rollback.succeeded' "$publisher_failure_job")" 'orchestrator lost publisher rollback evidence'
 assert_eq '/fixture/backup' "$(jq -r '.artifact_path' "$publisher_failure_job")" 'orchestrator lost publisher backup evidence'

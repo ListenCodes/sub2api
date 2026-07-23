@@ -1,5 +1,15 @@
 # Release Operations
 
+## Dual-version ledger
+
+Bootstrap is Official v0.1.163 / Custom v1.0.0 at production commit
+`aa2d24106cab0a03785330d8e0ff4e02b0474a0e`. Custom and combined runtime
+releases allocate the next global custom patch; official-only releases do not.
+Rollback is prepare/apply, selects one of the last three complete snapshots
+excluding current, restores the historical display pair without lowering or
+reusing high-water, and normally restores neither database. Production ledger
+migration requires separate administrator authorization.
+
 These files are the versioned source for `/opt/sub2api-custom/` and the host
 systemd units that publish Sub2API in the active production environment.
 

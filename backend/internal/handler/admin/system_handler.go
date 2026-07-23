@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,15 +22,19 @@ type SystemHandler struct {
 	lockSvc   *service.SystemOperationLockService
 }
 
-// systemUpdateTimeout bounds a durable release trigger or versioned rollback.
-// A rollback can include a large binary download over slow links, so this must
-// stay above the GitHub download client timeout (10 minutes).
+// systemUpdateTimeout bounds a full in-place update or rollback: the release
+// manifest fetch plus a large binary download over slow links. It must stay
+// above the GitHub download client timeout (10 minutes) so the download owns
+// its own deadline.
 const systemUpdateTimeout = 15 * time.Minute
 
-// systemUpdateContext detaches update/rollback work from the HTTP request
-// lifetime. This keeps the durable trigger, idempotency record, system lock,
-// and any rollback download alive after a client disconnect while retaining a
-// finite server-side deadline (#4504).
+// systemUpdateContext detaches a long-running update/rollback from the HTTP
+// request lifetime. Browsers and reverse proxies commonly abort idle requests
+// after 30-60s (axios default, nginx proxy_read_timeout), which canceled
+// c.Request.Context() mid-download and killed the update with
+// "download failed: context canceled" (#4504). The swap keeps running after a
+// client disconnect; a later retry then hits the system operation lock or
+// reports "Already up to date".
 func systemUpdateContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.Background()
 	if ctx != nil {
@@ -40,83 +45,10 @@ func systemUpdateContext(ctx context.Context) (context.Context, context.CancelFu
 
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
-	PerformUpdate(ctx context.Context) (*service.UpdateJob, error)
-	PrepareUpdate(ctx context.Context) (*service.UpdateJob, error)
-	ApplyUpdate(ctx context.Context, jobID string) (*service.UpdateJob, error)
-	GetUpdateStatus(ctx context.Context, jobID string) (*service.UpdateJob, error)
+	PerformUpdate(ctx context.Context) error
 	Rollback() error
 	ListRollbackVersions(ctx context.Context) ([]service.RollbackVersion, error)
 	RollbackToVersion(ctx context.Context, version string) error
-}
-
-// PrepareUpdate starts only the durable download/backup preparation phase.
-// POST /api/v1/admin/system/update/prepare
-func (h *SystemHandler) PrepareUpdate(c *gin.Context) {
-	operationID := buildSystemOperationID(c, "update.prepare")
-	payload := gin.H{"operation_id": operationID}
-	updateCtx, cancel := systemUpdateContext(c.Request.Context())
-	defer cancel()
-	c.Request = c.Request.WithContext(updateCtx)
-	executeAdminIdempotentAcceptedJSON(c, "admin.system.update.prepare", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
-		lock, release, err := h.acquireSystemLock(ctx, operationID)
-		if err != nil {
-			return nil, err
-		}
-		var releaseReason string
-		succeeded := false
-		defer func() { release(releaseReason, succeeded) }()
-
-		job, err := h.updateSvc.PrepareUpdate(ctx)
-		if err != nil {
-			releaseReason = "SYSTEM_UPDATE_PREPARE_FAILED"
-			return nil, err
-		}
-		succeeded = true
-		return updateJobResponse(job, lock.OperationID()), nil
-	})
-}
-
-// ApplyUpdate starts the explicit production switch for a prepared job.
-// POST /api/v1/admin/system/update/apply
-func (h *SystemHandler) ApplyUpdate(c *gin.Context) {
-	var req struct {
-		JobID string `json:"job_id"`
-	}
-	if c.Request.Body == nil || c.Request.ContentLength == 0 {
-		response.ErrorFrom(c, service.ErrUpdateJobIDRequired)
-		return
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Error(c, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	jobID := strings.TrimSpace(req.JobID)
-	if jobID == "" {
-		response.ErrorFrom(c, service.ErrUpdateJobIDRequired)
-		return
-	}
-	operationID := buildSystemOperationID(c, "update.apply:"+jobID)
-	payload := gin.H{"operation_id": operationID, "job_id": jobID}
-	updateCtx, cancel := systemUpdateContext(c.Request.Context())
-	defer cancel()
-	c.Request = c.Request.WithContext(updateCtx)
-	executeAdminIdempotentAcceptedJSON(c, "admin.system.update.apply", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
-		lock, release, err := h.acquireSystemLock(ctx, operationID)
-		if err != nil {
-			return nil, err
-		}
-		var releaseReason string
-		succeeded := false
-		defer func() { release(releaseReason, succeeded) }()
-
-		job, err := h.updateSvc.ApplyUpdate(ctx, jobID)
-		if err != nil {
-			releaseReason = "SYSTEM_UPDATE_APPLY_FAILED"
-			return nil, err
-		}
-		succeeded = true
-		return updateJobResponse(job, lock.OperationID()), nil
-	})
 }
 
 // NewSystemHandler creates a new SystemHandler
@@ -153,10 +85,7 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 	operationID := buildSystemOperationID(c, "update")
 	payload := gin.H{"operation_id": operationID}
-	updateCtx, cancel := systemUpdateContext(c.Request.Context())
-	defer cancel()
-	c.Request = c.Request.WithContext(updateCtx)
-	executeAdminIdempotentAcceptedJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+	executeAdminIdempotentJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
 			return nil, err
@@ -167,105 +96,36 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
-		// The legacy endpoint is a prepare-only compatibility alias. It never
-		// enters the production apply phase.
-		job, err := h.updateSvc.PrepareUpdate(ctx)
-		if err != nil {
+		updateCtx, cancel := systemUpdateContext(ctx)
+		defer cancel()
+
+		if err := h.updateSvc.PerformUpdate(updateCtx); err != nil {
+			if errors.Is(err, service.ErrNoUpdateAvailable) {
+				info, checkErr := h.updateSvc.CheckUpdate(updateCtx, false)
+				if checkErr != nil {
+					releaseReason = "SYSTEM_UPDATE_FAILED"
+					return nil, checkErr
+				}
+				succeeded = true
+				return gin.H{
+					"message":            "Already up to date",
+					"already_up_to_date": true,
+					"current_version":    info.CurrentVersion,
+					"latest_version":     info.LatestVersion,
+					"operation_id":       lock.OperationID(),
+				}, nil
+			}
 			releaseReason = "SYSTEM_UPDATE_FAILED"
 			return nil, err
 		}
 		succeeded = true
 
 		return gin.H{
-			"job_id":               job.JobID,
-			"status":               job.Status,
-			"message":              job.Message,
-			"integration_branch":   job.IntegrationBranch,
-			"base_commit":          job.BaseCommit,
-			"target_commit":        job.TargetCommit,
-			"release_tag":          job.ReleaseTag,
-			"release_commit":       job.ReleaseCommit,
-			"release_published_at": job.ReleasePublishedAt,
-			"workflow_url":         job.WorkflowURL,
-			"main_digest":          job.MainDigest,
-			"extensions_digest":    job.ExtensionsDigest,
-			"conflict_files":       job.ConflictFiles,
-			"conflict_base":        job.ConflictBase,
-			"conflict_upstream":    job.ConflictUpstream,
-			"conflict_release":     job.ConflictRelease,
-			"conflict_log":         job.ConflictLog,
-			"resolution_hint":      job.ResolutionHint,
-			"artifact_path":        job.ArtifactPath,
-			"need_restart":         job.NeedRestart,
-			"published":            job.Published,
-			"published_commit":     job.PublishedCommit,
-			"production_changed":   job.ProductionChanged,
-			"error_code":           job.ErrorCode,
-			"rollback":             job.Rollback,
-			"ts":                   job.Timestamp,
-			"updated_at":           job.UpdatedAt,
-			"started_at":           job.StartedAt,
-			"finished_at":          job.FinishedAt,
-			"operation_id":         lock.OperationID(),
+			"message":      "Update completed. Please restart the service.",
+			"need_restart": true,
+			"operation_id": lock.OperationID(),
 		}, nil
 	})
-}
-
-func updateJobResponse(job *service.UpdateJob, operationID string) gin.H {
-	return gin.H{
-		"job_id":                   job.JobID,
-		"action":                   job.Action,
-		"status":                   job.Status,
-		"message":                  job.Message,
-		"integration_branch":       job.IntegrationBranch,
-		"base_commit":              job.BaseCommit,
-		"target_commit":            job.TargetCommit,
-		"target_custom_commit":     job.TargetCustomCommit,
-		"update_kind":              job.UpdateKind,
-		"production_commit":        job.ProductionCommit,
-		"stable_release_tag":       job.StableReleaseTag,
-		"stable_release_commit":    job.StableReleaseCommit,
-		"release_tag":              job.ReleaseTag,
-		"release_commit":           job.ReleaseCommit,
-		"release_published_at":     job.ReleasePublishedAt,
-		"workflow_url":             job.WorkflowURL,
-		"main_digest":              job.MainDigest,
-		"extensions_digest":        job.ExtensionsDigest,
-		"conflict_files":           job.ConflictFiles,
-		"conflict_base":            job.ConflictBase,
-		"conflict_upstream":        job.ConflictUpstream,
-		"conflict_release":         job.ConflictRelease,
-		"conflict_log":             job.ConflictLog,
-		"resolution_hint":          job.ResolutionHint,
-		"artifact_path":            job.ArtifactPath,
-		"prepared_manifest":        job.PreparedManifest,
-		"prepared_manifest_sha256": job.PreparedManifestSHA256,
-		"prepared_at":              job.PreparedAt,
-		"expires_at":               job.ExpiresAt,
-		"need_restart":             job.NeedRestart,
-		"published":                job.Published,
-		"published_commit":         job.PublishedCommit,
-		"production_changed":       job.ProductionChanged,
-		"error_code":               job.ErrorCode,
-		"rollback":                 job.Rollback,
-		"ts":                       job.Timestamp,
-		"updated_at":               job.UpdatedAt,
-		"started_at":               job.StartedAt,
-		"finished_at":              job.FinishedAt,
-		"operation_id":             operationID,
-	}
-}
-
-// GetUpdateStatus returns the current status for an asynchronous upstream update.
-// GET /api/v1/admin/system/update/status?job_id=...
-func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
-	jobID := strings.TrimSpace(c.Query("job_id"))
-	job, err := h.updateSvc.GetUpdateStatus(c.Request.Context(), jobID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, job)
 }
 
 // GetRollbackVersions lists versions available for rollback
@@ -304,11 +164,6 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 	}
 	operationID := buildSystemOperationID(c, operation)
 	payload := gin.H{"operation_id": operationID, "version": targetVersion}
-	if targetVersion != "" {
-		rollbackCtx, cancel := systemUpdateContext(c.Request.Context())
-		defer cancel()
-		c.Request = c.Request.WithContext(rollbackCtx)
-	}
 	executeAdminIdempotentJSON(c, "admin.system.rollback", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
@@ -321,7 +176,10 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 		}()
 
 		if targetVersion != "" {
-			err = h.updateSvc.RollbackToVersion(ctx, targetVersion)
+			// 指定版本回退同样要下载完整二进制，与更新一样和请求生命周期解耦。
+			rollbackCtx, cancel := systemUpdateContext(ctx)
+			defer cancel()
+			err = h.updateSvc.RollbackToVersion(rollbackCtx, targetVersion)
 		} else {
 			err = h.updateSvc.Rollback()
 		}

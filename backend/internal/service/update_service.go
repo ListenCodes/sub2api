@@ -8,18 +8,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -45,17 +42,7 @@ const (
 	// Rollback: expose at most the 3 most recent versions older than current
 	maxRollbackVersions = 3
 	// Fetch a few extra releases so filtering (current/newer/prerelease) still leaves enough candidates
-	rollbackFetchPageSize             = 15
-	defaultProductionReleaseStatePath = "/app/data/release-state.json"
-	githubCustomRepo                  = "ListenCodes/sub2api"
-)
-
-const (
-	UpdateKindNone     = "none"
-	UpdateKindOfficial = "official"
-	UpdateKindCustom   = "custom"
-	UpdateKindCombined = "combined"
-	UpdateKindDocsOnly = "docs-only"
+	rollbackFetchPageSize = 15
 )
 
 // UpdateCache defines cache operations for update service
@@ -68,78 +55,37 @@ type UpdateCache interface {
 type GitHubReleaseClient interface {
 	FetchLatestRelease(ctx context.Context, repo string) (*GitHubRelease, error)
 	FetchRecentReleases(ctx context.Context, repo string, perPage int) ([]*GitHubRelease, error)
-	FetchCustomReleaseHead(ctx context.Context, repo, branch string) (*GitRef, error)
-	CompareCommits(ctx context.Context, repo, base, head string) ([]ChangedFile, error)
-	FetchRefCommit(ctx context.Context, repo, ref string) (string, error)
 	DownloadFile(ctx context.Context, url, dest string, maxSize int64) error
 	FetchChecksumFile(ctx context.Context, url string) ([]byte, error)
 }
 
 // UpdateService handles software updates
 type UpdateService struct {
-	cache               UpdateCache
-	githubClient        GitHubReleaseClient
-	currentVersion      string
-	buildType           string // "source" for manual builds, "release" for CI builds
-	scriptPath          string
-	jobsDir             string
-	jobIDPath           string
-	productionStatePath string
-	startScript         func(string, string, string) (func() error, error)
-	performMu           sync.Mutex
+	cache          UpdateCache
+	githubClient   GitHubReleaseClient
+	currentVersion string
+	buildType      string // "source" for manual builds, "release" for CI builds
 }
 
 // NewUpdateService creates a new UpdateService
 func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string) *UpdateService {
 	return &UpdateService{
-		cache:               cache,
-		githubClient:        githubClient,
-		currentVersion:      version,
-		buildType:           buildType,
-		scriptPath:          defaultUpdateScriptPath,
-		jobsDir:             defaultUpdateJobsDir,
-		jobIDPath:           defaultUpdateJobIDPath,
-		productionStatePath: defaultProductionReleaseStatePath,
-		startScript:         startUpdateScript,
+		cache:          cache,
+		githubClient:   githubClient,
+		currentVersion: version,
+		buildType:      buildType,
 	}
 }
 
 // UpdateInfo contains update information
 type UpdateInfo struct {
-	CurrentVersion         string       `json:"current_version"`
-	LatestVersion          string       `json:"latest_version"`
-	HasUpdate              bool         `json:"has_update"`
-	ReleaseInfo            *ReleaseInfo `json:"release_info,omitempty"`
-	Cached                 bool         `json:"cached"`
-	Warning                string       `json:"warning,omitempty"`
-	BuildType              string       `json:"build_type"` // "source" or "release"
-	UpdateKind             string       `json:"update_kind"`
-	OfficialUpdate         bool         `json:"official_update"`
-	CustomUpdate           bool         `json:"custom_update"`
-	DocsOnly               bool         `json:"docs_only"`
-	RuntimeUpdate          bool         `json:"runtime_update"`
-	DetectionComplete      bool         `json:"detection_complete"`
-	ProductionCommit       string       `json:"production_commit,omitempty"`
-	ProductionStableTag    string       `json:"production_stable_tag,omitempty"`
-	ProductionStableCommit string       `json:"production_stable_commit,omitempty"`
-	TargetCustomCommit     string       `json:"target_custom_commit,omitempty"`
-	TargetCustomShortSHA   string       `json:"target_custom_short_sha,omitempty"`
-	CustomScopeError       string       `json:"custom_scope_error,omitempty"`
-}
-
-type ProductionReleaseState struct {
-	ProductionCommit    string `json:"production_commit"`
-	StableReleaseTag    string `json:"stable_release_tag"`
-	StableReleaseCommit string `json:"stable_release_commit"`
-}
-
-type GitRef struct {
-	SHA string `json:"sha"`
-}
-
-type ChangedFile struct {
-	Filename string `json:"filename"`
-	Status   string `json:"status"`
+	CurrentVersion string       `json:"current_version"`
+	LatestVersion  string       `json:"latest_version"`
+	HasUpdate      bool         `json:"has_update"`
+	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
+	Cached         bool         `json:"cached"`
+	Warning        string       `json:"warning,omitempty"`
+	BuildType      string       `json:"build_type"` // "source" or "release"
 }
 
 // ReleaseInfo contains GitHub release details
@@ -185,324 +131,48 @@ type GitHubAsset struct {
 
 // CheckUpdate checks for available updates
 func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInfo, error) {
-	_ = force // production state and custom refs are intentionally never served from cache
-	info := &UpdateInfo{
-		CurrentVersion:    s.currentVersion,
-		LatestVersion:     s.currentVersion,
-		BuildType:         s.buildType,
-		UpdateKind:        UpdateKindNone,
-		DetectionComplete: true,
-	}
-	warnings := make([]string, 0, 3)
-	state, stateErr := readProductionReleaseState(s.productionStatePath)
-	if stateErr != nil {
-		warnings = append(warnings, "production state: "+stateErr.Error())
-		info.DetectionComplete = false
-	} else if state != nil {
-		info.ProductionCommit = state.ProductionCommit
-		info.ProductionStableTag = state.StableReleaseTag
-		info.ProductionStableCommit = state.StableReleaseCommit
-	}
-
-	var release *GitHubRelease
-	var releaseCommit string
-	if s.githubClient == nil {
-		warnings = append(warnings, "official release probe unavailable")
-		info.DetectionComplete = false
-	} else if fetched, err := s.githubClient.FetchLatestRelease(ctx, githubRepo); err != nil {
-		warnings = append(warnings, "official release probe: "+err.Error())
-		info.DetectionComplete = false
-	} else {
-		release = fetched
-		if release == nil || release.Draft || release.Prerelease || strings.TrimSpace(release.TagName) == "" {
-			warnings = append(warnings, "official release probe returned no stable Release")
-			info.DetectionComplete = false
-			release = nil
-		} else {
-			info.LatestVersion = strings.TrimPrefix(release.TagName, "v")
-			info.ReleaseInfo = releaseInfoFromGitHubRelease(release)
-		}
-		if release != nil {
-			if commit, err := s.githubClient.FetchRefCommit(ctx, githubRepo, release.TagName); err != nil {
-				warnings = append(warnings, "stable commit probe: "+err.Error())
-				info.DetectionComplete = false
-			} else {
-				releaseCommit = commit
-			}
+	// Try cache first
+	if !force {
+		if cached, err := s.getFromCache(ctx); err == nil && cached != nil {
+			return cached, nil
 		}
 	}
 
-	if release != nil {
-		stableChanged := false
-		if state != nil && state.StableReleaseTag != "" {
-			stableChanged = release.TagName != state.StableReleaseTag
-			if releaseCommit != "" && state.StableReleaseCommit != "" {
-				stableChanged = stableChanged || releaseCommit != state.StableReleaseCommit
-			}
-		} else {
-			stableChanged = compareVersions(s.currentVersion, strings.TrimPrefix(release.TagName, "v")) < 0
+	// Fetch from GitHub
+	info, err := s.fetchLatestRelease(ctx)
+	if err != nil {
+		// Return cached on error
+		if cached, cacheErr := s.getFromCache(ctx); cacheErr == nil && cached != nil {
+			cached.Warning = "Using cached data: " + err.Error()
+			return cached, nil
 		}
-		info.OfficialUpdate = stableChanged
+		return &UpdateInfo{
+			CurrentVersion: s.currentVersion,
+			LatestVersion:  s.currentVersion,
+			HasUpdate:      false,
+			Warning:        err.Error(),
+			BuildType:      s.buildType,
+		}, nil
 	}
 
-	var customHead *GitRef
-	if s.githubClient == nil {
-		info.DetectionComplete = false
-	} else if fetched, err := s.githubClient.FetchCustomReleaseHead(ctx, githubCustomRepo, "custom-release"); err != nil {
-		warnings = append(warnings, "custom branch probe: "+err.Error())
-		info.DetectionComplete = false
-	} else {
-		customHead = fetched
-		if customHead == nil || !isFullCommitSHA(customHead.SHA) {
-			warnings = append(warnings, "custom branch probe returned no commit")
-			info.DetectionComplete = false
-		} else {
-			info.TargetCustomCommit = strings.TrimSpace(customHead.SHA)
-			info.TargetCustomShortSHA = info.TargetCustomCommit[:8]
-		}
-		if info.TargetCustomCommit == "" {
-			// A missing custom ref cannot be classified as none or docs-only.
-		} else if state == nil || strings.TrimSpace(state.ProductionCommit) == "" {
-			warnings = append(warnings, "production commit is unavailable; custom update cannot be safely classified")
-			info.DetectionComplete = false
-		} else if info.TargetCustomCommit != state.ProductionCommit {
-			info.CustomUpdate = true
-			files, err := s.githubClient.CompareCommits(ctx, githubCustomRepo, state.ProductionCommit, info.TargetCustomCommit)
-			if err != nil {
-				info.CustomScopeError = err.Error()
-				warnings = append(warnings, "custom scope probe: "+err.Error())
-				info.DetectionComplete = false
-			} else {
-				info.DocsOnly = len(files) > 0 && allDocumentationFiles(files)
-			}
-		}
-	}
-
-	info.RuntimeUpdate = info.OfficialUpdate || (info.CustomUpdate && !info.DocsOnly)
-	info.HasUpdate = info.OfficialUpdate || info.CustomUpdate
-	switch {
-	case !info.HasUpdate:
-		info.UpdateKind = UpdateKindNone
-	case info.OfficialUpdate && info.CustomUpdate:
-		info.UpdateKind = UpdateKindCombined
-	case info.OfficialUpdate:
-		info.UpdateKind = UpdateKindOfficial
-	case info.DocsOnly:
-		info.UpdateKind = UpdateKindDocsOnly
-	default:
-		info.UpdateKind = UpdateKindCustom
-	}
-	if len(warnings) > 0 {
-		info.Warning = strings.Join(warnings, "; ")
-	}
+	// Cache result
 	s.saveToCache(ctx, info)
 	return info, nil
 }
 
-func isFullCommitSHA(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) != 40 {
-		return false
-	}
-	for _, char := range value {
-		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func readProductionReleaseState(path string) (*ProductionReleaseState, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
-	}
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+// PerformUpdate downloads and applies the update
+// Uses atomic file replacement pattern for safe in-place updates
+func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
-		return nil, err
-	}
-	var state ProductionReleaseState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, fmt.Errorf("decode release state: %w", err)
-	}
-	return &state, nil
-}
-
-func releaseInfoFromGitHubRelease(release *GitHubRelease) *ReleaseInfo {
-	if release == nil {
-		return nil
-	}
-	assets := make([]Asset, len(release.Assets))
-	for i, asset := range release.Assets {
-		assets[i] = Asset{Name: asset.Name, DownloadURL: asset.BrowserDownloadURL, Size: asset.Size}
-	}
-	return &ReleaseInfo{Name: release.Name, Body: release.Body, PublishedAt: release.PublishedAt, HTMLURL: release.HTMLURL, Assets: assets}
-}
-
-func allDocumentationFiles(files []ChangedFile) bool {
-	if len(files) == 0 {
-		return false
-	}
-	for _, file := range files {
-		name := strings.TrimSpace(file.Filename)
-		base := filepath.Base(name)
-		if !strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, ".mdx") && base != ".gitignore" && base != "AGENTS.md" {
-			return false
-		}
-	}
-	return true
-}
-
-// PerformUpdate starts the conflict-gated upstream sync/publish job and returns
-// before the host-side workflow completes.
-func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateJob, error) {
-	return s.PrepareUpdate(ctx)
-}
-
-// PrepareUpdate queues only the non-mutating preparation phase.
-func (s *UpdateService) PrepareUpdate(ctx context.Context) (*UpdateJob, error) {
-	return s.queueUpdate(ctx, UpdateActionPrepare)
-}
-
-func (s *UpdateService) queueUpdate(ctx context.Context, action string) (*UpdateJob, error) {
-	s.performMu.Lock()
-	defer s.performMu.Unlock()
-
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if currentID, readErr := os.ReadFile(s.jobIDPath); readErr == nil {
-		currentID := strings.TrimSpace(string(currentID))
-		if currentID != "" {
-			if currentPath, pathErr := updateJobPath(s.jobsDir, currentID); pathErr == nil {
-				if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && !IsPollingSettledUpdateStatus(existing.Status) {
-					return nil, ErrUpdateInProgress
-				}
-				if existing, statusErr := readUpdateStatus(currentPath, currentID); statusErr == nil && existing.Status == UpdateStatusPrepared && !preparedJobExpired(existing) {
-					return nil, ErrUpdateInProgress
-				}
-			}
-		}
-	} else if !os.IsNotExist(readErr) {
-		return nil, fmt.Errorf("read current update job id: %w", readErr)
-	}
-	if _, err := os.Stat(s.scriptPath); err != nil {
-		return nil, fmt.Errorf("sync script not found at %s: %w", s.scriptPath, err)
+		return err
 	}
 
-	jobID, err := newUpdateJobID()
-	if err != nil {
-		return nil, err
-	}
-	startedAt := time.Now().UTC()
-	job := &UpdateJob{
-		JobID:       jobID,
-		Action:      action,
-		Status:      UpdateStatusCheckingUpdates,
-		Message:     "release job queued",
-		NeedRestart: false,
-		Published:   false,
-		Timestamp:   startedAt,
-		UpdatedAt:   startedAt,
-		StartedAt:   &startedAt,
-	}
-	jobPath, err := updateJobPath(s.jobsDir, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeUpdateStatus(jobPath, job); err != nil {
-		return nil, err
-	}
-	if err := writeCurrentUpdateJobID(s.jobIDPath, jobID); err != nil {
-		return nil, fmt.Errorf("write update job id: %w", err)
+	if !info.HasUpdate {
+		return ErrNoUpdateAvailable
 	}
 
-	wait, err := s.startScript(s.scriptPath, action, jobID)
-	if err != nil {
-		finishedAt := time.Now().UTC()
-		_ = s.setUpdateStatus(jobID, UpdateStatusFailed, "failed to start sync: "+err.Error(), &startedAt, &finishedAt)
-		return nil, fmt.Errorf("start upstream sync: %w", err)
-	}
-	go func() {
-		_ = wait()
-	}()
-
-	return job, nil
-}
-
-// ApplyUpdate queues the explicit production switch for a prepared job.
-func (s *UpdateService) ApplyUpdate(ctx context.Context, jobID string) (*UpdateJob, error) {
-	s.performMu.Lock()
-	defer s.performMu.Unlock()
-
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	jobID = strings.TrimSpace(jobID)
-	if jobID == "" {
-		return nil, ErrUpdateJobIDRequired
-	}
-	jobPath, err := updateJobPath(s.jobsDir, jobID)
-	if err != nil {
-		return nil, ErrUpdateJobNotFound
-	}
-	job, err := readUpdateStatus(jobPath, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if job.Status == UpdateStatusPrepared {
-		if preparedJobExpired(job) {
-			job.Status = UpdateStatusExpired
-			job.Message = "prepared update expired; prepare again"
-			job.UpdatedAt = time.Now().UTC()
-			_ = writeUpdateStatus(jobPath, job)
-			return nil, ErrUpdateExpired
-		}
-		job.Action = UpdateActionApply
-		job.Status = UpdateStatusApplyQueued
-		job.Message = "update confirmation queued"
-		job.UpdatedAt = time.Now().UTC()
-		if err := writeUpdateStatus(jobPath, job); err != nil {
-			return nil, err
-		}
-		wait, startErr := s.startScript(s.scriptPath, UpdateActionApply, jobID)
-		if startErr != nil {
-			job.Status = UpdateStatusFailed
-			job.Message = "failed to start apply: " + startErr.Error()
-			job.UpdatedAt = time.Now().UTC()
-			_ = writeUpdateStatus(jobPath, job)
-			return nil, fmt.Errorf("start apply: %w", startErr)
-		}
-		go func() { _ = wait() }()
-		return job, nil
-	}
-	if job.Action == UpdateActionApply && !IsTerminalUpdateStatus(job.Status) {
-		return job, nil
-	}
-	if IsTerminalUpdateStatus(job.Status) && job.Status == UpdateStatusSuccess {
-		return job, nil
-	}
-	return nil, ErrUpdateNotPrepared
-}
-
-func preparedJobExpired(job *UpdateJob) bool {
-	if job == nil || strings.TrimSpace(job.ExpiresAt) == "" {
-		return false
-	}
-	expiresAt, err := time.Parse(time.RFC3339, job.ExpiresAt)
-	return err == nil && !time.Now().UTC().Before(expiresAt)
-}
-
-func startUpdateScript(scriptPath, action, jobID string) (func() error, error) {
-	cmd := exec.Command("/bin/sh", scriptPath, action, jobID)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return cmd.Wait, nil
+	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,
@@ -729,6 +399,39 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	return candidates, nil
 }
 
+func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
+	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	latestVersion := strings.TrimPrefix(release.TagName, "v")
+
+	assets := make([]Asset, len(release.Assets))
+	for i, a := range release.Assets {
+		assets[i] = Asset{
+			Name:        a.Name,
+			DownloadURL: a.BrowserDownloadURL,
+			Size:        a.Size,
+		}
+	}
+
+	return &UpdateInfo{
+		CurrentVersion: s.currentVersion,
+		LatestVersion:  latestVersion,
+		HasUpdate:      compareVersions(s.currentVersion, latestVersion) < 0,
+		ReleaseInfo: &ReleaseInfo{
+			Name:        release.Name,
+			Body:        release.Body,
+			PublishedAt: release.PublishedAt,
+			HTMLURL:     release.HTMLURL,
+			Assets:      assets,
+		},
+		Cached:    false,
+		BuildType: s.buildType,
+	}, nil
+}
+
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {
 	return s.githubClient.DownloadFile(ctx, downloadURL, dest, maxDownloadSize)
 }
@@ -890,10 +593,36 @@ func (s *UpdateService) extractBinary(archivePath, destPath string) error {
 	return out.Close()
 }
 
-func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
-	if s.cache == nil {
-		return
+func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
+	data, err := s.cache.GetUpdateInfo(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	var cached struct {
+		Latest      string       `json:"latest"`
+		ReleaseInfo *ReleaseInfo `json:"release_info"`
+		Timestamp   int64        `json:"timestamp"`
+	}
+	if err := json.Unmarshal([]byte(data), &cached); err != nil {
+		return nil, err
+	}
+
+	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
+		return nil, fmt.Errorf("cache expired")
+	}
+
+	return &UpdateInfo{
+		CurrentVersion: s.currentVersion,
+		LatestVersion:  cached.Latest,
+		HasUpdate:      compareVersions(s.currentVersion, cached.Latest) < 0,
+		ReleaseInfo:    cached.ReleaseInfo,
+		Cached:         true,
+		BuildType:      s.buildType,
+	}, nil
+}
+
+func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`

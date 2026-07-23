@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import VersionBadge from '@/components/common/VersionBadge.vue'
+import VersionBadge from '@/features/custom-release/CustomReleaseBadge.vue'
 
 const mocks = vi.hoisted(() => ({
   authStore: { isAdmin: true },
@@ -24,15 +24,18 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/stores', () => ({
-  useAuthStore: () => mocks.authStore,
-  useAppStore: () => mocks.appStore
+  useAuthStore: () => mocks.authStore
+}))
+
+vi.mock('@/features/custom-release/store', () => ({
+  useCustomReleaseStore: () => mocks.appStore
 }))
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key })
 }))
 
-vi.mock('@/api/admin/system', () => ({
+vi.mock('@/features/custom-release/api', () => ({
   performUpdate: mocks.performUpdate,
   prepareUpdate: mocks.prepareUpdate,
   applyUpdate: mocks.applyUpdate,
