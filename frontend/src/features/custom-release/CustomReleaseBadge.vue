@@ -80,6 +80,12 @@
             <template v-else>
               <!-- Version display - centered and prominent -->
               <div class="mb-4 text-center">
+                <div class="text-xs font-medium text-gray-500 dark:text-dark-400" data-testid="current-official-version">
+                  Official {{ appStore.currentOfficialVersion || `v${currentVersion}` }}
+                </div>
+                <div class="text-xs font-medium text-gray-500 dark:text-dark-400" data-testid="current-custom-version">
+                  Custom {{ appStore.currentCustomVersion || '--' }}
+                </div>
                 <div class="inline-flex items-center gap-2">
                   <span
                     v-if="currentVersion"
@@ -1464,6 +1470,7 @@ onMounted(() => {
   if (isAdmin.value) {
     // Use cached version if available, otherwise fetch
     appStore.fetchVersion(false)
+    void appStore.fetchCurrentRelease?.()
     void resumeUpdatePolling()
   }
   document.addEventListener('click', handleClickOutside)
