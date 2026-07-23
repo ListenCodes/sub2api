@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -127,10 +126,6 @@ func customReleaseOperationPath(jobID string) (string, error) {
 
 func customReleaseJobIDPath() string {
 	return customReleaseEnv("SUB2API_RELEASE_JOB_ID_PATH", defaultUpdateJobIDPath)
-}
-
-func customReleaseStatePath() string {
-	return customReleaseEnv("SUB2API_PRODUCTION_RELEASE_STATE_PATH", defaultProductionReleaseStatePath)
 }
 
 func customReleaseLedgerRoot() string {
@@ -556,21 +551,6 @@ func isFullCommitSHA(value string) bool {
 		}
 	}
 	return true
-}
-
-func readProductionReleaseState(path string) (*ProductionReleaseState, error) {
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var state ProductionReleaseState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, fmt.Errorf("decode release state: %w", err)
-	}
-	return &state, nil
 }
 
 func customReleaseInfoFromGitHubRelease(release *GitHubRelease) *ReleaseInfo {

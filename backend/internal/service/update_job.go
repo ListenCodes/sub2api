@@ -180,10 +180,6 @@ func IsPollingSettledUpdateStatus(status string) bool {
 	return IsTerminalUpdateStatus(status) || status == UpdateStatusPrepared
 }
 
-func newUpdateJobID() (string, error) {
-	return newReleaseOperationID(ReleaseOperationUpdate)
-}
-
 func newReleaseOperationID(kind string) (string, error) {
 	if !isValidReleaseOperationKind(kind) {
 		return "", fmt.Errorf("invalid release operation kind %q", kind)
@@ -320,10 +316,6 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 	return readUpdateStatus(path, jobID)
 }
 
-func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
-	return setCustomReleaseStatus(jobID, status, message, startedAt, finishedAt)
-}
-
 func setCustomReleaseStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
 	path, err := customReleaseOperationPath(jobID)
 	if err != nil {
@@ -403,9 +395,13 @@ func syncReleaseDirectory(path string) error {
 	if err != nil {
 		return fmt.Errorf("open release state directory: %w", err)
 	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync release state directory: %w", err)
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync release state directory: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close release state directory: %w", closeErr)
 	}
 	return nil
 }

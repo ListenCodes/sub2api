@@ -24,7 +24,7 @@ func TestReleaseLedgerCurrentReleaseReturnsVersionPair(t *testing.T) {
 		UpdatedAt:              "2026-07-23T08:00:00Z",
 	}, record)
 
-	current, err := newReleaseLedgerStore(root).CurrentRelease()
+	current, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).CurrentRelease()
 	require.NoError(t, err)
 	require.Equal(t, "v0.1.163", current.OfficialVersion)
 	require.Equal(t, "v1.0.4", current.CustomVersion)
@@ -49,7 +49,7 @@ func TestReleaseLedgerListsLastThreeEligibleReleases(t *testing.T) {
 	}, records...)
 	require.NoError(t, os.Remove(filepath.Join(records[3].BackupDir, "target", "SHA256SUMS")))
 
-	rollback, err := newReleaseLedgerStore(root).ListRollbackReleases(3)
+	rollback, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).ListRollbackReleases(3)
 	require.NoError(t, err)
 	require.Equal(t, []string{"release-second", "release-third", "release-oldest"}, []string{
 		rollback[0].ReleaseID,
@@ -117,7 +117,7 @@ func TestReleaseLedgerRejectsInconsistentStateOrRecords(t *testing.T) {
 				writeReleaseLedgerFixture(t, root, state, record)
 			}
 
-			_, err := newReleaseLedgerStore(root).CurrentRelease()
+			_, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).CurrentRelease()
 			require.Error(t, err)
 			require.Equal(t, "LEDGER_INCONSISTENT", infraerrors.Reason(err))
 		})
