@@ -18,6 +18,8 @@ ADMIN_HEALTH_URL="${SUB2API_ADMIN_HEALTH_URL:-http://127.0.0.1:8080/admin}"
 EXTENSION_ROUTE_URL="${SUB2API_EXTENSION_ROUTE_URL:-http://127.0.0.1:8080/admin/extensions/account-monitor}"
 DATA_QUALITY_URL="${SUB2API_DATA_QUALITY_URL:-}"
 LOG="${SUB2API_SYNC_PUBLISH_LOG:-/var/log/sub2api-release.log}"
+HEALTH_WAIT_TIMEOUT_SECONDS="${SUB2API_HEALTH_WAIT_TIMEOUT_SECONDS:-180}"
+HEALTH_WAIT_INTERVAL_SECONDS="${SUB2API_HEALTH_WAIT_INTERVAL_SECONDS:-2}"
 
 source "$STATE_HELPER"
 source "$COMMON_HELPER"
@@ -101,6 +103,20 @@ pin_image_env() {
 rollback_started=0
 rollback_message=''
 
+wait_container_healthy() {
+  local container="$1" deadline status
+  deadline=$((SECONDS + HEALTH_WAIT_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
+    case "$status" in
+      healthy) return 0 ;;
+      unhealthy|exited|dead) return 1 ;;
+    esac
+    sleep "$HEALTH_WAIT_INTERVAL_SECONDS"
+  done
+  return 1
+}
+
 restore_source() {
   local source_head="$1"
   [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] || return 1
@@ -129,8 +145,8 @@ rollback_on_error() {
       && [[ "$old_main" =~ ^sha256:[0-9a-f]{64}$ && "$old_ext" =~ ^sha256:[0-9a-f]{64}$ ]] \
       && SUB2API_IMAGE="$MAIN_REPOSITORY@$old_main" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$old_ext" \
         docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" up -d --pull never --no-deps --force-recreate extensions-self sub2api >> "$LOG" 2>&1 \
-      && docker inspect --format '{{.State.Health.Status}}' extensions-self | grep -q healthy \
-      && docker inspect --format '{{.State.Health.Status}}' sub2api | grep -q healthy; then
+      && wait_container_healthy extensions-self \
+      && wait_container_healthy sub2api; then
       rollback_ok=1
     fi
     if [[ "$rollback_ok" -eq 1 ]]; then
@@ -149,12 +165,12 @@ pin_image_env EXTENSIONS_SELF_IMAGE "$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST"
 release_job_update "$JOB_ID" deploying_extensions "Switching extensions to $EXTENSIONS_DIGEST" '{}'
 SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \
   docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" up -d --pull never --no-deps --force-recreate extensions-self >> "$LOG" 2>&1
-docker inspect --format '{{.State.Health.Status}}' extensions-self | grep -q healthy
+wait_container_healthy extensions-self
 
 release_job_update "$JOB_ID" deploying_main "Switching main application to $MAIN_DIGEST" '{}'
 SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \
   docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" up -d --pull never --no-deps --force-recreate sub2api >> "$LOG" 2>&1
-docker inspect --format '{{.State.Health.Status}}' sub2api | grep -q healthy
+wait_container_healthy sub2api
 
 release_job_update "$JOB_ID" health_checking 'Checking internal, public, admin, extension, and data-quality health' '{}'
 docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" ps --status running >/dev/null

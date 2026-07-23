@@ -101,6 +101,10 @@ Assert-NotMatches $apply 'up[^\r\n]*risk-control-postgres|(?:rm|down)[^\r\n]*ris
 Assert-Before $apply 'deploying_extensions' 'deploying_main' 'apply deploys extensions before the main application'
 Assert-Before $apply 'SOURCE_HEAD=' 'merge --ff-only' 'apply must snapshot the production source before advancing it'
 Assert-Before $apply 'status --porcelain' 'merge --ff-only' 'apply must reject a dirty production worktree before advancing it'
+Assert-Matches $apply 'HEALTH_WAIT_TIMEOUT_SECONDS' 'apply health waits must be bounded'
+Assert-Matches $apply 'wait_container_healthy extensions-self' 'apply must wait for extensions health before switching the main application'
+Assert-Matches $apply 'wait_container_healthy sub2api' 'apply must wait for main application health before reporting success'
+Assert-NotMatches $apply 'docker inspect --format ''\{\{\.State\.Health\.Status\}\}'' (?:extensions-self|sub2api) \| grep -q healthy' 'apply must not treat an initial starting health state as failure'
 
 Assert-Matches $publisher 'deprecated' 'publisher is a fail-closed compatibility shim'
 Assert-Matches $publisher 'exit 64' 'publisher rejects direct invocation'
