@@ -131,7 +131,7 @@ for source_path in "$NGINX_VHOST" "$ORIGIN_CERT" "$ORIGIN_KEY"; do
     cp -p "$source_path" "$BACKUP_DIR/$(basename "$source_path")"
   fi
 done
-docker inspect sub2api sub2api-postgres redis risk-control-postgres extensions-self > "$BACKUP_DIR/container-metadata.json" 2>/dev/null \
+docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self > "$BACKUP_DIR/container-metadata.json" 2>/dev/null \
   || fail_prepare 'container metadata backup failed' CONTAINER_METADATA_FAILED
 docker image ls --digests --no-trunc > "$BACKUP_DIR/image-metadata.txt" || fail_prepare 'image metadata backup failed' IMAGE_METADATA_FAILED
 if [[ -r "$PRODUCTION_RELEASE_STATE_FILE" ]]; then
