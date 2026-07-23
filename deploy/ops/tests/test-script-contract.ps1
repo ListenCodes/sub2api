@@ -49,6 +49,10 @@ $state = Read-RepoFile 'deploy\ops\release-state.sh'
 $imageVerifier = Read-RepoFile 'deploy\ops\verify-release-images.sh'
 $actionsWaiter = Read-RepoFile 'deploy\ops\wait-for-actions.sh'
 
+foreach ($executor in @($prepare, $apply, $common)) {
+    Assert-Matches $executor 'SUB2API_ENV_FILE:-\$REPO/deploy/\.env' 'release executors must default to the production deploy/.env path'
+}
+
 # Stable Release integration is exact, isolated, and preparation-only.
 Assert-Matches $sync 'resolve-stable-release\.sh' 'sync resolves the latest official stable Release'
 Assert-Matches $sync '\[\[\s+"\$BRANCH"\s+==\s+custom-release\s+\]\]' 'sync rejects non-production branches'
