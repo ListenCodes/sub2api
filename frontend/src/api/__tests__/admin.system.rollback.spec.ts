@@ -36,30 +36,18 @@ describe('admin system rollback API', () => {
     expect(result.versions).toEqual(versions)
   })
 
-  it('rollback posts the target version in the request body', async () => {
+  it('legacy official binary rollback remains callable only as the Stable fail-closed contract', async () => {
     post.mockResolvedValue({ data: { message: 'ok', need_restart: true } })
-
     const result = await rollback('0.1.146')
-
-    expect(post).toHaveBeenCalledWith(
-      '/admin/system/rollback',
-      { version: '0.1.146' },
-      {
-        headers: { 'Idempotency-Key': expect.any(String) },
-        timeout: 15 * 60 * 1000
-      }
-    )
+    expect(post).toHaveBeenCalledWith('/admin/system/rollback', { version: '0.1.146' }, { timeout: 15 * 60 * 1000 })
     expect(result.need_restart).toBe(true)
   })
 
-  it('rollback without a version posts no body (legacy backup rollback)', async () => {
+  it('legacy backup rollback keeps the Stable request shape', async () => {
     post.mockResolvedValue({ data: { message: 'ok', need_restart: true } })
 
     await rollback()
 
-    expect(post).toHaveBeenCalledWith('/admin/system/rollback', undefined, {
-      headers: { 'Idempotency-Key': expect.any(String) },
-      timeout: 15 * 60 * 1000
-    })
+    expect(post).toHaveBeenCalledWith('/admin/system/rollback', undefined, { timeout: 15 * 60 * 1000 })
   })
 })
