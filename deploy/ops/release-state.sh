@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 
 SUB2API_DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
-RELEASE_JOBS_DIR="${SUB2API_RELEASE_JOBS_DIR:-$SUB2API_DATA_DIR/release-jobs}"
+RELEASE_LEDGER_ROOT="${SUB2API_RELEASE_LEDGER_ROOT:-$SUB2API_DATA_DIR/release-ledger}"
+RELEASE_OPERATIONS_DIR="${SUB2API_RELEASE_OPERATIONS_DIR:-$RELEASE_LEDGER_ROOT/operations}"
+LEGACY_RELEASE_JOBS_DIR="${SUB2API_LEGACY_RELEASE_JOBS_DIR:-$SUB2API_DATA_DIR/release-jobs}"
+RELEASE_JOBS_DIR="$RELEASE_OPERATIONS_DIR"
 CURRENT_RELEASE_JOB_FILE="${SUB2API_CURRENT_RELEASE_JOB_FILE:-$SUB2API_DATA_DIR/release-current-job-id}"
 PRODUCTION_RELEASE_STATE_FILE="${SUB2API_RELEASE_STATE_FILE:-$SUB2API_DATA_DIR/release-state.json}"
 
 release_valid_job_id() {
-  [[ "${1:-}" =~ ^update-[A-Za-z0-9-]{1,121}$ ]]
+  [[ "${1:-}" =~ ^(update|rollback)-[A-Za-z0-9-]{1,121}$ ]]
 }
 
 release_valid_status() {
   case "${1:-}" in
-    checking_updates|checking_release|validating_tag|merging_release|waiting_actions|waiting_images|downloading_images|preparing_compose|promoting_release|backing_up|validating_backup|prepared|apply_queued|deploying_extensions|deploying_main|health_checking|rolling_back|success|failed|conflict|expired|drifted)
+    checking_updates|checking_release|validating_tag|merging_release|waiting_actions|waiting_images|downloading_images|preparing_compose|promoting_release|resolving_target|resolving_snapshot|verifying_snapshot|verifying_images|rendering_compose|backing_up|validating_backup|prepared|apply_queued|validating_manifest|deploying_extensions|deploying_main|switching_extensions|switching_main|health_checking|rolling_back|success|failed|conflict|expired|drifted|failed_rolled_back|rollback_failed)
       return 0
       ;;
     *)
@@ -22,7 +25,7 @@ release_valid_status() {
 
 release_terminal_status() {
   case "${1:-}" in
-    success|failed|conflict|expired|drifted) return 0 ;;
+    success|failed|conflict|expired|drifted|failed_rolled_back|rollback_failed) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -32,17 +35,28 @@ release_atomic_write() {
   local content="$2"
   local directory temporary
   directory="$(dirname "$path")"
-  mkdir -p "$directory"
-  temporary="$(mktemp "$directory/.release-state.XXXXXX")"
-  printf '%s\n' "$content" > "$temporary"
-  chmod 0644 "$temporary"
-  mv -f "$temporary" "$path"
+  mkdir -p "$directory" || return 1
+  temporary="$(mktemp "$directory/.release-state.XXXXXX")" || return 1
+  printf '%s\n' "$content" > "$temporary" || { rm -f "$temporary"; return 1; }
+  chmod 0644 "$temporary" || { rm -f "$temporary"; return 1; }
+  (sync -f "$temporary" 2>/dev/null || sync) || { rm -f "$temporary"; return 1; }
+  if ! mv -f "$temporary" "$path"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  sync -f "$directory" 2>/dev/null || sync
 }
 
 release_job_path() {
   local job_id="$1"
   release_valid_job_id "$job_id" || return 1
   printf '%s/%s.json\n' "$RELEASE_JOBS_DIR" "$job_id"
+}
+
+release_legacy_job_path() {
+  local job_id="$1"
+  release_valid_job_id "$job_id" || return 1
+  printf '%s/%s.json\n' "$LEGACY_RELEASE_JOBS_DIR" "$job_id"
 }
 
 release_current_job_id() {
@@ -54,15 +68,18 @@ release_current_job_id() {
 
 release_job_init() {
   local job_id="$1"
-  local now job_path payload
+  local now job_path payload operation_kind
   release_valid_job_id "$job_id" || return 1
+  operation_kind="${job_id%%-*}"
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   job_path="$(release_job_path "$job_id")"
   payload="$(jq -n \
     --arg job_id "$job_id" \
+    --arg operation_kind "$operation_kind" \
     --arg now "$now" \
     '{
       job_id:$job_id,
+      operation_kind:$operation_kind,
       action:"",
       status:"checking_updates",
       message:"release job queued",
@@ -141,8 +158,15 @@ release_job_update() {
 
 release_job_read() {
   local job_id="$1"
-  local job_path
+  local job_path legacy_path
   job_path="$(release_job_path "$job_id")" || return 1
+  if [[ ! -r "$job_path" ]]; then
+    legacy_path="$(release_legacy_job_path "$job_id")" || return 1
+    if [[ -e "$legacy_path" ]]; then
+      printf 'LEGACY_SINGLE_PHASE_UNSUPPORTED: legacy release job cannot be resumed\n' >&2
+    fi
+    return 1
+  fi
   jq -e . "$job_path"
 }
 

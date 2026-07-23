@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -271,13 +272,16 @@ func writeUpdateStatus(path string, job *UpdateJob) error {
 	if _, err := tmp.Write(raw); err != nil {
 		return fmt.Errorf("write temporary update status: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary update status: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary update status: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace update status: %w", err)
 	}
-	return nil
+	return syncReleaseDirectory(path)
 }
 
 func isValidReleaseOperationKind(kind string) bool {
@@ -306,8 +310,11 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 			return nil, ErrUpdateJobNotFound
 		}
 	}
-	path, err := updateJobPath(customReleaseJobsDir(), jobID)
+	path, err := customReleaseOperationPath(jobID)
 	if err != nil {
+		if errors.Is(err, ErrLegacySinglePhase) {
+			return nil, ErrLegacySinglePhase
+		}
 		return nil, ErrUpdateJobNotFound
 	}
 	return readUpdateStatus(path, jobID)
@@ -318,7 +325,7 @@ func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt
 }
 
 func setCustomReleaseStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
-	path, err := updateJobPath(customReleaseJobsDir(), jobID)
+	path, err := customReleaseOperationPath(jobID)
 	if err != nil {
 		return err
 	}
@@ -376,11 +383,29 @@ func writeCurrentUpdateJobID(path, jobID string) error {
 	if _, err := tmp.WriteString(jobID + "\n"); err != nil {
 		return fmt.Errorf("write temporary current update job id: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary current update job id: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary current update job id: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace current update job id: %w", err)
+	}
+	return syncReleaseDirectory(path)
+}
+
+func syncReleaseDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open release state directory: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync release state directory: %w", err)
 	}
 	return nil
 }

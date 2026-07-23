@@ -96,7 +96,33 @@ func customReleaseScriptPath() string {
 }
 
 func customReleaseJobsDir() string {
-	return customReleaseEnv("SUB2API_RELEASE_JOBS_DIR", defaultUpdateJobsDir)
+	return customReleaseEnv("SUB2API_RELEASE_OPERATIONS_DIR", filepath.Join(customReleaseLedgerRoot(), "operations"))
+}
+
+func customReleaseLegacyJobsDir() string {
+	return customReleaseEnv("SUB2API_LEGACY_RELEASE_JOBS_DIR", defaultUpdateJobsDir)
+}
+
+func customReleaseOperationPath(jobID string) (string, error) {
+	operationPath, err := updateJobPath(customReleaseJobsDir(), jobID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(operationPath); err == nil {
+		return operationPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	legacyPath, err := updateJobPath(customReleaseLegacyJobsDir(), jobID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(legacyPath); err == nil {
+		return "", ErrLegacySinglePhase
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return operationPath, nil
 }
 
 func customReleaseJobIDPath() string {
@@ -111,6 +137,14 @@ func customReleaseLedgerRoot() string {
 	return customReleaseEnv("SUB2API_RELEASE_LEDGER_ROOT", defaultReleaseLedgerRoot)
 }
 
+func customReleaseBackupRoot() string {
+	return customReleaseEnv("SUB2API_RELEASE_BACKUP_ROOT", filepath.Join(filepath.Dir(customReleaseLedgerRoot()), "release-backups"))
+}
+
+func newCustomReleaseLedgerStore() *releaseLedgerStore {
+	return newReleaseLedgerStoreWithArtifactRoot(customReleaseLedgerRoot(), customReleaseBackupRoot())
+}
+
 func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*CustomReleaseInfo, error) {
 	_ = force
 	info := &CustomReleaseInfo{
@@ -120,7 +154,7 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 		UpdateKind:     UpdateKindNone,
 	}
 	warnings := make([]string, 0, 3)
-	ledger := newReleaseLedgerStore(customReleaseLedgerRoot())
+	ledger := newCustomReleaseLedgerStore()
 	state, stateErr := ledger.ReadState()
 	var current *ReleaseRecord
 	if stateErr != nil {
@@ -252,14 +286,14 @@ func (s *UpdateService) CurrentRelease(ctx context.Context) (*ReleaseRecord, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return newReleaseLedgerStore(customReleaseLedgerRoot()).CurrentRelease()
+	return newCustomReleaseLedgerStore().CurrentRelease()
 }
 
 func (s *UpdateService) ListRollbackReleases(ctx context.Context) ([]ReleaseRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return newReleaseLedgerStore(customReleaseLedgerRoot()).ListRollbackReleases(3)
+	return newCustomReleaseLedgerStore().ListRollbackReleases(3)
 }
 
 func (s *UpdateService) PrepareRollback(ctx context.Context, releaseID string) (*UpdateJob, error) {
@@ -294,8 +328,11 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 		if currentID == "" {
 			return nil, ErrReleaseOperationInconsistent
 		}
-		currentPath, pathErr := updateJobPath(jobsDir, currentID)
+		currentPath, pathErr := customReleaseOperationPath(currentID)
 		if pathErr != nil {
+			if errors.Is(pathErr, ErrLegacySinglePhase) {
+				return nil, ErrLegacySinglePhase
+			}
 			return nil, ErrReleaseOperationInconsistent.WithCause(pathErr)
 		}
 		existing, statusErr := readUpdateStatus(currentPath, currentID)
@@ -360,7 +397,7 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 }
 
 func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, targetReleaseID string) (*UpdateJob, error) {
-	ledger := newReleaseLedgerStore(customReleaseLedgerRoot())
+	ledger := newCustomReleaseLedgerStore()
 	state, err := ledger.ReadState()
 	if err != nil {
 		return nil, err
@@ -437,8 +474,11 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 	if strings.TrimSpace(string(currentID)) != jobID {
 		return nil, ErrUpdateInProgress
 	}
-	jobPath, err := updateJobPath(customReleaseJobsDir(), jobID)
+	jobPath, err := customReleaseOperationPath(jobID)
 	if err != nil {
+		if errors.Is(err, ErrLegacySinglePhase) {
+			return nil, ErrLegacySinglePhase
+		}
 		return nil, ErrUpdateJobNotFound
 	}
 	job, err := readUpdateStatus(jobPath, jobID)

@@ -52,15 +52,18 @@ func TestReleaseOperationRejectsLegacyRecordWithoutKind(t *testing.T) {
 
 func TestReleaseOperationPrepareDoesNotTriggerOverLegacyCurrentJob(t *testing.T) {
 	root := t.TempDir()
-	jobsDir := filepath.Join(root, "release-jobs")
+	operationsDir := filepath.Join(root, "release-ledger", "operations")
+	legacyJobsDir := filepath.Join(root, "release-jobs")
 	jobIDPath := filepath.Join(root, "release-current-job-id")
 	scriptPath := filepath.Join(root, "sync-trigger.sh")
-	require.NoError(t, os.MkdirAll(jobsDir, 0755))
+	require.NoError(t, os.MkdirAll(operationsDir, 0755))
+	require.NoError(t, os.MkdirAll(legacyJobsDir, 0755))
 	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755))
 	require.NoError(t, os.WriteFile(jobIDPath, []byte("update-legacy\n"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(jobsDir, "update-legacy.json"), []byte(`{"job_id":"update-legacy","action":"prepare","status":"prepared","message":"legacy"}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyJobsDir, "update-legacy.json"), []byte(`{"job_id":"update-legacy","action":"prepare","status":"prepared","message":"legacy"}`), 0644))
 	t.Setenv("SUB2API_RELEASE_SCRIPT_PATH", scriptPath)
-	t.Setenv("SUB2API_RELEASE_JOBS_DIR", jobsDir)
+	t.Setenv("SUB2API_RELEASE_OPERATIONS_DIR", operationsDir)
+	t.Setenv("SUB2API_LEGACY_RELEASE_JOBS_DIR", legacyJobsDir)
 	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", jobIDPath)
 
 	starts := 0
@@ -73,6 +76,7 @@ func TestReleaseOperationPrepareDoesNotTriggerOverLegacyCurrentJob(t *testing.T)
 
 	_, err := NewUpdateService(nil, nil, "0.1.163", "release").PrepareUpdate(context.Background())
 	require.ErrorIs(t, err, ErrLegacySinglePhase)
+	require.Equal(t, "LEGACY_SINGLE_PHASE_UNSUPPORTED", infraerrors.Reason(err))
 	require.Zero(t, starts)
 }
 
@@ -85,13 +89,14 @@ func TestUpdateServicePrepareUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
 	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
 	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	t.Setenv("SUB2API_RELEASE_BACKUP_ROOT", filepath.Join(ledgerRoot, "artifacts"))
 	svc := NewUpdateService(&updateServiceCacheStub{}, &customReleaseGitHubClientStub{
 		release:    &GitHubRelease{TagName: "v0.1.164", Name: "v0.1.164"},
 		customHead: &GitRef{SHA: current.CustomCommit},
 		tagCommits: map[string]string{"v0.1.164": strings.Repeat("c", 40)},
 	}, "0.1.163", "source")
 	t.Setenv("SUB2API_RELEASE_SCRIPT_PATH", scriptPath)
-	t.Setenv("SUB2API_RELEASE_JOBS_DIR", filepath.Join(tmpDir, "release-jobs"))
+	t.Setenv("SUB2API_RELEASE_OPERATIONS_DIR", filepath.Join(tmpDir, "release-ledger", "operations"))
 	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", filepath.Join(tmpDir, "release-current-job-id"))
 	previousStart := customReleaseStartScript
 	customReleaseStartScript = func(string, string, string) (func() error, error) {
@@ -261,9 +266,9 @@ func TestReadUpdateStatusIncludesPreparedManifestMetadata(t *testing.T) {
 func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	svc := NewUpdateService(nil, nil, "0.1.132", "source")
-	jobsDir := filepath.Join(tmpDir, "release-jobs")
+	jobsDir := filepath.Join(tmpDir, "release-ledger", "operations")
 	jobIDPath := filepath.Join(tmpDir, "release-current-job-id")
-	t.Setenv("SUB2API_RELEASE_JOBS_DIR", jobsDir)
+	t.Setenv("SUB2API_RELEASE_OPERATIONS_DIR", jobsDir)
 	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", jobIDPath)
 	require.NoError(t, os.MkdirAll(jobsDir, 0755))
 	require.NoError(t, os.WriteFile(jobIDPath, []byte("update-current\n"), 0644))
@@ -284,8 +289,8 @@ func TestUpdateServiceGetUpdateStatusUsesCurrentJobWhenIDIsEmpty(t *testing.T) {
 func TestUpdateServiceGetUpdateStatusReadsSpecificDurableJob(t *testing.T) {
 	tmpDir := t.TempDir()
 	svc := NewUpdateService(nil, nil, "0.1.132", "source")
-	jobsDir := filepath.Join(tmpDir, "release-jobs")
-	t.Setenv("SUB2API_RELEASE_JOBS_DIR", jobsDir)
+	jobsDir := filepath.Join(tmpDir, "release-ledger", "operations")
+	t.Setenv("SUB2API_RELEASE_OPERATIONS_DIR", jobsDir)
 	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", filepath.Join(tmpDir, "release-current-job-id"))
 	require.NoError(t, os.MkdirAll(jobsDir, 0755))
 	require.NoError(t, writeUpdateStatus(filepath.Join(jobsDir, "update-old.json"), &UpdateJob{

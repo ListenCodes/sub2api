@@ -46,6 +46,9 @@ $trigger = Read-RepoFile 'deploy\ops\sync-trigger.sh'
 $promoter = Read-RepoFile 'deploy\ops\promote-release.sh'
 $publisher = Read-RepoFile 'deploy\ops\publish-custom.sh'
 $state = Read-RepoFile 'deploy\ops\release-state.sh'
+$updateJob = Read-RepoFile 'backend\internal\service\update_job.go'
+$ledger = Read-RepoFile 'deploy\ops\release-ledger.sh'
+$ledgerMigration = Read-RepoFile 'deploy\ops\migrate-release-ledger.sh'
 $imageVerifier = Read-RepoFile 'deploy\ops\verify-release-images.sh'
 $actionsWaiter = Read-RepoFile 'deploy\ops\wait-for-actions.sh'
 
@@ -134,6 +137,23 @@ foreach ($status in @(
 }
 Assert-Matches $actionsWaiter 'EXPECTED_CHECKS' 'Actions waiter requires the complete validation suite'
 Assert-Matches $actionsWaiter 'TIMEOUT_SECONDS' 'Actions waiter has a bounded long-running wait'
+
+foreach ($marker in @('ledger_state_path', 'ledger_release_path', 'ledger_operation_path', 'ledger_validate_state', 'ledger_validate_release', 'ledger_atomic_write', 'ledger_create_release')) {
+    Assert-Matches $ledger ([regex]::Escape($marker)) "release ledger helper is missing $marker"
+}
+Assert-Matches $ledger 'ln\s+"\$temporary"\s+"\$path"' 'immutable records must use atomic hard-link creation'
+Assert-Matches $ledger 'flock\s+-x' 'ledger mutations must acquire an exclusive release-ledger lock'
+Assert-Matches $ledger '/var/lock/sub2api-release\.lock' 'ledger mutations must share the production release lock outside the ledger root'
+Assert-Matches $state 'release-ledger[/\\]operations|RELEASE_OPERATIONS_DIR' 'new operations must live under the release ledger'
+Assert-Matches $state 'LEGACY_SINGLE_PHASE_UNSUPPORTED' 'legacy release-jobs must fail closed with an explicit error'
+Assert-Matches $state 'sync\s+-f' 'operation writes must fsync before and after rename'
+Assert-Matches $state 'rm\s+-f\s+"\$temporary"' 'operation writes must remove a failed temporary file'
+Assert-Matches $updateJob '\.Sync\(\)' 'Go operation and current-pointer writes must be crash durable'
+Assert-NotMatches $ledger 'cat[^\r\n]*\.env|source[^\r\n]*\.env' 'ledger helper must not read environment contents'
+foreach ($marker in @('aa2d24106cab0a03785330d8e0ff4e02b0474a0e', 'v0.1.163', 'v1.0.0', 'after_release_record', 'after_projection')) {
+    Assert-Matches $ledgerMigration ([regex]::Escape($marker)) "ledger migration is missing $marker"
+}
+Assert-NotMatches $ledgerMigration 'compose[^\r\n]*\b(?:up|down|restart|stop|kill)\b|docker\s+pull|pg_restore|git\s+(?:reset|merge|rebase)' 'ledger migration must not mutate production runtime or source'
 
 # The application helper only creates an atomic trigger and returns.
 Assert-Matches $trigger 'release-trigger' 'container helper writes the systemd path trigger'
