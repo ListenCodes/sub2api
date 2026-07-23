@@ -15,6 +15,7 @@ import (
 
 const (
 	defaultProductionReleaseStatePath = "/app/data/release-state.json"
+	defaultReleaseLedgerRoot          = "/app/data/release-ledger"
 	githubCustomRepo                  = "ListenCodes/sub2api"
 
 	UpdateKindNone     = "none"
@@ -94,6 +95,10 @@ func customReleaseJobIDPath() string {
 
 func customReleaseStatePath() string {
 	return customReleaseEnv("SUB2API_PRODUCTION_RELEASE_STATE_PATH", defaultProductionReleaseStatePath)
+}
+
+func customReleaseLedgerRoot() string {
+	return customReleaseEnv("SUB2API_RELEASE_LEDGER_ROOT", defaultReleaseLedgerRoot)
 }
 
 func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*CustomReleaseInfo, error) {
