@@ -30,6 +30,16 @@ release_terminal_status() {
   esac
 }
 
+release_reconcile_active_operation() {
+  local job_id="$1" status="$2" state_path="$RELEASE_LEDGER_ROOT/state.json" state
+  release_terminal_status "$status" || return 0
+  [[ -r "$state_path" ]] || return 0
+  state="$(cat "$state_path")" || return 1
+  [[ "$(jq -r '.active_operation_id // empty' <<< "$state")" == "$job_id" ]] || return 0
+  state="$(jq --arg now "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '.active_operation_id=null | .updated_at=$now' <<< "$state")" || return 1
+  release_atomic_write "$state_path" "$state"
+}
+
 release_atomic_write() {
   local path="$1"
   local content="$2"

@@ -76,7 +76,8 @@ Assert-NotMatches $sync 'docker\s+(build|compose\s+up)' 'sync never builds or de
 # The host orchestrator owns only locking, action dispatch, and one-at-a-time trigger consumption.
 foreach ($marker in @(
     'release-trigger', 'flock -n', 'prepare-release.sh', 'apply-release.sh',
-    'ACTION', 'LEGACY_SINGLE_PHASE_UNSUPPORTED'
+    'prepare-rollback.sh', 'apply-rollback.sh', 'operation_kind', 'ACTION',
+    'LEGACY_SINGLE_PHASE_UNSUPPORTED'
 )) {
     Assert-Matches $orchestrator ([regex]::Escape($marker)) "orchestrator is missing $marker"
 }

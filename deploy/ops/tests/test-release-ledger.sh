@@ -200,6 +200,14 @@ jq --arg release_id "$target_id" --arg official v0.1.162 --arg official_commit "
   "$current_record" > "$target_record"
 jq '.custom_version_high_water=4 | .active_operation_id="rollback-ledger-test"' "$rollback_state" > "$rollback_state.tmp"
 mv "$rollback_state.tmp" "$rollback_state"
+mkdir -p "$rollback_root/data/release-ledger/operations"
+jq -n --arg base "$current_id" --arg target "$target_id" --arg commit "$(jq -r '.custom_commit' "$target_record")" \
+  --arg main "$(jq -r '.main_digest' "$target_record")" --arg ext "$(jq -r '.extensions_digest' "$target_record")" \
+  '{job_id:"rollback-ledger-test",operation_kind:"rollback",action:"apply",status:"health_checking",
+    base_release_id:$base,target_release_id:$target,base_custom_high_water:4,advances_custom_version:false,
+    target_official_version:"v0.1.162",target_custom_version:"v1.0.2",target_commit:$commit,
+    main_digest:$main,extensions_digest:$ext,backup_dir:"/fixture/rollback"}' \
+  > "$rollback_root/data/release-ledger/operations/rollback-ledger-test.json"
 target_hash_before="$(sha256sum "$target_record")"
 release_count_before="$(find "$rollback_root/data/release-ledger/releases" -maxdepth 1 -type f | wc -l | tr -d ' ')"
 flock_log="$rollback_root/flock.log"

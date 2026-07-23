@@ -141,11 +141,11 @@ test('prepare validates evidence and apply deploys and rolls back an immutable i
     'main_digest',
     'extensions_digest',
     'verify-release-images.sh',
-    'release-state.json',
+    'release-ledger',
     'release_job_update',
     'backing_up',
-    'deploying_extensions',
-    'deploying_main',
+    'switching_extensions',
+    'switching_main',
     'health_checking',
     'rolling_back',
     'rollback_on_error'
@@ -159,13 +159,21 @@ test('prepare validates evidence and apply deploys and rolls back an immutable i
 
   const verifyIndex = publisher.indexOf('VERIFY_IMAGES_SCRIPT')
   const backupIndex = publisher.indexOf('backing_up')
-  const extensionsIndex = publisher.indexOf('deploying_extensions')
-  const mainIndex = publisher.indexOf('deploying_main')
-  const healthIndex = publisher.indexOf('health_checking')
+  const extensionsIndex = publisher.indexOf('switching_extensions')
+  const mainIndex = publisher.indexOf('switching_main')
+  const healthIndex = publisher.lastIndexOf('health_checking')
   assert.ok(verifyIndex >= 0 && verifyIndex < backupIndex)
   assert.ok(backupIndex < extensionsIndex)
   assert.ok(extensionsIndex < mainIndex)
   assert.ok(mainIndex < healthIndex)
+})
+
+test('dispatcher selects all two-stage update and rollback executors from ledger operations', () => {
+  const dispatcher = read('deploy/ops/sync-and-publish.sh')
+  for (const marker of ['prepare-release.sh', 'apply-release.sh', 'prepare-rollback.sh', 'apply-rollback.sh', 'operation_kind']) {
+    assert.match(dispatcher, new RegExp(marker.replaceAll('.', '\\.')), `dispatcher is missing ${marker}`)
+  }
+  assert.doesNotMatch(dispatcher, /publish-custom\.sh/, 'dispatcher must not invoke the legacy publisher')
 })
 
 test('release documentation defines only the administrator-triggered digest path', () => {
