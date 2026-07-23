@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,14 +81,15 @@ func TestUpdateServicePrepareUpdateReturnsJobBeforeScriptCompletes(t *testing.T)
 	scriptPath := filepath.Join(tmpDir, "sync-upstream.sh")
 	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 2\n"), 0755))
 
-	svc := NewUpdateService(
-		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{
-			release: &GitHubRelease{TagName: "v0.1.133", Name: "v0.1.133"},
-		},
-		"0.1.132",
-		"source",
-	)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	svc := NewUpdateService(&updateServiceCacheStub{}, &customReleaseGitHubClientStub{
+		release:    &GitHubRelease{TagName: "v0.1.164", Name: "v0.1.164"},
+		customHead: &GitRef{SHA: current.CustomCommit},
+		tagCommits: map[string]string{"v0.1.164": strings.Repeat("c", 40)},
+	}, "0.1.163", "source")
 	t.Setenv("SUB2API_RELEASE_SCRIPT_PATH", scriptPath)
 	t.Setenv("SUB2API_RELEASE_JOBS_DIR", filepath.Join(tmpDir, "release-jobs"))
 	t.Setenv("SUB2API_RELEASE_JOB_ID_PATH", filepath.Join(tmpDir, "release-current-job-id"))

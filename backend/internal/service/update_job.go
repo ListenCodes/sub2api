@@ -341,7 +341,7 @@ func setCustomReleaseStatus(jobID, status, message string, startedAt, finishedAt
 
 func updateJobPath(jobsDir, jobID string) (string, error) {
 	jobID = strings.TrimSpace(jobID)
-	if !strings.HasPrefix(jobID, "update-") || len(jobID) > 128 {
+	if (!strings.HasPrefix(jobID, "update-") && !strings.HasPrefix(jobID, "rollback-")) || len(jobID) > 128 {
 		return "", fmt.Errorf("invalid update job id")
 	}
 	for _, char := range jobID {

@@ -169,7 +169,16 @@ func TestUpdateServiceCheckUpdateFailsClosedWithoutLedger(t *testing.T) {
 
 func TestCustomReleasePrepareAndApplyUseTheSameDurableJob(t *testing.T) {
 	temporary := configureCustomReleaseTestRuntime(t)
-	svc := NewUpdateService(nil, &customReleaseGitHubClientStub{}, "0.1.163", "release")
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	client := &customReleaseGitHubClientStub{
+		release:    &GitHubRelease{TagName: "v0.1.164"},
+		customHead: &GitRef{SHA: current.CustomCommit},
+		tagCommits: map[string]string{"v0.1.164": strings.Repeat("c", 40)},
+	}
+	svc := NewUpdateService(nil, client, "0.1.163", "release")
 
 	job, err := svc.PrepareUpdate(context.Background())
 	require.NoError(t, err)
@@ -188,4 +197,128 @@ func TestCustomReleasePrepareAndApplyUseTheSameDurableJob(t *testing.T) {
 	require.Equal(t, job.JobID, applied.JobID)
 	require.Equal(t, UpdateActionApply, applied.Action)
 	require.Equal(t, UpdateStatusApplyQueued, applied.Status)
+}
+
+func TestCustomReleaseRollbackPrepareAndApplyUseCompleteSnapshot(t *testing.T) {
+	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current, target)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+
+	currentResult, err := svc.CurrentRelease(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, current.ReleaseID, currentResult.ReleaseID)
+	rollbackReleases, err := svc.ListRollbackReleases(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []ReleaseRecord{target}, rollbackReleases)
+
+	job, err := svc.PrepareRollback(context.Background(), target.ReleaseID)
+	require.NoError(t, err)
+	require.Equal(t, ReleaseOperationRollback, job.OperationKind)
+	require.Equal(t, ReleasePhasePrepare, job.Action)
+	require.Equal(t, ReleaseStatusResolvingSnapshot, job.Status)
+	require.Equal(t, current.ReleaseID, job.BaseReleaseID)
+	require.Equal(t, target.ReleaseID, job.TargetReleaseID)
+
+	preparedAt := time.Now().UTC()
+	job.Status = ReleaseStatusPrepared
+	job.PreparedAt = preparedAt.Format(time.RFC3339)
+	job.ExpiresAt = preparedAt.Add(15 * time.Minute).Format(time.RFC3339)
+	require.NoError(t, writeUpdateStatus(filepath.Join(runtimeRoot, "release-jobs", job.JobID+".json"), job))
+
+	applied, err := svc.ApplyRollback(context.Background(), job.JobID)
+	require.NoError(t, err)
+	require.Equal(t, job.JobID, applied.JobID)
+	require.Equal(t, ReleasePhaseApply, applied.Action)
+	require.Equal(t, ReleaseStatusApplyQueued, applied.Status)
+}
+
+func TestCustomReleasePrepareIsIdempotentForSameOperationAndRejectsDifferentTarget(t *testing.T) {
+	configureCustomReleaseTestRuntime(t)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
+	other := releaseLedgerTestRecord(ledgerRoot, "release-v102", 2, "2026-07-21T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current, target, other)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+
+	first, err := svc.PrepareRollback(context.Background(), target.ReleaseID)
+	require.NoError(t, err)
+	duplicate, err := svc.PrepareRollback(context.Background(), target.ReleaseID)
+	require.NoError(t, err)
+	require.Equal(t, first.JobID, duplicate.JobID)
+	_, err = svc.PrepareRollback(context.Background(), other.ReleaseID)
+	require.ErrorIs(t, err, ErrUpdateInProgress)
+}
+
+func TestCustomReleaseRollbackApplyRejectsExpiredPreparation(t *testing.T) {
+	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current, target)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+
+	job, err := svc.PrepareRollback(context.Background(), target.ReleaseID)
+	require.NoError(t, err)
+	job.Status = ReleaseStatusPrepared
+	job.PreparedAt = time.Now().UTC().Add(-16 * time.Minute).Format(time.RFC3339)
+	job.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	path := filepath.Join(runtimeRoot, "release-jobs", job.JobID+".json")
+	require.NoError(t, writeUpdateStatus(path, job))
+
+	_, err = svc.ApplyRollback(context.Background(), job.JobID)
+	require.ErrorIs(t, err, ErrUpdateExpired)
+	expired, readErr := readUpdateStatus(path, job.JobID)
+	require.NoError(t, readErr)
+	require.Equal(t, ReleaseStatusExpired, expired.Status)
+}
+
+func TestCustomReleasePrepareRefusesNoneAndDocsOnlyUpdates(t *testing.T) {
+	tests := []struct {
+		name       string
+		customHead string
+		files      []ChangedFile
+	}{
+		{name: "none", customHead: strings.Repeat("b", 40)},
+		{name: "docs only", customHead: strings.Repeat("d", 40), files: []ChangedFile{{Filename: "docs/guide.md"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtimeRoot := configureCustomReleaseTestRuntime(t)
+			ledgerRoot := t.TempDir()
+			current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+			writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
+			t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+			client := &customReleaseGitHubClientStub{
+				release:      &GitHubRelease{TagName: current.OfficialVersion},
+				customHead:   &GitRef{SHA: test.customHead},
+				compareFiles: test.files,
+				tagCommits:   map[string]string{current.OfficialVersion: current.OfficialCommit},
+			}
+
+			_, err := NewUpdateService(nil, client, "0.1.163", "release").PrepareUpdate(context.Background())
+			require.ErrorIs(t, err, ErrNoUpdateAvailable)
+			_, statErr := os.Stat(filepath.Join(runtimeRoot, "release-current-job-id"))
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+		})
+	}
+}
+
+func TestCustomReleasePrepareRejectsCorruptCurrentOperationPointer(t *testing.T) {
+	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current, target)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	require.NoError(t, os.WriteFile(filepath.Join(runtimeRoot, "release-current-job-id"), []byte("../invalid\n"), 0644))
+
+	_, err := NewUpdateService(nil, nil, "0.1.163", "release").PrepareRollback(context.Background(), target.ReleaseID)
+	require.ErrorIs(t, err, ErrReleaseOperationInconsistent)
 }
