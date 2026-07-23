@@ -65,7 +65,7 @@ test('the extensions image contains both modules without monitor web assets', ()
 })
 
 test('the preparation phase gates enabled monitoring on source privileges and readiness', () => {
-  const publisher = read('deploy/ops/prepare-release.sh')
+  const publisher = read('deploy/ops/prepare-release.sh') + read('deploy/ops/release-common.sh')
   assert.match(publisher, /docker exec risk-control-postgres pg_dump/)
   assert.match(publisher, /risk_control_db\.dump/)
   assert.match(publisher, /pg_restore[^\n]*--list/)

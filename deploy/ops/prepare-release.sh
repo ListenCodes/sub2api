@@ -276,6 +276,8 @@ release_validate_rendered_compose "$BACKUP_DIR/target/rendered-compose.json" \
   || fail_prepare 'target Compose contract failed' COMPOSE_CONTRACT_INVALID
 
 release_job_update "$JOB_ID" backing_up 'Backing up the complete production pair' "$(jq -n --arg dir "$BACKUP_DIR" '{backup_dir:$dir}')"
+# Complete backup includes the risk database dump (docker exec risk-control-postgres pg_dump)
+# through release_create_complete_backup; rollback itself never restores databases.
 release_create_complete_backup "$BACKUP_DIR" "$JOB_ID" "$LOG" \
   || fail_prepare 'complete production backup validation failed' BACKUP_CONTRACT_FAILED
 
