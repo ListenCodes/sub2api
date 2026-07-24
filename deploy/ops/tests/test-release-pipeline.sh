@@ -87,6 +87,22 @@ run_dispatch rollback prepare checking_updates
 run_dispatch rollback apply apply_queued
 run_dispatch update prepare checking_updates stale
 
+missing_job_id='update-missing-executor'
+release_job_init "$missing_job_id"
+release_job_update "$missing_job_id" checking_updates queued '{"action":"prepare"}'
+jq -n --arg release release-dispatch-fixture \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:null,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'prepare %s\n' "$missing_job_id" > "$DISPATCH_DIR/data/release-trigger"
+if PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/missing-prepare-release.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh" >/dev/null 2>&1; then
+  fail 'dispatcher accepted a missing executor'
+fi
+assert_eq '' "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'missing executor retained the active ledger operation'
+
 if [[ "${DISPATCH_ONLY:-0}" == 1 ]]; then
   printf 'release-dispatch=PASS\n'
   exit 0

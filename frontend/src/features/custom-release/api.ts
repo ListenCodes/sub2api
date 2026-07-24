@@ -28,6 +28,8 @@ export interface VersionInfo {
   production_commit?: string
   production_stable_tag?: string
   production_stable_commit?: string
+  target_official_version?: string
+  target_custom_version?: string
   target_custom_commit?: string
   target_custom_short_sha?: string
   release_tag?: string
@@ -67,6 +69,14 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
 }
 
 export type UpdateJobStatus =
+  | 'resolving_target'
+  | 'resolving_snapshot'
+  | 'verifying_snapshot'
+  | 'verifying_images'
+  | 'rendering_compose'
+  | 'validating_manifest'
+  | 'switching_extensions'
+  | 'switching_main'
   | 'checking_updates'
   | 'checking_release'
   | 'validating_tag'
@@ -106,6 +116,8 @@ export interface UpdateJob {
   action?: UpdateAction
   status: UpdateJobStatus
   message: string
+  base_release_id?: string
+  target_release_id?: string
   integration_branch?: string
   base_commit?: string
   target_commit?: string

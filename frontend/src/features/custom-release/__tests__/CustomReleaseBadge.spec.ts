@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     releaseInfo: undefined,
     buildType: 'source',
     currentRelease: null as Record<string, unknown> | null,
+    targetOfficialVersion: '',
+    targetCustomVersion: '',
     fetchVersion: vi.fn(),
     fetchCurrentRelease: vi.fn(),
     clearVersionCache: vi.fn()
@@ -65,6 +67,8 @@ describe('VersionBadge conflict reporting', () => {
     mocks.appStore.detectionComplete = true
     mocks.appStore.updateWarning = ''
     mocks.appStore.targetCustomShortSHA = ''
+    mocks.appStore.targetOfficialVersion = ''
+    mocks.appStore.targetCustomVersion = ''
     mocks.appStore.currentRelease = {
       release_id: 'release-current',
       official_version: 'v0.1.164',
@@ -161,6 +165,7 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).toContain('version.updatePublished')
     expect(wrapper.text()).toContain('v0.1.158')
     expect(wrapper.text()).toContain('commit 26abd19a2812')
+    expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(2)
 
     wrapper.unmount()
   })
@@ -198,6 +203,49 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).not.toContain('version.updatePublished')
     expect(wrapper.text()).not.toContain('PUBLISH OK')
 
+    wrapper.unmount()
+  })
+
+  it('settles automatic restoration terminal states instead of polling to timeout', async () => {
+    mocks.prepareUpdate.mockResolvedValue({ job_id: 'update-auto-restored' })
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-auto-restored',
+      operation_kind: 'update',
+      action: 'apply',
+      status: 'failed_rolled_back',
+      message: 'deployment failed; previous release restored',
+      need_restart: false,
+      rollback: { attempted: true, succeeded: true, message: 'automatic restoration succeeded' }
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+    const updateButton = wrapper.findAll('button').find((button) => button.text().includes('version.updateNow'))
+    await updateButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('deployment failed; previous release restored')
+    expect(wrapper.text()).toContain('automatic restoration succeeded')
+    expect(localStorage.getItem('sub2api-release-job-id')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('shows the proposed official and custom version pair', async () => {
+    mocks.appStore.targetOfficialVersion = 'v0.1.165'
+    mocks.appStore.targetCustomVersion = 'v1.0.6'
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="target-version-pair"]').text()).toContain('v0.1.165')
+    expect(wrapper.get('[data-testid="target-version-pair"]').text()).toContain('v1.0.6')
     wrapper.unmount()
   })
 

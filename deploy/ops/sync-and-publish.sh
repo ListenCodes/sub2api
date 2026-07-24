@@ -126,11 +126,11 @@ if [[ "$ACTION" == apply ]]; then
       exit 1
     }
 fi
+[[ -x "$EXECUTOR" ]] || { release_job_update "$JOB_ID" failed 'Release executor is missing' '{"error_code":"RELEASE_EXECUTOR_MISSING"}'; exit 1; }
 if ! ledger_set_active_operation "$JOB_ID"; then
   release_job_update "$JOB_ID" failed 'Another release operation owns the ledger' \
     '{"error_code":"OPERATION_IN_PROGRESS","published":false,"production_changed":false}' || true
   exit 1
 fi
-[[ -x "$EXECUTOR" ]] || { release_job_update "$JOB_ID" failed 'Release executor is missing' '{"error_code":"RELEASE_EXECUTOR_MISSING"}'; exit 1; }
 log "Starting $OPERATION_KIND $ACTION phase for administrator job $JOB_ID"
 "$EXECUTOR" --job-id "$JOB_ID"

@@ -61,6 +61,7 @@ describe('ReleaseRollbackPanel', () => {
       status: 'prepared' as const,
       message: 'prepared',
       need_restart: false,
+      target_release_id: target.release_id,
       expires_at: '2026-07-24T00:01:00Z'
     }
     const wrapper = mount(ReleaseRollbackPanel, {
@@ -77,5 +78,31 @@ describe('ReleaseRollbackPanel', () => {
 
     await wrapper.setProps({ operation: { ...operation, expires_at: '2026-07-23T23:59:59Z' } })
     expect(wrapper.get('[data-testid="confirm-rollback"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('locks the prepared target even if another release is clicked', async () => {
+    const other = { ...target, release_id: 'release-other', official_version: 'v0.1.161' }
+    const wrapper = mount(ReleaseRollbackPanel, {
+      props: {
+        current,
+        releases: [target, other],
+        selected: target.release_id,
+        operation: {
+          job_id: 'rollback-prepared',
+          operation_kind: 'rollback',
+          action: 'prepare',
+          status: 'prepared',
+          message: 'prepared',
+          need_restart: false,
+          target_release_id: target.release_id,
+          expires_at: new Date(Date.now() + 60_000).toISOString()
+        }
+      }
+    })
+
+    expect(wrapper.get('[data-testid="prepared-rollback-target"]').text()).toContain('v0.1.162')
+    const targets = wrapper.findAll('[data-testid="rollback-target-pair"]')
+    await targets[1].trigger('click')
+    expect(wrapper.emitted('update:selected')).toBeUndefined()
   })
 })

@@ -118,6 +118,13 @@
                       : t('version.upToDate')
                   }}
                 </p>
+                <p
+                  v-if="targetOfficialVersion || targetCustomVersion"
+                  class="mt-1 text-xs text-gray-500 dark:text-dark-400"
+                  data-testid="target-version-pair"
+                >
+                  Official {{ targetOfficialVersion || '--' }} / Custom {{ targetCustomVersion || '--' }}
+                </p>
               </div>
 
               <div
@@ -606,6 +613,14 @@ const customReleaseMessages = {
       updateConflictLog: 'Diagnostic artifact',
       updateConflictCommits: 'Merge base -> stable Release',
       releaseState: {
+        resolving_target: 'Resolving release target',
+        resolving_snapshot: 'Resolving rollback snapshot',
+        verifying_snapshot: 'Verifying rollback snapshot',
+        verifying_images: 'Verifying paired images',
+        rendering_compose: 'Rendering Compose configuration',
+        validating_manifest: 'Validating prepared manifest',
+        switching_extensions: 'Switching extensions service',
+        switching_main: 'Switching Sub2API service',
         checking_updates: 'Checking for updates',
         checking_release: 'Checking stable Release',
         validating_tag: 'Validating Release tag',
@@ -651,6 +666,14 @@ const customReleaseMessages = {
       updateConflictLog: '诊断资料',
       updateConflictCommits: '合并基线 -> 稳定 Release',
       releaseState: {
+        resolving_target: '正在解析发布目标',
+        resolving_snapshot: '正在解析回退快照',
+        verifying_snapshot: '正在校验回退快照',
+        verifying_images: '正在校验双镜像',
+        rendering_compose: '正在渲染 Compose 配置',
+        validating_manifest: '正在校验准备清单',
+        switching_extensions: '正在切换扩展服务',
+        switching_main: '正在切换 Sub2API 服务',
         checking_updates: '正在检查更新',
         checking_release: '正在检查稳定 Release',
         validating_tag: '正在校验 Release 标签',
@@ -702,6 +725,8 @@ const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
 const updateKind = computed(() => appStore.updateKind || 'none')
 const customShortSHA = computed(() => appStore.targetCustomShortSHA || '')
+const targetOfficialVersion = computed(() => appStore.targetOfficialVersion || '')
+const targetCustomVersion = computed(() => appStore.targetCustomVersion || '')
 const detectionComplete = computed(() => appStore.detectionComplete)
 const updateWarning = computed(() => appStore.updateWarning || '')
 const canPrepareUpdate = computed(
@@ -798,7 +823,7 @@ async function refreshVersion(force = true) {
   stopUpdatePolling()
   resetRollbackState()
 
-  await appStore.fetchVersion(force)
+  await Promise.all([appStore.fetchVersion(force), appStore.fetchCurrentRelease?.()])
 }
 
 function resetTerminalUpdateFeedback() {
@@ -926,7 +951,7 @@ function finishPrepared(status: Pick<UpdateJob, 'job_id' | 'message' | 'expires_
   updating.value = false
 }
 
-function finishUpdateSuccess(
+async function finishUpdateSuccess(
   status: Pick<
     UpdateJob,
     | 'need_restart'
@@ -957,6 +982,7 @@ function finishUpdateSuccess(
   updateStageMessage.value = status.message
   updating.value = false
   appStore.clearVersionCache()
+  await appStore.fetchCurrentRelease?.()
 }
 
 function finishUpdateFailure(
@@ -1004,7 +1030,7 @@ function finishRollbackPrepared(status: UpdateJob) {
   localStorage.setItem(RELEASE_JOB_STORAGE_KEY, status.job_id)
 }
 
-function finishRollbackSuccess(status: UpdateJob) {
+async function finishRollbackSuccess(status: UpdateJob) {
   stopUpdatePolling()
   localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   rollbackOperation.value = status
@@ -1017,6 +1043,7 @@ function finishRollbackSuccess(status: UpdateJob) {
   updateSuccessMessage.value = status.message
   rollbackPanelOpen.value = false
   appStore.clearVersionCache()
+  await appStore.fetchCurrentRelease?.()
 }
 
 function finishRollbackFailure(status: UpdateJob) {
@@ -1040,20 +1067,15 @@ async function pollUpdateStatus(jobID: string) {
     if (status.operation_kind === 'rollback') {
       rollbackOperation.value = status
       if (status.status === 'prepared') finishRollbackPrepared(status)
-      else if (status.status === 'success') finishRollbackSuccess(status)
+      else if (status.status === 'success') await finishRollbackSuccess(status)
       else if (isTerminalUpdateStatus(status.status)) finishRollbackFailure(status)
       return
     }
     if (status.status === 'prepared') {
       finishPrepared(status)
     } else if (status.status === 'success') {
-      finishUpdateSuccess(status)
-    } else if (
-      status.status === 'failed' ||
-      status.status === 'conflict' ||
-      status.status === 'expired' ||
-      status.status === 'drifted'
-    ) {
+      await finishUpdateSuccess(status)
+    } else if (isTerminalUpdateStatus(status.status)) {
       finishUpdateFailure(status)
     }
   } catch {

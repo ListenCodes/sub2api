@@ -338,10 +338,7 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 		}
 		if !IsTerminalUpdateStatus(existing.Status) || existing.Status == ReleaseStatusPrepared {
 			if existing.Status == ReleaseStatusPrepared && preparedJobExpired(existing) {
-				existing.Status = ReleaseStatusExpired
-				existing.Message = "prepared operation expired; prepare again"
-				existing.UpdatedAt = time.Now().UTC()
-				if err := writeUpdateStatus(currentPath, existing); err != nil {
+				if err := expirePreparedOperation(currentPath, existing); err != nil {
 					return nil, err
 				}
 			} else if existing.OperationKind == kind && existing.Action == ReleasePhasePrepare && existing.TargetReleaseID == reference {
@@ -488,10 +485,9 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 	}
 	if job.Status == ReleaseStatusPrepared {
 		if preparedJobExpired(job) {
-			job.Status = ReleaseStatusExpired
-			job.Message = "prepared operation expired; prepare again"
-			job.UpdatedAt = time.Now().UTC()
-			_ = writeUpdateStatus(jobPath, job)
+			if err := expirePreparedOperation(jobPath, job); err != nil {
+				return nil, err
+			}
 			return nil, ErrUpdateExpired
 		}
 		scriptPath := customReleaseScriptPath()
@@ -523,6 +519,16 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 		return job, nil
 	}
 	return nil, ErrUpdateNotPrepared
+}
+
+func expirePreparedOperation(jobPath string, job *UpdateJob) error {
+	job.Status = ReleaseStatusExpired
+	job.Message = "prepared operation expired; prepare again"
+	job.UpdatedAt = time.Now().UTC()
+	if err := writeUpdateStatus(jobPath, job); err != nil {
+		return err
+	}
+	return newCustomReleaseLedgerStore().ClearActiveOperation(job.JobID)
 }
 
 func preparedJobExpired(job *UpdateJob) bool {

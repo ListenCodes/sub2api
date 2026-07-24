@@ -33,6 +33,9 @@ const emit = defineEmits<{ prepare: [releaseID: string]; apply: [jobID: string] 
 const selected = defineModel<string>('selected', { default: '' })
 const selectedRelease = computed(() => props.releases.find((item) => item.release_id === selected.value))
 const prepared = computed(() => props.operation?.status === 'prepared')
+const preparedTarget = computed(() =>
+  props.releases.find((item) => item.release_id === props.operation?.target_release_id)
+)
 const now = ref(Date.now())
 const preparedRemainingSeconds = computed(() => remainingSeconds(props.operation?.expires_at, now.value))
 let countdownTimer: ReturnType<typeof setInterval> | undefined
@@ -51,6 +54,10 @@ function formatPublishedAt(value: string): string {
   const timestamp = Date.parse(value)
   return Number.isNaN(timestamp) ? '' : new Date(timestamp).toLocaleString()
 }
+
+function selectRelease(releaseID: string): void {
+  if (!prepared.value) selected.value = releaseID
+}
 </script>
 
 <template>
@@ -59,13 +66,17 @@ function formatPublishedAt(value: string): string {
       {{ t('current') }}: Official {{ current.official_version }} / Custom {{ current.custom_version }}
     </div>
     <p v-if="error" class="text-xs text-red-600">{{ error }}</p>
+    <div v-if="preparedTarget" data-testid="prepared-rollback-target">
+      Official {{ preparedTarget.official_version }} / Custom {{ preparedTarget.custom_version }}
+    </div>
     <button
       v-for="release in releases"
       :key="release.release_id"
       type="button"
       class="block w-full rounded border p-2 text-left"
       data-testid="rollback-target-pair"
-      @click="selected = release.release_id"
+      :disabled="prepared"
+      @click="selectRelease(release.release_id)"
     >
       <span>Official {{ release.official_version }} / Custom {{ release.custom_version }}</span>
       <small class="ml-2">{{ release.custom_commit.slice(0, 8) }}</small>

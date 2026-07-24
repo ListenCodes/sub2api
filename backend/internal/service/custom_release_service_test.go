@@ -306,12 +306,47 @@ func TestCustomReleaseRollbackApplyRejectsExpiredPreparation(t *testing.T) {
 	job.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
 	path := filepath.Join(runtimeRoot, "release-ledger", "operations", job.JobID+".json")
 	require.NoError(t, writeUpdateStatus(path, job))
+	writeReleaseLedgerJSON(t, filepath.Join(ledgerRoot, "state.json"), ReleaseLedgerState{
+		SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4,
+		ActiveOperationID: job.JobID, UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
 
 	_, err = svc.ApplyRollback(context.Background(), job.JobID)
 	require.ErrorIs(t, err, ErrUpdateExpired)
 	expired, readErr := readUpdateStatus(path, job.JobID)
 	require.NoError(t, readErr)
 	require.Equal(t, ReleaseStatusExpired, expired.Status)
+	state, stateErr := newReleaseLedgerStoreWithArtifactRoot(ledgerRoot, ledgerRoot).ReadState()
+	require.NoError(t, stateErr)
+	require.Empty(t, state.ActiveOperationID)
+}
+
+func TestCustomReleasePrepareReclaimsExpiredActiveOperation(t *testing.T) {
+	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
+	other := releaseLedgerTestRecord(ledgerRoot, "release-v102", 2, "2026-07-21T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current, target, other)
+	configureCustomReleaseLedgerTestRoot(t, ledgerRoot)
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+
+	job, err := svc.PrepareRollback(context.Background(), target.ReleaseID)
+	require.NoError(t, err)
+	job.Status = ReleaseStatusPrepared
+	job.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	require.NoError(t, writeUpdateStatus(filepath.Join(runtimeRoot, "release-ledger", "operations", job.JobID+".json"), job))
+	writeReleaseLedgerJSON(t, filepath.Join(ledgerRoot, "state.json"), ReleaseLedgerState{
+		SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4,
+		ActiveOperationID: job.JobID, UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	next, err := svc.PrepareRollback(context.Background(), other.ReleaseID)
+	require.NoError(t, err)
+	require.NotEqual(t, job.JobID, next.JobID)
+	state, stateErr := newReleaseLedgerStoreWithArtifactRoot(ledgerRoot, ledgerRoot).ReadState()
+	require.NoError(t, stateErr)
+	require.Empty(t, state.ActiveOperationID)
 }
 
 func TestCustomReleasePrepareRefusesNoneAndDocsOnlyUpdates(t *testing.T) {

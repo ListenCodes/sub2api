@@ -92,9 +92,9 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
       targetCustomShortSHA.value = data.target_custom_short_sha || ''
       productionStableTag.value = data.production_stable_tag || ''
       productionStableCommit.value = data.production_stable_commit || ''
-    updateWarning.value = data.warning || ''
-      targetOfficialVersion.value = data.release_tag || data.latest_version || ''
-      targetCustomVersion.value = data.target_custom_commit || ''
+      updateWarning.value = data.warning || ''
+      targetOfficialVersion.value = data.target_official_version || data.release_tag || data.latest_version || ''
+      targetCustomVersion.value = data.target_custom_version || ''
       versionLoaded.value = true
       return data
     } catch (error) {

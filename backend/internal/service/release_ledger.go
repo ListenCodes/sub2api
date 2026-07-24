@@ -80,6 +80,22 @@ func (s *releaseLedgerStore) ReadState() (*ReleaseLedgerState, error) {
 	return &state, nil
 }
 
+func (s *releaseLedgerStore) ClearActiveOperation(operationID string) error {
+	if !operationIDPattern.MatchString(operationID) {
+		return ledgerInconsistent("invalid operation id", nil)
+	}
+	state, err := s.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.ActiveOperationID != operationID {
+		return ledgerInconsistent("active operation does not match", nil)
+	}
+	state.ActiveOperationID = ""
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return writeReleaseLedgerJSONAtomic(filepath.Join(s.root, "state.json"), state)
+}
+
 func (s *releaseLedgerStore) CurrentRelease() (*ReleaseRecord, error) {
 	state, err := s.ReadState()
 	if err != nil {
@@ -250,6 +266,38 @@ func readReleaseLedgerJSON(path string, target any) error {
 		return err
 	}
 	return nil
+}
+
+func writeReleaseLedgerJSONAtomic(path string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".release-ledger-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+	if err := tmp.Chmod(0644); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncReleaseDirectory(path)
 }
 
 func validReleaseID(value string) bool {
