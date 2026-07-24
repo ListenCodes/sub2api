@@ -153,6 +153,22 @@ release_checkout_exact_commit() {
   git -C "$REPO" switch --detach "$target"
 }
 
+release_attach_source_branch() {
+  local target="$1" branch="${2:-$BRANCH}" status current_head current_ref
+  [[ "$target" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ && "$branch" != -* ]] || return 1
+  status="$(git -C "$REPO" status --porcelain --untracked-files=all)" || return 1
+  [[ -z "$status" ]] || return 1
+  git -C "$REPO" cat-file -e "$target^{commit}" >/dev/null 2>&1 || return 1
+  current_head="$(git -C "$REPO" rev-parse HEAD)" || return 1
+  current_ref="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  [[ "$current_head" != "$target" || "$current_ref" != "$branch" ]] || return 0
+  git -C "$REPO" branch -f "$branch" "$target" || return 1
+  git -C "$REPO" switch "$branch" || return 1
+  [[ "$(git -C "$REPO" rev-parse HEAD)" == "$target" ]] || return 1
+  [[ "$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" == "$branch" ]]
+}
+
 release_restore_source_snapshot() {
   local source_head="$1" source_ref="${2:-}"
   [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] || return 1

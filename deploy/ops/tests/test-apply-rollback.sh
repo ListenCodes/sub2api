@@ -74,8 +74,8 @@ case "$*" in
   *'status --porcelain --untracked-files=all'*) [[ ! -e "$FIXTURE_ROOT/repo-state/dirty" ]] ;;
   *'cat-file -e'*) exit 0 ;;
   *'switch --detach'*) printf '%s\n' "${*: -1}" > "$FIXTURE_ROOT/repo-state/head"; : > "$FIXTURE_ROOT/repo-state/ref" ;;
-  *'branch -f'*) exit 0 ;;
-  *'switch custom-release'*) printf '%s\n' "$FIXTURE_BASE_COMMIT" > "$FIXTURE_ROOT/repo-state/head"; printf 'custom-release\n' > "$FIXTURE_ROOT/repo-state/ref" ;;
+  *'branch -f'*) printf '%s\n' "${*: -1}" > "$FIXTURE_ROOT/repo-state/branch" ;;
+  *'switch custom-release'*) cat "$FIXTURE_ROOT/repo-state/branch" > "$FIXTURE_ROOT/repo-state/head"; printf 'custom-release\n' > "$FIXTURE_ROOT/repo-state/ref" ;;
   *) exit 2 ;;
 esac
 EOF
@@ -148,7 +148,7 @@ seed_case() {
   jq -n --arg job "$job" '{schema_version:1,current_release_id:"release-base",custom_version_high_water:7,active_operation_id:$job,updated_at:"2026-07-23T08:30:00Z"}' > "$root/data/release-ledger/state.json"
   jq --argjson r "$(cat "$root/data/release-ledger/releases/release-base.json")" '{production_commit:$r.custom_commit,stable_release_tag:$r.official_version,stable_release_commit:$r.official_commit,main_digest:$r.main_digest,extensions_digest:$r.extensions_digest,published_at:$r.published_at,backup_dir:$r.backup_dir,release_id:$r.release_id,official_version:$r.official_version,custom_version:$r.custom_version,custom_version_sequence:$r.custom_version_sequence}' <<< '{}' > "$root/data/release-state.json"
   cp -p "$base_backup/target/docker-compose.yml" "$root/repo/deploy/docker-compose.yml"; cp -p "$base_backup/target/docker-compose.custom.yml" "$root/repo/deploy/docker-compose.custom.yml"; cp -p "$base_backup/target/.env" "$root/repo/deploy/.env"
-  printf '%s\n' "$BASE_COMMIT" > "$root/repo-state/head"; printf 'custom-release\n' > "$root/repo-state/ref"; printf 'base\n' > "$root/runtime/sub2api"; printf 'base\n' > "$root/runtime/extensions-self"; : > "$root/calls"
+  printf '%s\n' "$BASE_COMMIT" > "$root/repo-state/head"; printf '%s\n' "$BASE_COMMIT" > "$root/repo-state/branch"; printf 'custom-release\n' > "$root/repo-state/ref"; printf 'base\n' > "$root/runtime/sub2api"; printf 'base\n' > "$root/runtime/extensions-self"; : > "$root/calls"
   prepared_at=2026-07-23T08:30:00Z; expires_at=2099-07-23T08:45:00Z
   [[ "$scenario" != expired ]] || expires_at=2020-01-01T00:00:00Z
   jq -n --arg base release-base --arg target release-target --argjson high 7 --arg source "$BASE_COMMIT" --arg target_commit "$TARGET_COMMIT" --arg main "$TARGET_MAIN" --arg ext "$TARGET_EXT" --arg current_main "$BASE_MAIN" --arg current_ext "$BASE_EXT" \
@@ -186,6 +186,7 @@ run_success() {
   assert_eq v0.1.162 "$(jq -r '.official_version' "$root/data/release-state.json")" "$scenario official display"
   assert_eq v1.0.5 "$(jq -r '.custom_version' "$root/data/release-state.json")" "$scenario custom display"
   assert_eq "$TARGET_COMMIT" "$(cat "$root/repo-state/head")" "$scenario source"
+  assert_eq custom-release "$(cat "$root/repo-state/ref")" "$scenario source branch was left detached"
   assert_eq target "$(cat "$root/runtime/extensions-self")" "$scenario extensions runtime"
   assert_eq target "$(cat "$root/runtime/sub2api")" "$scenario main runtime"
   assert_eq success "$(jq -r '.status' "$root/data/release-ledger/operations/$job.json")" "$scenario operation status"
