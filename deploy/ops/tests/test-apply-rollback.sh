@@ -74,6 +74,7 @@ case "$*" in
   *'status --porcelain --untracked-files=all'*) [[ ! -e "$FIXTURE_ROOT/repo-state/dirty" ]] ;;
   *'cat-file -e'*) exit 0 ;;
   *'switch --detach'*) printf '%s\n' "${*: -1}" > "$FIXTURE_ROOT/repo-state/head"; : > "$FIXTURE_ROOT/repo-state/ref" ;;
+  *'switch -C custom-release '*) printf '%s\n' "${*: -1}" > "$FIXTURE_ROOT/repo-state/branch"; printf '%s\n' "${*: -1}" > "$FIXTURE_ROOT/repo-state/head"; printf 'custom-release\n' > "$FIXTURE_ROOT/repo-state/ref" ;;
   *'branch -f'*) printf '%s\n' "${*: -1}" > "$FIXTURE_ROOT/repo-state/branch" ;;
   *'switch custom-release'*) cat "$FIXTURE_ROOT/repo-state/branch" > "$FIXTURE_ROOT/repo-state/head"; printf 'custom-release\n' > "$FIXTURE_ROOT/repo-state/ref" ;;
   *) exit 2 ;;

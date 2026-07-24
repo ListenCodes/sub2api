@@ -163,8 +163,7 @@ release_attach_source_branch() {
   current_head="$(git -C "$REPO" rev-parse HEAD)" || return 1
   current_ref="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   [[ "$current_head" != "$target" || "$current_ref" != "$branch" ]] || return 0
-  git -C "$REPO" branch -f "$branch" "$target" || return 1
-  git -C "$REPO" switch "$branch" || return 1
+  git -C "$REPO" switch -C "$branch" "$target" || return 1
   [[ "$(git -C "$REPO" rev-parse HEAD)" == "$target" ]] || return 1
   [[ "$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" == "$branch" ]]
 }
