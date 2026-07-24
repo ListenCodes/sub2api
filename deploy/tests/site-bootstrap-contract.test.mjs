@@ -111,4 +111,12 @@ test('the Linux bootstrap fixture does not require Windows path conversion', () 
 
   assert.doesNotMatch(fixture, /\bcygpath\b/)
   assert.match(fixture, /export SUB2API_DATA_DIR="\$TMP\/data"/)
+  assert.match(
+    fixture,
+    /export MSYS2_ARG_CONV_EXCL="\$SUB2API_DATA_DIR\/release-backups\/;\$BUNDLE\/release-backups\/"/,
+  )
+  assert.doesNotMatch(
+    fixture,
+    /MSYS2_ARG_CONV_EXCL=['"]\*['"]/,
+  )
 })
