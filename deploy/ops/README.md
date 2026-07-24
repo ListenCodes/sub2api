@@ -69,7 +69,7 @@ not production image credentials.
   `prepare-release.sh` or `apply-release.sh`; it never calls a publisher.
 - `prepare-release.sh` performs remote gates, digest pulls, explicit Compose
   rendering and complete backup validation, then stops at `prepared` with a
-  signed-by-SHA256 15-minute manifest. It must not run Compose lifecycle
+  signed-by-SHA256 60-minute manifest. It must not run Compose lifecycle
   commands or write production state.
 - `apply-release.sh` consumes only that manifest, rejects expiry and drift,
   performs local `--pull never` extensions-first/main-second switching and
@@ -86,6 +86,42 @@ not production image credentials.
   recheck. It does not move the local production source.
 - `publish-custom.sh` is a deprecated fail-closed compatibility shim and is
   never a final release entry point.
+
+## New Site And Migration
+
+The supported custom-release bootstrap targets an empty Linux amd64 Docker
+host. The checkout must be clean and exactly equal to `origin/custom-release`;
+the input `.env` must be a regular mode-0600 file. Always run the non-mutating
+preflight first:
+
+```bash
+deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE --check-only
+deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE
+```
+
+`fresh` creates the full paired stack and initializes Official from
+`stable-release-baseline.json`, Custom v1.0.0, and high-water zero. To preserve
+an existing site's data, secrets, release history, and rollback evidence,
+export the healthy source and restore only to an empty target:
+
+```bash
+deploy/ops/export-custom-site.sh \
+  --output /root/sub2api-site-export --confirm EXPORT-SITE
+deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION --check-only
+deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION
+```
+
+`migrate` verifies the complete SHA256 manifest, both database archives,
+ledger artifacts, Compose pair, secrets, public paired image digests, and OCI
+identity before restoring. It preserves the exported dual-version display and
+high-water. Both modes reject pre-existing target containers or named volumes,
+start dependencies before application writers, and install the release watcher.
+They do not configure DNS/CDN or external TLS routing. Subsequent update and
+rollback prepares require explicit apply within one hour.
 
 There is no daily updater, polling cron consumer, scheduled mode, or VPS-local
 image build. The independent health-monitor schedule remains.

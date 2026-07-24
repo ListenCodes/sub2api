@@ -311,7 +311,7 @@ TARGET_ENV_SHA256="$(sha256sum "$BACKUP_DIR/target/.env" | awk '{print $1}')"
 TARGET_ARTIFACT_MANIFEST_SHA256="$(sha256sum "$BACKUP_DIR/target/SHA256SUMS" | awk '{print $1}')"
 BACKUP_MANIFEST_SHA256="$(sha256sum "$BACKUP_DIR/SHA256SUMS" | awk '{print $1}')"
 prepared_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-expires_at="$(date -u -d '+15 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
+expires_at="$(date -u -d '+60 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
 MANIFEST_DIR="$PREPARED_ROOT/$JOB_ID"
 mkdir -p "$MANIFEST_DIR"
 jq -n \

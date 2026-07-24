@@ -3,7 +3,7 @@
 双版本账本基线为 Official v0.1.163 / Custom v1.0.0，对应生产 commit
 `aa2d24106cab0a03785330d8e0ff4e02b0474a0e`。首次成功的自定义运行时发布为
 v1.0.1；仅官方更新不增加自定义版本，combined 只增加一次。docs-only、失败、
-过期、漂移和未确认任务不占号。完整回退使用 prepare + 明确 apply 确认，15 分钟
+过期、漂移和未确认任务不占号。完整回退使用 prepare + 明确 apply 确认，1 小时
 过期，只允许最近三个成功完整快照且排除当前版本；恢复历史双版本但高水位不下降、
 不复用，普通回退不恢复任一数据库。生产账本迁移需要单独管理员授权，旧单阶段更新
 和官方二进制回退入口必须 fail-closed。
@@ -339,7 +339,7 @@ commit 短 SHA，不使用 semver。检测是只读的，不修改生产、不�
    Nginx/证书、旧 digest、容器/镜像元数据和 rollback tag，并校验 SHA256 与
    `pg_restore --list`。此阶段不切换 Git、不开关容器、不写 `release-state.json`，也不
    触碰 `risk-control-postgres`。
-2. `prepared` manifest 有效 15 分钟，至少包含 production/target commit、Stable 身份、
+2. `prepared` manifest 有效 1 小时，至少包含 production/target commit、Stable 身份、
    双 digest、Compose/.env 哈希、backup_dir、`prepared_at`、`expires_at`。过期后重新
    备份和复核即可，已经验证的镜像证据可以复用。
 3. 只有管理员点击“确认更新”才进入 `apply`。apply 只复核 manifest 和环境漂移，禁止
@@ -352,3 +352,41 @@ commit 短 SHA，不使用 semver。检测是只读的，不修改生产、不�
 失败、冲突或回滚只作为审计历史，重新打开弹框不会显示上一次结果。旧单阶段 job 会
 fail-closed，`/admin/system/update` 仅保留为 prepare 兼容别名，不得直接调用
 `publish-custom.sh`。
+
+## 14. Docker 新站与完整迁移
+
+自建版新站只支持 Linux amd64 空目标：`custom-release` 必须干净且 HEAD 精确等于
+`origin/custom-release`，目标容器、命名卷、发布 systemd unit 和生产 `.env` 都不能已存在。
+把密钥配置放在源码目录外并设为 `0600`，先运行无写入的检查，再正式部署：
+
+```bash
+deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE --check-only
+deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE
+```
+
+`fresh` 自动校验双 GHCR digest 和显式双 Compose，按依赖顺序启动完整服务，并登记当前
+Official Stable / Custom v1.0.0 / 全局高水位 0。以后更新仍使用左上角“准备更新”并在
+1 小时内明确确认；回退同样是 prepare + confirm。
+
+迁移现有站点时，先在健康源站导出完整配对资料：
+
+```bash
+deploy/ops/export-custom-site.sh \
+  --output /root/sub2api-site-export --confirm EXPORT-SITE
+```
+
+安全传输整个目录后，在空目标上检出与导出资料一致的 `origin/custom-release`，先检查再恢复：
+
+```bash
+deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION --check-only
+deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION
+```
+
+导出包包含双库新 dump、`.env`、Compose 对、Nginx/证书、完整双版本账本、发布备份、
+容器/镜像元数据和 `SHA256SUMS`。`migrate` 会在应用写入进程启动前恢复双库，并保留原站
+双版本显示、历史快照和全局高水位。两个模式都不修改 DNS/CDN；域名解析和公网 TLS
+切换仍由站点外部运维单独完成。
