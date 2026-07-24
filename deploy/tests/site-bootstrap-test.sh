@@ -112,6 +112,7 @@ make_backup_contract() {
 
 BUNDLE="$TMP/bundle"
 BACKUP="$BUNDLE/release-backups/backup-1"
+export MSYS2_ARG_CONV_EXCL="$SUB2API_DATA_DIR/release-backups/;$BUNDLE/release-backups/"
 RELEASE_ID="release-bootstrap-fixture-${HEAD_COMMIT:0:9}"
 MAIN_DIGEST="sha256:$(printf '%064d' 1)"
 EXT_DIGEST="sha256:$(printf '%064d' 2)"
