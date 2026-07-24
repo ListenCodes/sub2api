@@ -111,6 +111,8 @@ jobs:
           node-version: '20'
       - name: Deployment contracts
         run: node --test deploy/tests/*.test.mjs
+      - name: Site bootstrap fixtures
+        run: bash deploy/tests/site-bootstrap-test.sh
       - name: Operations contracts
         shell: pwsh
         run: ./deploy/ops/tests/test-script-contract.ps1

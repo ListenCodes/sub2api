@@ -49,6 +49,15 @@ done
 [[ -r "$LEDGER_HELPER" ]] || fail 'release ledger helper is missing'
 source "$LEDGER_HELPER"
 
+mkdir -p "$(dirname "$RELEASE_LEDGER_LOCK_FILE")"
+exec 8>"$RELEASE_LEDGER_LOCK_FILE"
+flock -n 8 || fail 'release lock is busy'
+
+env_value() {
+  local key="$1" file="$2"
+  awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); value=$0} END {print value}' "$file"
+}
+
 REPO_REAL="$(cd "$REPO" 2>/dev/null && pwd -P)" || fail 'repository is missing'
 OUTPUT_PARENT_REAL="$(cd "$OUTPUT_PARENT" && pwd -P)" || fail 'output parent cannot be resolved'
 case "$OUTPUT_PARENT_REAL/" in "$REPO_REAL/"*) fail 'output must stay outside the repository' ;; esac
@@ -62,7 +71,7 @@ ORIGIN_COMMIT="$(git -C "$REPO" rev-parse origin/custom-release 2>/dev/null || t
 STATE_PATH="$(ledger_state_path)"
 ledger_validate_state "$STATE_PATH" || fail 'release-ledger state is invalid'
 [[ "$(jq -r '.active_operation_id // empty' "$STATE_PATH")" == '' ]] || fail 'active_operation_id blocks export'
-ledger_validate_projection "$(cat "$PRODUCTION_RELEASE_STATE_FILE")" || fail 'release-state.json is invalid'
+ledger_validate_current_projection || fail 'release-state.json does not match the current ledger release'
 CURRENT_RELEASE_ID="$(jq -r '.current_release_id' "$STATE_PATH")"
 CURRENT_RELEASE_PATH="$(ledger_release_path "$CURRENT_RELEASE_ID")"
 ledger_validate_release_artifacts "$CURRENT_RELEASE_PATH" || fail 'current release artifacts are incomplete'
@@ -83,10 +92,6 @@ for container in sub2api sub2api-postgres sub2api-redis risk-control-postgres ex
   [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || true)" == healthy ]] || fail "container is not healthy: $container"
 done
 
-mkdir -p "$(dirname "$RELEASE_LEDGER_LOCK_FILE")"
-exec 8>"$RELEASE_LEDGER_LOCK_FILE"
-flock -n 8 || fail 'release lock is busy'
-
 WORK_DIR="$(mktemp -d "$OUTPUT_PARENT/.sub2api-site-export.XXXXXX")"
 mkdir -p "$WORK_DIR/config" "$WORK_DIR/nginx" "$WORK_DIR/metadata"
 cp -a "$DATA_DIR/release-ledger" "$WORK_DIR/release-ledger"
@@ -104,8 +109,16 @@ printf '%s\n' "$NGINX_VHOST" > "$WORK_DIR/nginx/nginx-vhost.path"
 printf '%s\n' "$ORIGIN_CERT" > "$WORK_DIR/nginx/origin-cert.path"
 printf '%s\n' "$ORIGIN_KEY" > "$WORK_DIR/nginx/origin-key.path"
 
-docker exec sub2api-postgres pg_dump -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -Fc > "$WORK_DIR/sub2api_db.dump"
-docker exec risk-control-postgres pg_dump -U "${RISK_POSTGRES_USER:-risk_control_app}" -d "${RISK_POSTGRES_DB:-risk_control}" -Fc > "$WORK_DIR/risk_control_db.dump"
+POSTGRES_USER_VALUE="$(env_value POSTGRES_USER "$ENV_FILE")"
+POSTGRES_DB_VALUE="$(env_value POSTGRES_DB "$ENV_FILE")"
+RISK_USER_VALUE="$(env_value RISK_CONTROL_POSTGRES_USER "$ENV_FILE")"
+RISK_DB_VALUE="$(env_value RISK_CONTROL_POSTGRES_DB "$ENV_FILE")"
+POSTGRES_USER_VALUE="${POSTGRES_USER_VALUE:-sub2api}"
+POSTGRES_DB_VALUE="${POSTGRES_DB_VALUE:-sub2api}"
+RISK_USER_VALUE="${RISK_USER_VALUE:-risk_control_app}"
+RISK_DB_VALUE="${RISK_DB_VALUE:-risk_control}"
+docker exec sub2api-postgres pg_dump -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" -Fc > "$WORK_DIR/sub2api_db.dump"
+docker exec risk-control-postgres pg_dump -U "$RISK_USER_VALUE" -d "$RISK_DB_VALUE" -Fc > "$WORK_DIR/risk_control_db.dump"
 docker exec -i sub2api-postgres pg_restore --list < "$WORK_DIR/sub2api_db.dump" > "$WORK_DIR/sub2api_db.list"
 docker exec -i risk-control-postgres pg_restore --list < "$WORK_DIR/risk_control_db.dump" > "$WORK_DIR/risk_control_db.list"
 docker inspect sub2api sub2api-postgres sub2api-redis risk-control-postgres extensions-self > "$WORK_DIR/metadata/containers.json"

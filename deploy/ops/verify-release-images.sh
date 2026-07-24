@@ -19,6 +19,11 @@ anonymous_docker() {
   DOCKER_CONFIG="$ANONYMOUS_DOCKER_CONFIG" docker "$@"
 }
 
+NO_PULL=false
+if [[ "${1:-}" == --no-pull ]]; then
+  NO_PULL=true
+  shift
+fi
 [[ "${1:-}" =~ ^[0-9a-f]{40}$ ]] || fail 'commit must be a full SHA'
 [[ "${2:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'version must be stable semver without v prefix'
 COMMIT="$1"
@@ -27,13 +32,29 @@ VERSION="$2"
 verify_image() {
   local repository="$1"
   local tag="$repository:custom-$COMMIT"
-  local inspect_output digest labels architecture repo_digests canonical
+  local inspect_output digest image_json labels architecture repo_digests canonical
 
   inspect_output="$(anonymous_docker buildx imagetools inspect "$tag")" || fail "could not inspect public manifest $tag"
   digest="$(awk '$1 == "Digest:" {print $2; exit}' <<< "$inspect_output")"
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "manifest digest is invalid for $tag"
   grep -Eq 'Platform:[[:space:]]*linux/amd64([[:space:]]|$)' <<< "$inspect_output" \
     || fail "linux/amd64 manifest is missing for $tag"
+
+  if [[ "$NO_PULL" == true ]]; then
+    image_json="$(anonymous_docker buildx imagetools inspect "$tag" --format '{{json .Image}}')" \
+      || fail "could not inspect public image config for $tag"
+    labels="$(jq -c '.config.Labels // {}' <<< "$image_json")" || fail "could not inspect labels for $tag"
+    architecture="$(jq -r '.architecture // empty' <<< "$image_json")" || fail "could not inspect architecture for $tag"
+    [[ "$(jq -r '.["org.opencontainers.image.revision"] // empty' <<< "$labels")" == "$COMMIT" ]] \
+      || fail "revision label mismatch for $tag"
+    [[ "$(jq -r '.["org.opencontainers.image.version"] // empty' <<< "$labels")" == "$VERSION" ]] \
+      || fail "version label mismatch for $tag"
+    [[ "$(jq -r '.["org.opencontainers.image.source"] // empty' <<< "$labels")" == "$SOURCE_LABEL" ]] \
+      || fail "source label mismatch for $tag"
+    [[ "$architecture" == amd64 ]] || fail "registry image architecture mismatch for $tag"
+    printf '%s\n' "$digest"
+    return 0
+  fi
 
   anonymous_docker pull "$tag" >/dev/null || fail "anonymous pull failed for $tag"
   labels="$(docker image inspect "$tag" --format '{{json .Config.Labels}}')" || fail "could not inspect labels for $tag"

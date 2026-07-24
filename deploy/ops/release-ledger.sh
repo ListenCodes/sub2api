@@ -230,6 +230,54 @@ ledger_validate_projection() {
   ' <<< "$content" >/dev/null
 }
 
+ledger_validate_current_projection_consistency() {
+  local state_path="$1" projection_path="$2" current_path="$3" state projection current_record path sequence high_water
+  ledger_validate_state "$state_path" || return 1
+  [[ -f "$projection_path" && ! -L "$projection_path" ]] || return 1
+  state="$(cat "$state_path")" || return 1
+  projection="$(cat "$projection_path")" || return 1
+  ledger_validate_projection "$projection" || return 1
+  [[ -f "$current_path" && ! -L "$current_path" ]] || return 1
+  current_record="$(cat "$current_path")" || return 1
+  jq -e --argjson state "$state" --argjson record "$current_record" '
+    .release_id == $state.current_release_id
+    and .release_id == $record.release_id
+    and .production_commit == $record.custom_commit
+    and .stable_release_tag == $record.official_version
+    and .stable_release_commit == $record.official_commit
+    and .main_digest == $record.main_digest
+    and .extensions_digest == $record.extensions_digest
+    and .official_version == $record.official_version
+    and .custom_version == $record.custom_version
+    and .custom_version_sequence == $record.custom_version_sequence
+    and .published_at == $record.published_at
+    and .backup_dir == $record.backup_dir
+  ' <<< "$projection" >/dev/null || return 1
+  high_water="$(jq -er '.custom_version_high_water' <<< "$state")" || return 1
+  shopt -s nullglob
+  for path in "$RELEASE_LEDGER_ROOT"/releases/*.json; do
+    [[ -f "$path" && ! -L "$path" ]] || { shopt -u nullglob; return 1; }
+    sequence="$(jq -er '
+      .custom_version_sequence as $sequence
+      | select($sequence | type == "number" and floor == . and . >= 0)
+      | select(.custom_version == ("v1.0." + ($sequence | tostring)))
+      | $sequence
+    ' "$path")" || { shopt -u nullglob; return 1; }
+    [[ "$high_water" -ge "$sequence" ]] || { shopt -u nullglob; return 1; }
+  done
+  shopt -u nullglob
+}
+
+ledger_validate_current_projection() {
+  local state_path current_release current_path
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  current_release="$(jq -er '.current_release_id' "$state_path")" || return 1
+  current_path="$(ledger_release_path "$current_release")"
+  ledger_validate_release "$current_path" || return 1
+  ledger_validate_current_projection_consistency "$state_path" "$PRODUCTION_RELEASE_STATE_FILE" "$current_path"
+}
+
 ledger_write_projection() {
   local content="$1"
   ledger_validate_projection "$content" || return 1
