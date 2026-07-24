@@ -92,8 +92,16 @@ case "${1:-}" in
     if [[ "${2:-}" == --detach ]]; then
       printf '%s\n' "$3" > "$FIXTURE_REPO_STATE/head"
       : > "$FIXTURE_REPO_STATE/ref"
+    elif [[ "${2:-}" == -C ]]; then
+      [[ "$FIXTURE_SCENARIO" != recovery-attach-failure ]] || exit 1
+      printf '%s\n' "$4" > "$FIXTURE_REPO_STATE/branch"
+      printf '%s\n' "$4" > "$FIXTURE_REPO_STATE/head"
+      printf '%s\n' "$3" > "$FIXTURE_REPO_STATE/ref"
     else
       [[ "$2" == custom-release ]] || exit 1
+      if [[ "$FIXTURE_SCENARIO" == recovery-attach-failure && "$(cat "$FIXTURE_REPO_STATE/branch")" == "$FIXTURE_TARGET_COMMIT" ]]; then
+        exit 1
+      fi
       cat "$FIXTURE_REPO_STATE/branch" > "$FIXTURE_REPO_STATE/head"
       printf 'custom-release\n' > "$FIXTURE_REPO_STATE/ref"
     fi
@@ -460,6 +468,7 @@ apply_scenario_mutation() {
       printf 'custom-release\n' > "$root/repo-state/ref"
       ;;
     recovery) seed_committed_target "$root" health_checking ;;
+    recovery-attach-failure) seed_committed_target "$root" success ;;
     partial-record)
       cp -p "$root/data/release-ledger/state.json" "$root/base-state.json"
       cp -p "$root/data/release-state.json" "$root/base-projection.json"
@@ -576,12 +585,14 @@ run_success_case() {
 }
 
 run_pre_mutation_refusal() {
-  local scenario="$1" root state_before projection_before source_before files_before exit_code
+  local scenario="$1" root state_before projection_before source_before source_branch_before source_ref_before files_before exit_code
   root="$(seed_case "$scenario")"
   apply_scenario_mutation "$root" "$scenario"
   state_before="$(jq -c '{current_release_id,custom_version_high_water}' "$root/data/release-ledger/state.json")"
   projection_before="$(sha256sum "$root/data/release-state.json")"
   source_before="$(cat "$root/repo-state/head")"
+  source_branch_before="$(cat "$root/repo-state/branch")"
+  source_ref_before="$(cat "$root/repo-state/ref")"
   files_before="$(sha256sum "$root/repo/deploy/docker-compose.yml" "$root/repo/deploy/docker-compose.custom.yml" "$root/repo/deploy/.env")"
   set +e
   invoke_apply "$root" "$scenario" >/dev/null 2>&1
@@ -593,6 +604,8 @@ run_pre_mutation_refusal() {
   assert_eq null "$(jq -r '.active_operation_id' "$root/data/release-ledger/state.json")" "$scenario did not release the active operation"
   assert_eq "$projection_before" "$(sha256sum "$root/data/release-state.json")" "$scenario changed compatibility projection"
   assert_eq "$source_before" "$(cat "$root/repo-state/head")" "$scenario changed source"
+  assert_eq "$source_branch_before" "$(cat "$root/repo-state/branch")" "$scenario changed source branch tip"
+  assert_eq "$source_ref_before" "$(cat "$root/repo-state/ref")" "$scenario changed source ref"
   assert_eq "$files_before" "$(sha256sum "$root/repo/deploy/docker-compose.yml" "$root/repo/deploy/docker-compose.custom.yml" "$root/repo/deploy/.env")" "$scenario changed production files"
   [[ -z "$(grep 'docker compose .* up ' "$root/calls" || true)" ]] || fail "$scenario reached container mutation"
 }
@@ -646,7 +659,7 @@ if [[ -n "${FIXTURE_ONLY:-}" ]]; then
     success|official-success|combined-success|projection-write-failure|state-write-failure|duplicate|recovery|partial-record|partial-projection|partial-expired|runtime-only|runtime-only-expired)
       run_success_case "$FIXTURE_ONLY"
       ;;
-    expired|current-release-drift|high-water-drift|origin-drift|compose-drift|env-drift|digest-drift|backup-drift|missing-image|dirty-source|running-container-drift|kind-semantic-drift|terminal-active)
+    expired|current-release-drift|high-water-drift|origin-drift|compose-drift|env-drift|digest-drift|backup-drift|missing-image|dirty-source|running-container-drift|kind-semantic-drift|terminal-active|recovery-attach-failure)
       run_pre_mutation_refusal "$FIXTURE_ONLY"
       ;;
     extension-failure|main-failure|health-failure|rollback-health-config|runtime-partial|runtime-partial-extensions|runtime-partial-rollback)
@@ -663,7 +676,7 @@ assert_inherited_lock_contract
 scenarios=(
   success official-success combined-success
   expired current-release-drift high-water-drift origin-drift compose-drift env-drift digest-drift
-  backup-drift missing-image dirty-source running-container-drift kind-semantic-drift
+  backup-drift missing-image dirty-source running-container-drift kind-semantic-drift recovery-attach-failure
   extension-failure main-failure health-failure rollback-health-config
   runtime-partial runtime-partial-extensions runtime-partial-rollback terminal-active malformed-terminal-recovery
   projection-write-failure state-write-failure duplicate recovery partial-record partial-projection partial-expired
