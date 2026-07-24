@@ -104,7 +104,15 @@ fi
 export SUB2API_JOB_ID="$JOB_ID"
 status="$(jq -r '.status // empty' "$JOB_FILE")"
 if release_terminal_status "$status"; then
-  release_reconcile_active_operation "$JOB_ID" "$status" || true
+  active_operation_id="$(jq -r '.active_operation_id // empty' "$(ledger_state_path)")"
+  if [[ "$active_operation_id" == "$JOB_ID" ]] && ! ledger_recover_pre_mutation_terminal "$JOB_ID"; then
+    log "Terminal release operation $JOB_ID has unresolved production state; retaining ledger ownership"
+    exit 1
+  fi
+  [[ -z "$active_operation_id" || "$active_operation_id" == "$JOB_ID" ]] || {
+    log "Terminal release trigger $JOB_ID conflicts with active operation $active_operation_id"
+    exit 1
+  }
   log "Release operation $JOB_ID is already terminal: $status"
   exit 0
 fi

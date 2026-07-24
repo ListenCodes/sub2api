@@ -176,6 +176,25 @@ assert_eq "$after_noop_job_id" "$(jq -r '.active_operation_id // empty' "$RELEAS
 assert_eq "prepare-release $after_noop_job_id" "$(cat "$DISPATCH_DIR/calls")" \
   'next operation did not run after stale no-op success recovery'
 
+unresolved_job_id='rollback-unresolved-production'
+release_job_init "$unresolved_job_id"
+release_job_update "$unresolved_job_id" rollback_failed unresolved \
+  '{"action":"apply","operation_kind":"rollback","published":false,"production_changed":true}'
+jq -n --arg release release-dispatch-fixture --arg operation "$unresolved_job_id" \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'apply %s\n' "$unresolved_job_id" > "$DISPATCH_DIR/data/release-trigger"
+set +e
+PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_APPLY_ROLLBACK_SCRIPT="$DISPATCH_DIR/bin/apply-rollback.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh" >/dev/null 2>&1
+unresolved_code=$?
+set -e
+[[ "$unresolved_code" -ne 0 ]] || fail 'unresolved changed-production terminal trigger was accepted'
+assert_eq "$unresolved_job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'unresolved changed-production terminal cleared the active ledger owner'
+
 if [[ "${DISPATCH_ONLY:-0}" == 1 ]]; then
   printf 'release-dispatch=PASS\n'
   exit 0

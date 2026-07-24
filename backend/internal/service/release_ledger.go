@@ -107,7 +107,7 @@ func (s *releaseLedgerStore) currentReleaseFromState(state *ReleaseLedgerState) 
 	return record, nil
 }
 
-func (s *releaseLedgerStore) ListRollbackReleases(limit int) ([]ReleaseRecord, error) {
+func (s *releaseLedgerStore) ListRollbackReleases(limit int, eligible func(*ReleaseRecord) bool) ([]ReleaseRecord, error) {
 	state, err := s.ReadState()
 	if err != nil {
 		return nil, err
@@ -153,10 +153,17 @@ func (s *releaseLedgerStore) ListRollbackReleases(limit int) ([]ReleaseRecord, e
 	if limit <= 0 {
 		return []ReleaseRecord{}, nil
 	}
-	if len(records) > limit {
-		records = records[:limit]
+	result := make([]ReleaseRecord, 0, min(limit, len(records)))
+	for index := range records {
+		if eligible != nil && !eligible(&records[index]) {
+			continue
+		}
+		result = append(result, records[index])
+		if len(result) == limit {
+			break
+		}
 	}
-	return records, nil
+	return result, nil
 }
 
 func (s *releaseLedgerStore) readRecord(releaseID string) (*ReleaseRecord, error) {
@@ -302,13 +309,20 @@ func validateReleaseBackupManifest(root string) error {
 	scanner := bufio.NewScanner(handle)
 	for scanner.Scan() {
 		matches := manifestLinePattern.FindStringSubmatch(scanner.Text())
-		if len(matches) != 3 || !validReleaseBackupRelativePath(matches[2]) {
+		if len(matches) != 3 {
 			return fmt.Errorf("invalid release backup manifest entry")
 		}
-		if _, exists := declared[matches[2]]; exists {
+		relative := matches[2]
+		for strings.HasPrefix(relative, "./") {
+			relative = strings.TrimPrefix(relative, "./")
+		}
+		if !validReleaseBackupRelativePath(relative) {
+			return fmt.Errorf("invalid release backup manifest entry")
+		}
+		if _, exists := declared[relative]; exists {
 			return fmt.Errorf("duplicate release backup manifest entry")
 		}
-		declared[matches[2]] = matches[1]
+		declared[relative] = matches[1]
 	}
 	if err := scanner.Err(); err != nil {
 		return err

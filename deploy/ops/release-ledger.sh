@@ -5,6 +5,9 @@ RELEASE_LEDGER_ROOT="${SUB2API_RELEASE_LEDGER_ROOT:-$SUB2API_DATA_DIR/release-le
 RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-$SUB2API_DATA_DIR/release-backups}"
 PRODUCTION_RELEASE_STATE_FILE="${SUB2API_RELEASE_STATE_FILE:-$SUB2API_DATA_DIR/release-state.json}"
 RELEASE_LEDGER_LOCK_FILE="${SUB2API_RELEASE_LEDGER_LOCK_FILE:-${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-release.lock}}"
+RELEASE_REPO="${SUB2API_REPO:-/root/sub2api}"
+RELEASE_MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
+RELEASE_EXTENSIONS_REPOSITORY="${SUB2API_EXTENSIONS_REPOSITORY:-ghcr.io/listencodes/sub2api-extensions}"
 
 ledger_state_path() { printf '%s/state.json\n' "$RELEASE_LEDGER_ROOT"; }
 ledger_release_path() { printf '%s/releases/%s.json\n' "$RELEASE_LEDGER_ROOT" "$1"; }
@@ -134,6 +137,20 @@ ledger_validate_release_artifacts() {
   [[ "$(jq -r '.env_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/target/.env" | awk '{print $1}')" ]]
 }
 
+ledger_release_runtime_available() {
+  local record_path="$1" record commit main_digest extensions_digest reference
+  record="$(cat "$record_path")" || return 1
+  commit="$(jq -er '.custom_commit' <<< "$record")" || return 1
+  main_digest="$(jq -er '.main_digest' <<< "$record")" || return 1
+  extensions_digest="$(jq -er '.extensions_digest' <<< "$record")" || return 1
+  git -C "$RELEASE_REPO" cat-file -e "$commit^{commit}" >/dev/null 2>&1 || return 1
+  for reference in "$RELEASE_MAIN_REPOSITORY@$main_digest" "$RELEASE_EXTENSIONS_REPOSITORY@$extensions_digest"; do
+    docker image inspect "$reference" >/dev/null 2>&1 \
+      || docker manifest inspect "$reference" >/dev/null 2>&1 \
+      || return 1
+  done
+}
+
 ledger_list_rollback_release_ids() {
   local limit="${1:-3}" state_path current path record release_id published count=0
   local -a candidates=()
@@ -153,6 +170,7 @@ ledger_list_rollback_release_ids() {
   shopt -u nullglob
   while IFS=' ' read -r published release_id; do
     [[ -n "$release_id" ]] || continue
+    ledger_release_runtime_available "$(ledger_release_path "$release_id")" || continue
     printf '%s\n' "$release_id"
     count=$((count + 1))
     [[ "$count" -lt "$limit" ]] || break

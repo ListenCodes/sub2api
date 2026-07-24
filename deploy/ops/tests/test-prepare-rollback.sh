@@ -8,10 +8,12 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 CURRENT_COMMIT="$(printf '1%.0s' {1..40})"
 TARGET_COMMIT="$(printf '2%.0s' {1..40})"
 OTHER_COMMIT="$(printf '3%.0s' {1..40})"
+MISSING_COMMIT="$(printf '4%.0s' {1..40})"
 CURRENT_MAIN="sha256:$(printf 'a%.0s' {1..64})"
 CURRENT_EXT="sha256:$(printf 'b%.0s' {1..64})"
 TARGET_MAIN="sha256:$(printf 'c%.0s' {1..64})"
 TARGET_EXT="sha256:$(printf 'd%.0s' {1..64})"
+MISSING_MAIN="sha256:$(printf 'e%.0s' {1..64})"
 
 fail() { printf 'prepare rollback test failed: %s\n' "$*" >&2; exit 1; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3 (expected=$1 actual=$2)"; }
@@ -70,7 +72,8 @@ make_fake_tools() {
 #!/usr/bin/env bash
 printf 'git %s\n' "$*" >> "$FIXTURE_CALLS"
 [[ "$*" == *'cat-file -e'* ]] || exit 2
-[[ "$FIXTURE_SCENARIO" != missing-source ]]
+[[ "$FIXTURE_SCENARIO" != missing-source ]] || exit 1
+[[ "$FIXTURE_SCENARIO" != crowded-missing-source || "$*" != *"$FIXTURE_MISSING_COMMIT"* ]]
 EOF
   cat > "$root/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -78,6 +81,7 @@ printf 'docker %s\n' "$*" >> "$FIXTURE_CALLS"
 if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
   ref="${3:-}"
   if [[ "$FIXTURE_SCENARIO" == missing-image && "$ref" == *sub2api-extensions* && ! -e "$FIXTURE_ROOT/pulled-ext" ]]; then exit 1; fi
+  if [[ "$FIXTURE_SCENARIO" == crowded-missing-image && "$ref" == *"$FIXTURE_MISSING_MAIN"* ]]; then exit 1; fi
   case "$*" in
     *'.Config.Labels'*) jq -n --arg revision "$FIXTURE_TARGET_COMMIT" '{"org.opencontainers.image.revision":$revision,"org.opencontainers.image.version":"0.1.162","org.opencontainers.image.source":"https://github.com/ListenCodes/sub2api"}' ;;
     *'.Architecture'*) printf 'amd64\n' ;;
@@ -86,6 +90,10 @@ if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
     *) printf '{}\n' ;;
   esac
   exit 0
+fi
+if [[ "${1:-}" == manifest && "${2:-}" == inspect ]]; then
+  [[ "$FIXTURE_SCENARIO" != crowded-missing-image || "${3:-}" != *"$FIXTURE_MISSING_MAIN"* ]]
+  exit
 fi
 if [[ "${1:-}" == pull ]]; then
   [[ "$FIXTURE_SCENARIO" != pull-failure ]] || exit 1
@@ -135,14 +143,17 @@ seed_case() {
   local scenario="$1" root="$TMP_DIR/$scenario" job_id="rollback-prepare-$scenario"
   local current_backup="$root/data/release-backups/current" old1="$root/data/release-backups/old1" old2="$root/data/release-backups/old2" old3="$root/data/release-backups/old3" old4="$root/data/release-backups/old4"
   mkdir -p "$root/data/release-ledger/releases" "$root/data/release-ledger/operations" "$root/repo/deploy" "$root/runtime" "$old4/target"
+  local old1_commit="$TARGET_COMMIT" old1_main="$TARGET_MAIN"
+  [[ "$scenario" != crowded-missing-source ]] || old1_commit="$MISSING_COMMIT"
+  [[ "$scenario" != crowded-missing-image ]] || old1_main="$MISSING_MAIN"
   write_target "$current_backup" "$CURRENT_MAIN" "$CURRENT_EXT"
   complete_backup_contract "$current_backup"
-  write_target "$old1" "$TARGET_MAIN" "$TARGET_EXT"; complete_backup_contract "$old1"
+  write_target "$old1" "$old1_main" "$TARGET_EXT"; complete_backup_contract "$old1"
   write_target "$old2" "$TARGET_MAIN" "$TARGET_EXT"; complete_backup_contract "$old2"
   write_target "$old3" "$TARGET_MAIN" "$TARGET_EXT"; complete_backup_contract "$old3"
-  write_target "$old4" "$TARGET_MAIN" "$TARGET_EXT"
+  write_target "$old4" "$TARGET_MAIN" "$TARGET_EXT"; complete_backup_contract "$old4"
   write_record "$root" release-current 7 "$CURRENT_COMMIT" "$CURRENT_MAIN" "$CURRENT_EXT" "$current_backup" 2026-07-23T08:30:00Z
-  write_record "$root" release-old1 6 "$TARGET_COMMIT" "$TARGET_MAIN" "$TARGET_EXT" "$old1" 2026-07-23T08:20:00Z
+  write_record "$root" release-old1 6 "$old1_commit" "$old1_main" "$TARGET_EXT" "$old1" 2026-07-23T08:20:00Z
   write_record "$root" release-old2 5 "$TARGET_COMMIT" "$TARGET_MAIN" "$TARGET_EXT" "$old2" 2026-07-23T08:10:00Z
   write_record "$root" release-old3 4 "$TARGET_COMMIT" "$TARGET_MAIN" "$TARGET_EXT" "$old3" 2026-07-23T08:00:00Z
   write_record "$root" release-old4 3 "$OTHER_COMMIT" "$TARGET_MAIN" "$TARGET_EXT" "$old4" 2026-07-23T07:50:00Z
@@ -158,7 +169,11 @@ seed_case() {
   printf 'nginx\n' > "$root/nginx.conf"; printf 'cert\n' > "$root/origin.crt"; printf 'key\n' > "$root/origin.key"
   : > "$root/calls"
   target=release-old2
-  case "$scenario" in current) target=release-current ;; invalid) target=release-missing ;; ineligible) target=release-old4 ;; esac
+  case "$scenario" in
+    current) target=release-current ;;
+    invalid) target=release-missing ;;
+    ineligible|crowded-missing-source|crowded-missing-image) target=release-old4 ;;
+  esac
   jq -n --arg job "$job_id" --arg target "$target" '
     {job_id:$job,operation_kind:"rollback",action:"prepare",status:"resolving_snapshot",message:"queued",target_release_id:$target,
     base_release_id:"release-current",published:false,production_changed:false,rollback:{attempted:false,succeeded:false,message:""}}' \
@@ -172,9 +187,11 @@ seed_case() {
 }
 
 invoke_prepare() {
-  local root="$1" scenario="$2" job_id="rollback-prepare-$scenario"
+  local root="$1" scenario="$2" job_id="rollback-prepare-$scenario" target_commit="$TARGET_COMMIT"
+  [[ "$scenario" != crowded-missing-source && "$scenario" != crowded-missing-image ]] || target_commit="$OTHER_COMMIT"
   PATH="$root/bin:$PATH" FIXTURE_ROOT="$root" FIXTURE_CALLS="$root/calls" FIXTURE_SCENARIO="$scenario" \
-    FIXTURE_TARGET_COMMIT="$TARGET_COMMIT" FIXTURE_TARGET_RENDERED="$root/data/release-backups/old2/target/rendered-compose.json" \
+    FIXTURE_MISSING_COMMIT="$MISSING_COMMIT" FIXTURE_MISSING_MAIN="$MISSING_MAIN" \
+    FIXTURE_TARGET_COMMIT="$target_commit" FIXTURE_TARGET_RENDERED="$root/data/release-backups/old2/target/rendered-compose.json" \
     SUB2API_DATA_DIR="$root/data" SUB2API_REPO="$root/repo" SUB2API_ENV_FILE="$root/repo/deploy/.env" \
     SUB2API_COMPOSE_BASE="$root/repo/deploy/docker-compose.yml" SUB2API_COMPOSE_CUSTOM="$root/repo/deploy/docker-compose.custom.yml" \
     SUB2API_RELEASE_LEDGER_ROOT="$root/data/release-ledger" SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" \
@@ -186,26 +203,30 @@ invoke_prepare() {
 }
 
 run_success() {
-  local scenario="$1" root job_id manifest
+  local scenario="$1" root job_id manifest expected_target=release-old2 expected_custom=v1.0.5
+  if [[ "$scenario" == crowded-missing-source || "$scenario" == crowded-missing-image ]]; then
+    expected_target=release-old4
+    expected_custom=v1.0.3
+  fi
   root="$(seed_case "$scenario")"; job_id="rollback-prepare-$scenario"
   invoke_prepare "$root" "$scenario" || fail "$scenario prepare failed"
   manifest="$root/data/release-prepared/$job_id/manifest.json"
   [[ -s "$manifest" ]] || fail "$scenario manifest missing"
   assert_eq rollback "$(jq -r '.operation_kind' "$manifest")" "$scenario operation kind"
   assert_eq release-current "$(jq -r '.base_release_id' "$manifest")" "$scenario base release"
-  assert_eq release-old2 "$(jq -r '.target_release_id' "$manifest")" "$scenario target release"
+  assert_eq "$expected_target" "$(jq -r '.target_release_id' "$manifest")" "$scenario target release"
   assert_eq 7 "$(jq -r '.base_custom_high_water' "$manifest")" "$scenario high-water"
   assert_eq v0.1.162 "$(jq -r '.target_official_version' "$manifest")" "$scenario official version"
-  assert_eq v1.0.5 "$(jq -r '.target_custom_version' "$manifest")" "$scenario custom version"
+  assert_eq "$expected_custom" "$(jq -r '.target_custom_version' "$manifest")" "$scenario custom version"
   assert_eq 900 "$(( $(date -u -d "$(jq -r '.expires_at' "$manifest")" +%s) - $(date -u -d "$(jq -r '.prepared_at' "$manifest")" +%s) ))" "$scenario expiry"
   assert_eq prepared "$(jq -r '.status' "$root/data/release-ledger/operations/$job_id.json")" "$scenario status"
   assert_eq "$job_id" "$(jq -r '.active_operation_id' "$root/data/release-ledger/state.json")" "$scenario active operation"
   [[ -z "$(grep -E 'docker compose .* (up|down|rm|restart|stop|kill)|api\.github\.com|wait-for-actions' "$root/calls" || true)" ]] || fail "$scenario used forbidden prepare action"
-  if [[ "$scenario" == success ]]; then
-    [[ -z "$(grep '^docker pull ' "$root/calls" || true)" ]] || fail 'present images were pulled'
-  else
+  if [[ "$scenario" == missing-image ]]; then
     assert_eq 1 "$(grep -c '^docker pull .*sub2api-extensions' "$root/calls")" 'missing extension digest was not pulled exactly once'
     [[ -z "$(grep '^docker pull .*sub2api-custom' "$root/calls" || true)" ]] || fail 'present main digest was pulled'
+  else
+    [[ -z "$(grep '^docker pull ' "$root/calls" || true)" ]] || fail 'present images were pulled'
   fi
 }
 
@@ -224,12 +245,12 @@ run_refusal() {
 }
 
 if [[ -n "${FIXTURE_ONLY:-}" ]]; then
-  case "$FIXTURE_ONLY" in success|missing-image) run_success "$FIXTURE_ONLY" ;; *) run_refusal "$FIXTURE_ONLY" ;; esac
+  case "$FIXTURE_ONLY" in success|missing-image|crowded-missing-source|crowded-missing-image) run_success "$FIXTURE_ONLY" ;; *) run_refusal "$FIXTURE_ONLY" ;; esac
   printf 'prepare-rollback=%s=PASS\n' "$FIXTURE_ONLY"
   exit 0
 fi
 
-scenarios=(success missing-image invalid current ineligible corrupt-target ledger-drift backup-failure dump-validation-failure missing-source)
+scenarios=(success missing-image crowded-missing-source crowded-missing-image invalid current ineligible corrupt-target ledger-drift backup-failure dump-validation-failure missing-source)
 for ((offset=0; offset<${#scenarios[@]}; offset+=5)); do
   pids=(); batch=()
   for ((index=offset; index<offset+5 && index<${#scenarios[@]}; index++)); do

@@ -52,7 +52,7 @@ func TestReleaseLedgerListsLastThreeEligibleReleases(t *testing.T) {
 	}, records...)
 	require.NoError(t, os.Remove(filepath.Join(records[3].BackupDir, "target", "SHA256SUMS")))
 
-	rollback, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).ListRollbackReleases(3)
+	rollback, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).ListRollbackReleases(3, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"release-second", "release-third", "release-oldest"}, []string{
 		rollback[0].ReleaseID,
@@ -103,7 +103,7 @@ func TestReleaseLedgerExcludesIncompleteRollbackSnapshots(t *testing.T) {
 			}, current, valid, invalid)
 			test.mutate(t, invalid)
 
-			rollback, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).ListRollbackReleases(3)
+			rollback, err := newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts")).ListRollbackReleases(3, nil)
 			require.NoError(t, err)
 			require.Equal(t, []ReleaseRecord{valid}, rollback)
 		})
@@ -271,7 +271,7 @@ func writeTestSHA256Manifest(root string) error {
 	}
 	writer := bufio.NewWriter(manifest)
 	for _, relative := range paths {
-		if _, err := fmt.Fprintf(writer, "%s  %s\n", testFileSHA256(filepath.Join(root, filepath.FromSlash(relative))), relative); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s  ./%s\n", testFileSHA256(filepath.Join(root, filepath.FromSlash(relative))), relative); err != nil {
 			_ = manifest.Close()
 			return err
 		}
