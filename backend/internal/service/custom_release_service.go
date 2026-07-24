@@ -17,6 +17,7 @@ import (
 const (
 	defaultProductionReleaseStatePath = "/app/data/release-state.json"
 	defaultReleaseLedgerRoot          = "/app/data/release-ledger"
+	defaultReleaseRecordBackupRoot    = "/var/lib/docker/volumes/deploy_sub2api_data/_data/release-backups"
 	githubCustomRepo                  = "ListenCodes/sub2api"
 	customReleaseMainRepository       = "ghcr.io/listencodes/sub2api-custom"
 	customReleaseExtensionsRepository = "ghcr.io/listencodes/sub2api-extensions"
@@ -141,8 +142,12 @@ func customReleaseBackupRoot() string {
 	return customReleaseEnv("SUB2API_RELEASE_BACKUP_ROOT", filepath.Join(filepath.Dir(customReleaseLedgerRoot()), "release-backups"))
 }
 
+func customReleaseRecordBackupRoot() string {
+	return customReleaseEnv("SUB2API_RELEASE_RECORD_BACKUP_ROOT", defaultReleaseRecordBackupRoot)
+}
+
 func newCustomReleaseLedgerStore() *releaseLedgerStore {
-	return newReleaseLedgerStoreWithArtifactRoot(customReleaseLedgerRoot(), customReleaseBackupRoot())
+	return newReleaseLedgerStoreWithArtifactRoots(customReleaseLedgerRoot(), customReleaseBackupRoot(), customReleaseRecordBackupRoot())
 }
 
 func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*CustomReleaseInfo, error) {
