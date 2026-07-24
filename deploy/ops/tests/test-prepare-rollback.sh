@@ -218,7 +218,7 @@ run_success() {
   assert_eq 7 "$(jq -r '.base_custom_high_water' "$manifest")" "$scenario high-water"
   assert_eq v0.1.162 "$(jq -r '.target_official_version' "$manifest")" "$scenario official version"
   assert_eq "$expected_custom" "$(jq -r '.target_custom_version' "$manifest")" "$scenario custom version"
-  assert_eq 900 "$(( $(date -u -d "$(jq -r '.expires_at' "$manifest")" +%s) - $(date -u -d "$(jq -r '.prepared_at' "$manifest")" +%s) ))" "$scenario expiry"
+  assert_eq 3600 "$(( $(date -u -d "$(jq -r '.expires_at' "$manifest")" +%s) - $(date -u -d "$(jq -r '.prepared_at' "$manifest")" +%s) ))" "$scenario expiry"
   assert_eq prepared "$(jq -r '.status' "$root/data/release-ledger/operations/$job_id.json")" "$scenario status"
   assert_eq "$job_id" "$(jq -r '.active_operation_id' "$root/data/release-ledger/state.json")" "$scenario active operation"
   [[ -z "$(grep -E 'docker compose .* (up|down|rm|restart|stop|kill)|api\.github\.com|wait-for-actions' "$root/calls" || true)" ]] || fail "$scenario used forbidden prepare action"
