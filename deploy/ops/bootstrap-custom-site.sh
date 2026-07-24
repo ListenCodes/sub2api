@@ -108,7 +108,9 @@ fi
 for command_name in git jq docker curl sha256sum find xargs flock install stat uname; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
 done
-[[ "$(uname -s)" == Linux && "$(uname -m)" =~ ^(x86_64|amd64)$ ]] || fail "host must provide $EXPECTED_PLATFORM"
+HOST_OS="${SUB2API_HOST_OS:-$(uname -s)}"
+HOST_ARCH="${SUB2API_HOST_ARCH:-$(uname -m)}"
+[[ "$HOST_OS" == Linux && "$HOST_ARCH" =~ ^(x86_64|amd64)$ ]] || fail "host must provide $EXPECTED_PLATFORM"
 [[ -r "$COMMON_HELPER" && -r "$LEDGER_HELPER" && -x "$VERIFY_IMAGES_SCRIPT" ]] || fail 'release helpers are unavailable'
 [[ "$INSTALL_ROOT" == /* && "$INSTALL_ROOT" != / && "$SYSTEMD_ROOT" == /* && "$SYSTEMD_ROOT" != / ]] || fail 'install paths must be absolute non-root paths'
 [[ ! -e "$INSTALL_ROOT" ]] || fail 'operations install root already exists'

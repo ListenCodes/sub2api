@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf 'docker %s\n' "$*" >> "${BOOTSTRAP_COMMAND_LOG:?}"
+
+if [[ "${1:-}" == container && "${2:-}" == inspect ]]; then
+  [[ "${FAKE_DOCKER_EXISTING:-0}" == 1 ]] && exit 0
+  exit 1
+fi
+if [[ "${1:-}" == volume && "${2:-}" == inspect ]]; then
+  [[ "${FAKE_DOCKER_EXISTING:-0}" == 1 ]] && exit 0
+  exit 1
+fi
+if [[ "${1:-}" == compose ]]; then
+  env_file=''
+  previous=''
+  for argument in "$@"; do
+    [[ "$previous" != --env-file ]] || env_file="$argument"
+    previous="$argument"
+  done
+  if [[ "$*" == *'config --format json'* ]]; then
+    main="$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file" | tail -n 1)"
+    extensions="$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file" | tail -n 1)"
+    jq -n --arg main "$main" --arg extensions "$extensions" '{
+      name:"deploy",
+      services:{
+        sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/repo"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},
+        "extensions-self":{image:$extensions,healthcheck:{test:["CMD","true"]},networks:{"sub2api-network":{}}},
+        postgres:{},redis:{},"risk-control-postgres":{}
+      },
+      volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}
+    }'
+  fi
+  exit 0
+fi
+exit 0
