@@ -190,7 +190,10 @@ run_success() {
   assert_eq target "$(cat "$root/runtime/sub2api")" "$scenario main runtime"
   assert_eq success "$(jq -r '.status' "$root/data/release-ledger/operations/$job.json")" "$scenario operation status"
   source "$ROOT_DIR/deploy/ops/release-ledger.sh"
-  SUB2API_DATA_DIR="$root/data" RELEASE_LEDGER_ROOT="$root/data/release-ledger" RELEASE_BACKUP_ROOT="$root/data/release-backups" PRODUCTION_RELEASE_STATE_FILE="$root/data/release-state.json" \
+  PATH="$root/bin:$PATH" FIXTURE_ROOT="$root" FIXTURE_CALLS="$root/calls" FIXTURE_SCENARIO="$scenario" \
+    FIXTURE_BASE_COMMIT="$BASE_COMMIT" FIXTURE_TARGET_COMMIT="$TARGET_COMMIT" FIXTURE_BASE_MAIN="$BASE_MAIN" FIXTURE_BASE_EXT="$BASE_EXT" \
+    FIXTURE_TARGET_MAIN="$TARGET_MAIN" FIXTURE_TARGET_EXT="$TARGET_EXT" RELEASE_REPO="$root/repo" \
+    SUB2API_DATA_DIR="$root/data" RELEASE_LEDGER_ROOT="$root/data/release-ledger" RELEASE_BACKUP_ROOT="$root/data/release-backups" PRODUCTION_RELEASE_STATE_FILE="$root/data/release-state.json" \
     ledger_list_rollback_release_ids 3 | grep -qx release-base || fail "$scenario former current release not eligible"
 }
 

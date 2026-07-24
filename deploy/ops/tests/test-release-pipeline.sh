@@ -431,6 +431,9 @@ run_scenario() {
   RELEASE_JOBS_DIR="$SUB2API_DATA_DIR/release-ledger/operations"
   CURRENT_RELEASE_JOB_FILE="$SUB2API_DATA_DIR/release-current-job-id"
   PRODUCTION_RELEASE_STATE_FILE="$SUB2API_DATA_DIR/release-state.json"
+  mkdir -p "$SUB2API_DATA_DIR/release-ledger"
+  jq -n '{schema_version:1,current_release_id:"release-fixture",custom_version_high_water:0,active_operation_id:null,updated_at:"2026-07-16T12:00:00Z"}' \
+    > "$SUB2API_DATA_DIR/release-ledger/state.json"
   release_job_init "$job_id"
   release_job_update "$job_id" checking_updates 'Fixture prepare queued' '{"action":"prepare"}'
   release_production_state_write "$(jq -n \

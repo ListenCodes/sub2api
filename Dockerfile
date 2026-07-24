@@ -122,6 +122,7 @@ LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 # Install runtime dependencies
 RUN apk add --no-cache \
     ca-certificates \
+    git \
     tzdata \
     su-exec \
     libpq \

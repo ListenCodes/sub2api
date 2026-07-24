@@ -81,6 +81,7 @@ var (
 	customReleaseMu                 sync.Mutex
 	customReleaseStartScript        = startCustomReleaseScript
 	customReleaseRollbackEligible   = rollbackReleaseRuntimeEligible
+	customReleaseSourceAvailable    = rollbackSourceAvailable
 	customReleaseImageAvailable     = rollbackImageAvailable
 	ErrUpdateDetectionIncomplete    = infraerrors.Conflict("UPDATE_DETECTION_INCOMPLETE", "release detection is incomplete; retry before preparing")
 	ErrRollbackReleaseInvalid       = infraerrors.BadRequest("ROLLBACK_RELEASE_INVALID", "rollback release is not eligible")
@@ -461,17 +462,25 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 	return nil, ErrRollbackReleaseInvalid
 }
 
-func rollbackReleaseRuntimeEligible(ctx context.Context, githubClient GitHubReleaseClient, record *ReleaseRecord) bool {
-	client, ok := githubClient.(customReleaseGitHubClient)
-	if !ok || record == nil {
-		return false
-	}
-	commit, err := client.FetchRefCommit(ctx, githubCustomRepo, record.CustomCommit)
-	if err != nil || commit != record.CustomCommit {
+func rollbackReleaseRuntimeEligible(ctx context.Context, _ GitHubReleaseClient, record *ReleaseRecord) bool {
+	if record == nil || !customReleaseSourceAvailable(ctx, record.CustomCommit) {
 		return false
 	}
 	return customReleaseImageAvailable(ctx, customReleaseMainRepository+"@"+record.MainDigest) &&
 		customReleaseImageAvailable(ctx, customReleaseExtensionsRepository+"@"+record.ExtensionsDigest)
+}
+
+func rollbackSourceAvailable(ctx context.Context, commit string) bool {
+	repo := customReleaseEnv("SUB2API_REPO", "/repo")
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return exec.CommandContext(
+		checkCtx,
+		"git",
+		"-c", "safe.directory="+repo,
+		"-C", repo,
+		"cat-file", "-e", commit+"^{commit}",
+	).Run() == nil
 }
 
 func rollbackImageAvailable(ctx context.Context, reference string) bool {

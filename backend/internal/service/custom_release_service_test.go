@@ -298,23 +298,27 @@ func TestCustomReleaseRollbackCandidatesDoNotLetUnavailableSnapshotsConsumeSlots
 
 func TestRollbackReleaseRuntimeEligibilityRequiresSourceAndBothImages(t *testing.T) {
 	record := releaseLedgerTestRecord(t.TempDir(), "release-eligible", 1, "2026-07-23T08:00:00Z")
-	client := &customReleaseGitHubClientStub{tagCommits: map[string]string{record.CustomCommit: record.CustomCommit}}
+	previousSourceAvailable := customReleaseSourceAvailable
 	previousImageAvailable := customReleaseImageAvailable
-	t.Cleanup(func() { customReleaseImageAvailable = previousImageAvailable })
+	t.Cleanup(func() {
+		customReleaseSourceAvailable = previousSourceAvailable
+		customReleaseImageAvailable = previousImageAvailable
+	})
 
+	customReleaseSourceAvailable = func(context.Context, string) bool { return true }
 	customReleaseImageAvailable = func(_ context.Context, reference string) bool {
 		return reference == customReleaseMainRepository+"@"+record.MainDigest ||
 			reference == customReleaseExtensionsRepository+"@"+record.ExtensionsDigest
 	}
-	require.True(t, rollbackReleaseRuntimeEligible(context.Background(), client, &record))
+	require.True(t, rollbackReleaseRuntimeEligible(context.Background(), nil, &record))
 
-	client.tagCommits[record.CustomCommit] = ""
-	require.False(t, rollbackReleaseRuntimeEligible(context.Background(), client, &record))
-	client.tagCommits[record.CustomCommit] = record.CustomCommit
+	customReleaseSourceAvailable = func(context.Context, string) bool { return false }
+	require.False(t, rollbackReleaseRuntimeEligible(context.Background(), nil, &record))
+	customReleaseSourceAvailable = func(context.Context, string) bool { return true }
 	customReleaseImageAvailable = func(_ context.Context, reference string) bool {
 		return reference != customReleaseExtensionsRepository+"@"+record.ExtensionsDigest
 	}
-	require.False(t, rollbackReleaseRuntimeEligible(context.Background(), client, &record))
+	require.False(t, rollbackReleaseRuntimeEligible(context.Background(), nil, &record))
 }
 
 func TestCustomReleasePrepareIsIdempotentForSameOperationAndRejectsDifferentTarget(t *testing.T) {
