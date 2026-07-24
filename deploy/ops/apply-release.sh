@@ -212,6 +212,7 @@ live_target_identity_matches() {
 validate_update_identity_contract() {
   jq -e -n --argjson base "$BASE_RECORD" --argjson manifest "$(cat "$manifest")" '
     $manifest.current_official_version == $base.official_version
+    and ($manifest.custom_docs_only | type == "boolean")
     and $manifest.current_custom_version == $base.custom_version
     and $manifest.source_commit == $base.custom_commit
     and $manifest.stable_release_tag == $manifest.target_official_version
@@ -219,17 +220,21 @@ validate_update_identity_contract() {
       $manifest.advances_custom_version == false
       and $manifest.proposed_custom_sequence == $base.custom_version_sequence
       and $manifest.target_custom_version == $base.custom_version
-      and $manifest.target_custom_commit == $base.custom_commit
+      and (if $manifest.custom_docs_only then
+        $manifest.target_custom_commit != $base.custom_commit
+      else $manifest.target_custom_commit == $base.custom_commit end)
       and $manifest.target_official_version != $base.official_version
       and $manifest.stable_release_commit != $base.official_commit
     elif $manifest.update_kind == "custom" then
-      $manifest.advances_custom_version == true
+      $manifest.custom_docs_only == false
+      and $manifest.advances_custom_version == true
       and $manifest.target_official_version == $base.official_version
       and $manifest.stable_release_commit == $base.official_commit
       and $manifest.target_custom_commit == $manifest.target_commit
       and $manifest.target_custom_commit != $base.custom_commit
     elif $manifest.update_kind == "combined" then
-      $manifest.advances_custom_version == true
+      $manifest.custom_docs_only == false
+      and $manifest.advances_custom_version == true
       and $manifest.target_official_version != $base.official_version
       and $manifest.stable_release_commit != $base.official_commit
       and $manifest.target_custom_commit != $base.custom_commit

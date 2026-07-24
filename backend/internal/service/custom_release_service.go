@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +18,8 @@ const (
 	defaultProductionReleaseStatePath = "/app/data/release-state.json"
 	defaultReleaseLedgerRoot          = "/app/data/release-ledger"
 	githubCustomRepo                  = "ListenCodes/sub2api"
+	customReleaseMainRepository       = "ghcr.io/listencodes/sub2api-custom"
+	customReleaseExtensionsRepository = "ghcr.io/listencodes/sub2api-extensions"
 
 	UpdateKindNone     = "none"
 	UpdateKindOfficial = "official"
@@ -79,6 +80,9 @@ type ChangedFile struct {
 var (
 	customReleaseMu                 sync.Mutex
 	customReleaseStartScript        = startCustomReleaseScript
+	customReleaseRollbackEligible   = rollbackReleaseRuntimeEligible
+	customReleaseSourceAvailable    = rollbackSourceAvailable
+	customReleaseImageAvailable     = rollbackImageAvailable
 	ErrUpdateDetectionIncomplete    = infraerrors.Conflict("UPDATE_DETECTION_INCOMPLETE", "release detection is incomplete; retry before preparing")
 	ErrRollbackReleaseInvalid       = infraerrors.BadRequest("ROLLBACK_RELEASE_INVALID", "rollback release is not eligible")
 	ErrReleaseOperationInconsistent = infraerrors.InternalServer("RELEASE_OPERATION_INCONSISTENT", "release operation state is inconsistent")
@@ -127,10 +131,6 @@ func customReleaseOperationPath(jobID string) (string, error) {
 
 func customReleaseJobIDPath() string {
 	return customReleaseEnv("SUB2API_RELEASE_JOB_ID_PATH", defaultUpdateJobIDPath)
-}
-
-func customReleaseStatePath() string {
-	return customReleaseEnv("SUB2API_PRODUCTION_RELEASE_STATE_PATH", defaultProductionReleaseStatePath)
 }
 
 func customReleaseLedgerRoot() string {
@@ -248,7 +248,7 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 	switch {
 	case !info.HasUpdate:
 		info.UpdateKind = UpdateKindNone
-	case info.OfficialUpdate && info.CustomUpdate:
+	case info.OfficialUpdate && info.CustomUpdate && !info.DocsOnly:
 		info.UpdateKind = UpdateKindCombined
 	case info.OfficialUpdate:
 		info.UpdateKind = UpdateKindOfficial
@@ -264,6 +264,8 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 		}
 		if info.CustomUpdate && !info.DocsOnly {
 			info.TargetCustomVersion = fmt.Sprintf("v1.0.%d", state.CustomVersionHighWater+1)
+		} else if info.OfficialUpdate {
+			info.TargetCustomVersion = current.CustomVersion
 		} else if info.DocsOnly {
 			info.TargetCustomVersion = ""
 		}
@@ -293,7 +295,9 @@ func (s *UpdateService) ListRollbackReleases(ctx context.Context) ([]ReleaseReco
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return newCustomReleaseLedgerStore().ListRollbackReleases(3)
+	return newCustomReleaseLedgerStore().ListRollbackReleases(3, func(record *ReleaseRecord) bool {
+		return customReleaseRollbackEligible(ctx, s.githubClient, record)
+	})
 }
 
 func (s *UpdateService) PrepareRollback(ctx context.Context, releaseID string) (*UpdateJob, error) {
@@ -341,12 +345,10 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 		}
 		if !IsTerminalUpdateStatus(existing.Status) || existing.Status == ReleaseStatusPrepared {
 			if existing.Status == ReleaseStatusPrepared && preparedJobExpired(existing) {
-				existing.Status = ReleaseStatusExpired
-				existing.Message = "prepared operation expired; prepare again"
-				existing.UpdatedAt = time.Now().UTC()
-				if err := writeUpdateStatus(currentPath, existing); err != nil {
+				if err := queuePreparedOperationExpiration(existing); err != nil {
 					return nil, err
 				}
+				return nil, ErrUpdateInProgress
 			} else if existing.OperationKind == kind && existing.Action == ReleasePhasePrepare && existing.TargetReleaseID == reference {
 				return existing, nil
 			} else {
@@ -430,6 +432,7 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 		job.TargetOfficialVersion = info.TargetOfficialVersion
 		job.TargetCustomVersion = info.TargetCustomVersion
 		job.TargetCustomCommit = info.TargetCustomCommit
+		job.CustomDocsOnly = info.DocsOnly
 		job.UpdateKind = info.UpdateKind
 		job.ProductionCommit = current.CustomCommit
 		job.StableReleaseTag = current.OfficialVersion
@@ -438,7 +441,7 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 		return job, nil
 	}
 
-	releases, err := ledger.ListRollbackReleases(3)
+	releases, err := s.ListRollbackReleases(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -457,6 +460,39 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 		return job, nil
 	}
 	return nil, ErrRollbackReleaseInvalid
+}
+
+func rollbackReleaseRuntimeEligible(ctx context.Context, _ GitHubReleaseClient, record *ReleaseRecord) bool {
+	if record == nil || !customReleaseSourceAvailable(ctx, record.CustomCommit) {
+		return false
+	}
+	return customReleaseImageAvailable(ctx, customReleaseMainRepository+"@"+record.MainDigest) &&
+		customReleaseImageAvailable(ctx, customReleaseExtensionsRepository+"@"+record.ExtensionsDigest)
+}
+
+func rollbackSourceAvailable(ctx context.Context, commit string) bool {
+	repo := customReleaseEnv("SUB2API_REPO", "/repo")
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return exec.CommandContext(
+		checkCtx,
+		"git",
+		"-c", "safe.directory="+repo,
+		"-C", repo,
+		"cat-file", "-e", commit+"^{commit}",
+	).Run() == nil
+}
+
+func rollbackImageAvailable(ctx context.Context, reference string) bool {
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if exec.CommandContext(checkCtx, "docker", "image", "inspect", reference).Run() == nil {
+		return true
+	}
+	if checkCtx.Err() != nil {
+		return false
+	}
+	return exec.CommandContext(checkCtx, "docker", "manifest", "inspect", reference).Run() == nil
 }
 
 func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) (*UpdateJob, error) {
@@ -490,10 +526,9 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 	}
 	if job.Status == ReleaseStatusPrepared {
 		if preparedJobExpired(job) {
-			job.Status = ReleaseStatusExpired
-			job.Message = "prepared operation expired; prepare again"
-			job.UpdatedAt = time.Now().UTC()
-			_ = writeUpdateStatus(jobPath, job)
+			if err := queuePreparedOperationExpiration(job); err != nil {
+				return nil, err
+			}
 			return nil, ErrUpdateExpired
 		}
 		scriptPath := customReleaseScriptPath()
@@ -527,6 +562,24 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 	return nil, ErrUpdateNotPrepared
 }
 
+func queuePreparedOperationExpiration(job *UpdateJob) error {
+	if job == nil || !operationIDPattern.MatchString(job.JobID) {
+		return ErrReleaseOperationInconsistent
+	}
+	scriptPath := customReleaseScriptPath()
+	if _, err := os.Stat(scriptPath); err != nil {
+		return fmt.Errorf("sync script not found at %s: %w", scriptPath, err)
+	}
+	wait, err := customReleaseStartScript(scriptPath, ReleasePhaseExpire, job.JobID)
+	if err != nil {
+		return fmt.Errorf("start expiration settlement: %w", err)
+	}
+	if err := wait(); err != nil {
+		return fmt.Errorf("queue expiration settlement: %w", err)
+	}
+	return nil
+}
+
 func preparedJobExpired(job *UpdateJob) bool {
 	if job == nil || strings.TrimSpace(job.ExpiresAt) == "" {
 		return false
@@ -556,21 +609,6 @@ func isFullCommitSHA(value string) bool {
 		}
 	}
 	return true
-}
-
-func readProductionReleaseState(path string) (*ProductionReleaseState, error) {
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var state ProductionReleaseState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, fmt.Errorf("decode release state: %w", err)
-	}
-	return &state, nil
 }
 
 func customReleaseInfoFromGitHubRelease(release *GitHubRelease) *ReleaseInfo {

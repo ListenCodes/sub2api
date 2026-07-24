@@ -216,6 +216,8 @@ $serviceUnit = Get-Content -Raw -LiteralPath $serviceUnitPath
 Assert-Matches $pathUnit 'PathExists=/var/lib/docker/volumes/deploy_sub2api_data/_data/release-trigger' 'path unit watches the persistent trigger'
 Assert-Matches $pathUnit 'Unit=sub2api-release\.service' 'path unit starts the release service'
 Assert-Matches $serviceUnit 'Type=oneshot' 'release service is one-shot'
+Assert-Matches $serviceUnit 'Restart=on-failure' 'release service restarts after an interrupted executor'
+Assert-Matches $serviceUnit 'RestartSec=5s' 'release service uses a bounded restart delay'
 Assert-Matches $serviceUnit 'Environment=SUB2API_DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data' 'release service uses the persistent data directory'
 Assert-Matches $serviceUnit 'ExecStart=/opt/sub2api-custom/sync-and-publish\.sh' 'release service calls only the unified orchestrator'
 Assert-NotMatches $serviceUnit 'sync-upstream\.sh|publish-custom\.sh' 'systemd service must not bypass the orchestrator'

@@ -1,10 +1,14 @@
 package service
 
 import (
+	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -24,6 +28,7 @@ var (
 	commitPattern         = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	digestPattern         = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	hashPattern           = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	manifestLinePattern   = regexp.MustCompile(`^([0-9a-f]{64})[ \t][ \t*](.+)$`)
 )
 
 type ReleaseLedgerState struct {
@@ -58,10 +63,6 @@ type ReleaseRecord struct {
 type releaseLedgerStore struct {
 	root         string
 	artifactRoot string
-}
-
-func newReleaseLedgerStore(root string) *releaseLedgerStore {
-	return newReleaseLedgerStoreWithArtifactRoot(root, filepath.Join(root, "artifacts"))
 }
 
 func newReleaseLedgerStoreWithArtifactRoot(root, artifactRoot string) *releaseLedgerStore {
@@ -106,7 +107,7 @@ func (s *releaseLedgerStore) currentReleaseFromState(state *ReleaseLedgerState) 
 	return record, nil
 }
 
-func (s *releaseLedgerStore) ListRollbackReleases(limit int) ([]ReleaseRecord, error) {
+func (s *releaseLedgerStore) ListRollbackReleases(limit int, eligible func(*ReleaseRecord) bool) ([]ReleaseRecord, error) {
 	state, err := s.ReadState()
 	if err != nil {
 		return nil, err
@@ -152,10 +153,17 @@ func (s *releaseLedgerStore) ListRollbackReleases(limit int) ([]ReleaseRecord, e
 	if limit <= 0 {
 		return []ReleaseRecord{}, nil
 	}
-	if len(records) > limit {
-		records = records[:limit]
+	result := make([]ReleaseRecord, 0, min(limit, len(records)))
+	for index := range records {
+		if eligible != nil && !eligible(&records[index]) {
+			continue
+		}
+		result = append(result, records[index])
+		if len(result) == limit {
+			break
+		}
 	}
-	return records, nil
+	return result, nil
 }
 
 func (s *releaseLedgerStore) readRecord(releaseID string) (*ReleaseRecord, error) {
@@ -203,20 +211,187 @@ func (s *releaseLedgerStore) rollbackArtifactsAvailable(record *ReleaseRecord) b
 	if err != nil {
 		return false
 	}
-	targetPath, err := s.canonicalArtifactPath(filepath.Join(backupDir, "target"))
+	if err := rejectReleaseBackupSymlinks(backupDir); err != nil {
+		return false
+	}
+	required := []string{
+		"SHA256SUMS", ".env", "docker-compose.yml", "docker-compose.custom.yml", "release-state.json",
+		"container-metadata.json", "image-metadata.txt", "rollback-tags.txt", "sub2api_db.dump", "sub2api_db.list",
+		"risk_control_db.dump", "risk_control_db.list", "docker-containers.txt", "docker-images.txt",
+		"nginx-vhost.path", "origin-cert.path", "origin-key.path", "target/SHA256SUMS", "target/.env",
+		"target/docker-compose.yml", "target/docker-compose.custom.yml", "target/rendered-compose.json",
+	}
+	for _, relative := range required {
+		if !regularReleaseBackupFile(filepath.Join(backupDir, filepath.FromSlash(relative)), true) {
+			return false
+		}
+	}
+	for _, pathFile := range []string{"nginx-vhost.path", "origin-cert.path", "origin-key.path"} {
+		reference, err := firstReleaseBackupLine(filepath.Join(backupDir, pathFile))
+		if err != nil {
+			return false
+		}
+		base := path.Base(strings.ReplaceAll(reference, "\\", "/"))
+		if base == "." || base == ".." || !regularReleaseBackupFile(filepath.Join(backupDir, base), false) {
+			return false
+		}
+	}
+	if err := validateReleaseBackupManifest(filepath.Join(backupDir, "target")); err != nil {
+		return false
+	}
+	if err := validateReleaseBackupManifest(backupDir); err != nil {
+		return false
+	}
+	checks := map[string]string{
+		filepath.Join(backupDir, "SHA256SUMS"):                          record.BackupManifestSHA256,
+		filepath.Join(backupDir, "target", "docker-compose.yml"):        record.BaseComposeSHA256,
+		filepath.Join(backupDir, "target", "docker-compose.custom.yml"): record.CustomComposeSHA256,
+		filepath.Join(backupDir, "target", "rendered-compose.json"):     record.RenderedComposeSHA256,
+		filepath.Join(backupDir, "target", ".env"):                      record.EnvSHA256,
+	}
+	for file, expected := range checks {
+		actual, err := releaseBackupFileSHA256(file)
+		if err != nil || actual != expected {
+			return false
+		}
+	}
+	return true
+}
+
+func rejectReleaseBackupSymlinks(root string) error {
+	return filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("release backup contains a symbolic link")
+		}
+		return nil
+	})
+}
+
+func regularReleaseBackupFile(file string, requireContent bool) bool {
+	info, err := os.Lstat(file)
+	return err == nil && info.Mode().IsRegular() && (!requireContent || info.Size() > 0)
+}
+
+func firstReleaseBackupLine(file string) (string, error) {
+	handle, err := os.Open(file)
 	if err != nil {
-		return false
+		return "", err
 	}
-	target, err := os.Stat(targetPath)
-	if err != nil || !target.IsDir() {
-		return false
+	defer func() { _ = handle.Close() }()
+	scanner := bufio.NewScanner(handle)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("release backup path reference is empty")
 	}
-	checksumsPath, err := s.canonicalArtifactPath(filepath.Join(targetPath, "SHA256SUMS"))
+	reference := strings.TrimSpace(scanner.Text())
+	if reference == "" {
+		return "", fmt.Errorf("release backup path reference is empty")
+	}
+	return reference, nil
+}
+
+func validateReleaseBackupManifest(root string) error {
+	manifestPath := filepath.Join(root, "SHA256SUMS")
+	if !regularReleaseBackupFile(manifestPath, true) {
+		return fmt.Errorf("release backup manifest is missing")
+	}
+	handle, err := os.Open(manifestPath)
 	if err != nil {
+		return err
+	}
+	defer func() { _ = handle.Close() }()
+	declared := make(map[string]string)
+	scanner := bufio.NewScanner(handle)
+	for scanner.Scan() {
+		matches := manifestLinePattern.FindStringSubmatch(scanner.Text())
+		if len(matches) != 3 {
+			return fmt.Errorf("invalid release backup manifest entry")
+		}
+		relative := matches[2]
+		for strings.HasPrefix(relative, "./") {
+			relative = strings.TrimPrefix(relative, "./")
+		}
+		if !validReleaseBackupRelativePath(relative) {
+			return fmt.Errorf("invalid release backup manifest entry")
+		}
+		if _, exists := declared[relative]; exists {
+			return fmt.Errorf("duplicate release backup manifest entry")
+		}
+		declared[relative] = matches[1]
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	actual := make(map[string]string)
+	if err := filepath.WalkDir(root, func(file string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("release backup contains a symbolic link")
+		}
+		if entry.IsDir() || entry.Name() == "SHA256SUMS" {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("release backup contains a non-regular file")
+		}
+		relative, err := filepath.Rel(root, file)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		digest, err := releaseBackupFileSHA256(file)
+		if err != nil {
+			return err
+		}
+		actual[relative] = digest
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(actual) != len(declared) {
+		return fmt.Errorf("release backup manifest coverage mismatch")
+	}
+	for relative, digest := range actual {
+		if declared[relative] != digest {
+			return fmt.Errorf("release backup manifest checksum mismatch")
+		}
+	}
+	return nil
+}
+
+func validReleaseBackupRelativePath(relative string) bool {
+	if relative == "" || strings.HasPrefix(relative, "/") || strings.Contains(relative, "\\") || strings.Contains(relative, "//") || path.Base(relative) == "SHA256SUMS" {
 		return false
 	}
-	checksums, err := os.Stat(checksumsPath)
-	return err == nil && checksums.Mode().IsRegular()
+	if len(relative) >= 3 && relative[1] == ':' && (relative[2] == '/' || relative[2] == '\\') {
+		return false
+	}
+	for _, segment := range strings.Split(relative, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func releaseBackupFileSHA256(file string) (string, error) {
+	handle, err := os.Open(file)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = handle.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, handle); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func (s *releaseLedgerStore) canonicalArtifactPath(path string) (string, error) {

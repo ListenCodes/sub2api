@@ -5,6 +5,9 @@ RELEASE_LEDGER_ROOT="${SUB2API_RELEASE_LEDGER_ROOT:-$SUB2API_DATA_DIR/release-le
 RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-$SUB2API_DATA_DIR/release-backups}"
 PRODUCTION_RELEASE_STATE_FILE="${SUB2API_RELEASE_STATE_FILE:-$SUB2API_DATA_DIR/release-state.json}"
 RELEASE_LEDGER_LOCK_FILE="${SUB2API_RELEASE_LEDGER_LOCK_FILE:-${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-release.lock}}"
+RELEASE_REPO="${SUB2API_REPO:-/root/sub2api}"
+RELEASE_MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
+RELEASE_EXTENSIONS_REPOSITORY="${SUB2API_EXTENSIONS_REPOSITORY:-ghcr.io/listencodes/sub2api-extensions}"
 
 ledger_state_path() { printf '%s/state.json\n' "$RELEASE_LEDGER_ROOT"; }
 ledger_release_path() { printf '%s/releases/%s.json\n' "$RELEASE_LEDGER_ROOT" "$1"; }
@@ -134,6 +137,20 @@ ledger_validate_release_artifacts() {
   [[ "$(jq -r '.env_sha256' <<< "$record")" == "$(sha256sum "$backup_dir/target/.env" | awk '{print $1}')" ]]
 }
 
+ledger_release_runtime_available() {
+  local record_path="$1" record commit main_digest extensions_digest reference
+  record="$(cat "$record_path")" || return 1
+  commit="$(jq -er '.custom_commit' <<< "$record")" || return 1
+  main_digest="$(jq -er '.main_digest' <<< "$record")" || return 1
+  extensions_digest="$(jq -er '.extensions_digest' <<< "$record")" || return 1
+  git -C "$RELEASE_REPO" cat-file -e "$commit^{commit}" >/dev/null 2>&1 || return 1
+  for reference in "$RELEASE_MAIN_REPOSITORY@$main_digest" "$RELEASE_EXTENSIONS_REPOSITORY@$extensions_digest"; do
+    docker image inspect "$reference" >/dev/null 2>&1 \
+      || docker manifest inspect "$reference" >/dev/null 2>&1 \
+      || return 1
+  done
+}
+
 ledger_list_rollback_release_ids() {
   local limit="${1:-3}" state_path current path record release_id published count=0
   local -a candidates=()
@@ -153,6 +170,7 @@ ledger_list_rollback_release_ids() {
   shopt -u nullglob
   while IFS=' ' read -r published release_id; do
     [[ -n "$release_id" ]] || continue
+    ledger_release_runtime_available "$(ledger_release_path "$release_id")" || continue
     printf '%s\n' "$release_id"
     count=$((count + 1))
     [[ "$count" -lt "$limit" ]] || break
@@ -268,6 +286,11 @@ _ledger_set_active_operation_unlocked() {
   ledger_validate_state "$state_path" || return 1
   state="$(cat "$state_path")"
   current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  if [[ -n "$current" && "$current" != "$operation_id" ]] \
+    && _ledger_recover_pre_mutation_terminal_unlocked "$current"; then
+    state="$(cat "$state_path")"
+    current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  fi
   [[ -z "$current" || "$current" == "$operation_id" ]] || return 1
   [[ "$current" != "$operation_id" ]] || return 0
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -329,6 +352,35 @@ ledger_settle_pre_mutation_failure() {
   ledger_with_lock _ledger_settle_pre_mutation_failure_unlocked "$@"
 }
 
+_ledger_settle_noop_success_unlocked() {
+  local operation_id="$1" message="$2" metadata="$3"
+  local state_path state current operation_path operation current_status
+  [[ "$operation_id" =~ ^(update|rollback)-[A-Za-z0-9-]+$ ]] || return 1
+  jq -e 'type == "object" and .published == false and .production_changed == false' <<< "$metadata" >/dev/null || return 1
+  state_path="$(ledger_state_path)"
+  ledger_validate_state "$state_path" || return 1
+  state="$(cat "$state_path")"
+  current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  [[ -z "$current" || "$current" == "$operation_id" ]] || return 1
+  operation_path="$(ledger_operation_path "$operation_id")"
+  [[ -f "$operation_path" && ! -L "$operation_path" ]] || return 1
+  operation="$(cat "$operation_path")"
+  current_status="$(jq -er '.status' <<< "$operation")" || return 1
+  if release_terminal_status "$current_status"; then
+    [[ "$current_status" == success ]] || return 1
+  else
+    [[ "$current" == "$operation_id" ]] || return 1
+    release_job_update "$operation_id" success "$message" "$metadata" || return 1
+    operation="$(cat "$operation_path")"
+  fi
+  jq -e '.status == "success" and .published == false and .production_changed == false' <<< "$operation" >/dev/null || return 1
+  [[ "$current" != "$operation_id" ]] || _ledger_clear_active_operation_unlocked "$operation_id"
+}
+
+ledger_settle_noop_success() {
+  ledger_with_lock _ledger_settle_noop_success_unlocked "$@"
+}
+
 _ledger_recover_pre_mutation_terminal_unlocked() {
   local operation_id="$1" state_path state current operation_path operation
   [[ "$operation_id" =~ ^(update|rollback)-[A-Za-z0-9-]+$ ]] || return 1
@@ -341,7 +393,7 @@ _ledger_recover_pre_mutation_terminal_unlocked() {
   [[ -f "$operation_path" && ! -L "$operation_path" ]] || return 1
   operation="$(cat "$operation_path")"
   jq -e '
-    (.status | IN("failed", "conflict", "expired", "drifted", "failed_rolled_back"))
+    ((.status | IN("failed", "conflict", "expired", "drifted", "failed_rolled_back")) or .status == "success")
     and .published == false
     and .production_changed == false
   ' <<< "$operation" >/dev/null || return 1
@@ -356,7 +408,7 @@ _ledger_commit_release_unlocked() {
   local record_content="$1" advance_high_water="${2:-0}"
   local release_id sequence operation_id state_path state current_record current_sequence projection now
   local operation_path operation update_kind base_release_id base_high_water proposed_sequence advances source_kind
-  local stable_tag target_custom_commit current_official_version current_official_commit current_custom_version current_custom_commit
+  local stable_tag target_custom_commit custom_docs_only current_official_version current_official_commit current_custom_version current_custom_commit
   [[ "$advance_high_water" == 0 || "$advance_high_water" == 1 ]] || return 1
   release_id="$(jq -er '.release_id' <<< "$record_content")" || return 1
   sequence="$(jq -er '.custom_version_sequence' <<< "$record_content")" || return 1
@@ -388,6 +440,8 @@ _ledger_commit_release_unlocked() {
   source_kind="$(jq -er '.source_kind' <<< "$record_content")" || return 1
   stable_tag="$(jq -er '.stable_release_tag' <<< "$operation")" || return 1
   target_custom_commit="$(jq -er '.target_custom_commit' <<< "$operation")" || return 1
+  custom_docs_only="$(jq -r '.custom_docs_only // false' <<< "$operation")" || return 1
+  [[ "$custom_docs_only" == true || "$custom_docs_only" == false ]] || return 1
   [[ "$target_custom_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
   current_official_version="$(jq -r '.official_version' "$current_record")"
   current_official_commit="$(jq -r '.official_commit' "$current_record")"
@@ -411,9 +465,14 @@ _ledger_commit_release_unlocked() {
       [[ "$(jq -r '.official_version' <<< "$record_content")" != "$current_official_version" ]] || return 1
       [[ "$(jq -r '.official_commit' <<< "$record_content")" != "$current_official_commit" ]] || return 1
       [[ "$(jq -r '.custom_version' <<< "$record_content")" == "$current_custom_version" ]] || return 1
-      [[ "$target_custom_commit" == "$current_custom_commit" ]] || return 1
+      if [[ "$custom_docs_only" == true ]]; then
+        [[ "$target_custom_commit" != "$current_custom_commit" ]] || return 1
+      else
+        [[ "$target_custom_commit" == "$current_custom_commit" ]] || return 1
+      fi
       ;;
     custom)
+      [[ "$custom_docs_only" == false ]] || return 1
       [[ "$advances" == true ]] || return 1
       [[ "$(jq -r '.official_version' <<< "$record_content")" == "$current_official_version" ]] || return 1
       [[ "$(jq -r '.official_commit' <<< "$record_content")" == "$current_official_commit" ]] || return 1
@@ -421,6 +480,7 @@ _ledger_commit_release_unlocked() {
       [[ "$target_custom_commit" != "$current_custom_commit" ]] || return 1
       ;;
     combined)
+      [[ "$custom_docs_only" == false ]] || return 1
       [[ "$advances" == true ]] || return 1
       [[ "$(jq -r '.official_version' <<< "$record_content")" != "$current_official_version" ]] || return 1
       [[ "$(jq -r '.official_commit' <<< "$record_content")" != "$current_official_commit" ]] || return 1

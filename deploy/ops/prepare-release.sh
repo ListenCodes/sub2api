@@ -36,8 +36,9 @@ JOB_FILE="$(release_job_path "$JOB_ID")"
 [[ "$(jq -r '.action // empty' "$JOB_FILE")" == prepare ]] || { release_job_fail "$JOB_ID" LEGACY_SINGLE_PHASE_UNSUPPORTED 'Legacy or non-prepare release job rejected'; exit 1; }
 
 fail_prepare() {
-  local message="$1" code="${2:-PREPARE_FAILED}"
-  release_job_update "$JOB_ID" failed "$message" "$(jq -n --arg code "$code" '{error_code:$code,production_changed:false}')" || true
+  local message="$1" code="${2:-PREPARE_FAILED}" metadata
+  metadata="$(jq -n --arg code "$code" '{error_code:$code,published:false,production_changed:false}')"
+  ledger_settle_pre_mutation_failure "$JOB_ID" failed "$message" "$metadata" || true
   printf '%s\n' "$message" >&2
   exit 1
 }
@@ -107,7 +108,10 @@ CACHED_OPERATION="$(cat "$JOB_FILE")"
 release_job_update "$JOB_ID" resolving_target 'Checking the locked update target' '{}'
 "$SYNC_SCRIPT" --job-id "$JOB_ID" >> "$LOG" 2>&1 || {
   status="$(jq -r '.status // empty' "$JOB_FILE" 2>/dev/null || true)"
-  [[ "$status" == conflict || "$status" == failed ]] && exit 1
+  if [[ "$status" == conflict || "$status" == failed ]]; then
+    ledger_recover_pre_mutation_terminal "$JOB_ID" || true
+    exit 1
+  fi
   fail_prepare 'Stable Release preparation failed' RELEASE_PREPARATION_FAILED
 }
 
@@ -118,6 +122,8 @@ RELEASE_COMMIT="$(jq -r '.release_commit // empty' "$JOB_FILE")"
 INTEGRATION_BRANCH="$(jq -r '.integration_branch // empty' "$JOB_FILE")"
 UPDATE_KIND="$(jq -r '.update_kind // empty' "$JOB_FILE")"
 LOCKED_TARGET_CUSTOM_COMMIT="$(jq -r '.target_custom_commit // empty' "$JOB_FILE")"
+CUSTOM_DOCS_ONLY="$(jq -r '.custom_docs_only // false' "$JOB_FILE")"
+[[ "$CUSTOM_DOCS_ONLY" == true || "$CUSTOM_DOCS_ONLY" == false ]] || fail_prepare 'custom documentation scope is invalid' UPDATE_CLASSIFICATION_DRIFT
 [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail_prepare 'target commit is invalid' INVALID_TARGET_COMMIT
 [[ "$BASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail_prepare 'resolved custom branch commit is invalid' INVALID_CUSTOM_TARGET
 [[ "$LOCKED_TARGET_CUSTOM_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail_prepare 'locked custom branch commit is invalid' INVALID_CUSTOM_TARGET
@@ -127,12 +133,14 @@ LOCKED_TARGET_CUSTOM_COMMIT="$(jq -r '.target_custom_commit // empty' "$JOB_FILE
 if [[ "$LOCKED_TARGET_CUSTOM_COMMIT" != "$BASE_COMMIT" ]]; then
   if jq -e \
     --arg base "$BASE_COMMIT" --arg target "$TARGET_COMMIT" --arg locked_custom "$LOCKED_TARGET_CUSTOM_COMMIT" \
-    --arg update_kind "$UPDATE_KIND" --arg stable_tag "$RELEASE_TAG" --arg stable_commit "$RELEASE_COMMIT" '
+    --arg update_kind "$UPDATE_KIND" --arg stable_tag "$RELEASE_TAG" --arg stable_commit "$RELEASE_COMMIT" \
+    --argjson custom_docs_only "$CUSTOM_DOCS_ONLY" '
       .images_verified == true
       and .target_commit == $base
       and $target == $base
       and .target_custom_commit == $locked_custom
       and .update_kind == $update_kind
+      and (.custom_docs_only // false) == $custom_docs_only
       and .stable_release_tag == $stable_tag
       and .stable_release_commit == $stable_commit
       and (.workflow_url | type == "string" and length > 0)
@@ -153,10 +161,13 @@ if [[ "$RELEASE_TAG" != "$CURRENT_OFFICIAL_VERSION" || "$RELEASE_COMMIT" != "$(j
 fi
 CUSTOM_CHANGED=false
 [[ "$LOCKED_TARGET_CUSTOM_COMMIT" == "$PRODUCTION_COMMIT" ]] || CUSTOM_CHANGED=true
+[[ "$CUSTOM_DOCS_ONLY" != true || ("$OFFICIAL_CHANGED" == true && "$CUSTOM_CHANGED" == true && "$UPDATE_KIND" == official) ]] \
+  || fail_prepare 'custom documentation scope contradicts the resolved target' UPDATE_CLASSIFICATION_DRIFT
 if [[ "$UPDATE_KIND" == none ]]; then
   [[ "$TARGET_COMMIT" == "$PRODUCTION_COMMIT" && "$OFFICIAL_CHANGED" == false && "$CUSTOM_CHANGED" == false ]] \
     || fail_prepare 'none classification contradicts the resolved target' UPDATE_CLASSIFICATION_DRIFT
-  release_job_update "$JOB_ID" success 'No release changes detected; production unchanged' '{"published":false,"production_changed":false}'
+  ledger_settle_noop_success "$JOB_ID" 'No release changes detected; production unchanged' \
+    '{"published":false,"production_changed":false}' || fail_prepare 'failed to settle no-change operation' LEDGER_SETTLEMENT_FAILED
   exit 0
 fi
 scope_output="$($SCOPE_SCRIPT "$PRODUCTION_COMMIT" "$TARGET_COMMIT")" || fail_prepare 'release scope classification failed' SCOPE_CLASSIFICATION_FAILED
@@ -165,7 +176,8 @@ scope_output="$($SCOPE_SCRIPT "$PRODUCTION_COMMIT" "$TARGET_COMMIT")" || fail_pr
 if [[ "$UPDATE_KIND" == docs-only ]]; then
   [[ "$scope_output" == docs_only=true && "$OFFICIAL_CHANGED" == false && "$CUSTOM_CHANGED" == true ]] \
     || fail_prepare 'documentation-only classification contradicts the resolved target' UPDATE_CLASSIFICATION_DRIFT
-  release_job_update "$JOB_ID" success "Documentation-only commit $TARGET_COMMIT; production unchanged" '{"docs_only":true,"published":false,"production_changed":false}'
+  ledger_settle_noop_success "$JOB_ID" "Documentation-only commit $TARGET_COMMIT; production unchanged" \
+    '{"docs_only":true,"published":false,"production_changed":false}' || fail_prepare 'failed to settle documentation-only operation' LEDGER_SETTLEMENT_FAILED
   exit 0
 fi
 [[ "$scope_output" == docs_only=false ]] \
@@ -173,7 +185,7 @@ fi
 [[ "$UPDATE_KIND" == official || "$UPDATE_KIND" == custom || "$UPDATE_KIND" == combined ]] \
   || fail_prepare 'runtime release classification is inconsistent' INVALID_UPDATE_KIND
 case "$UPDATE_KIND" in
-  official) [[ "$OFFICIAL_CHANGED" == true && "$CUSTOM_CHANGED" == false ]] || fail_prepare 'official classification does not match resolved identities' UPDATE_CLASSIFICATION_DRIFT ;;
+  official) [[ "$OFFICIAL_CHANGED" == true && ("$CUSTOM_CHANGED" == false || "$CUSTOM_DOCS_ONLY" == true) ]] || fail_prepare 'official classification does not match resolved identities' UPDATE_CLASSIFICATION_DRIFT ;;
   custom) [[ "$OFFICIAL_CHANGED" == false && "$CUSTOM_CHANGED" == true ]] || fail_prepare 'custom classification does not match resolved identities' UPDATE_CLASSIFICATION_DRIFT ;;
   combined) [[ "$OFFICIAL_CHANGED" == true && "$CUSTOM_CHANGED" == true ]] || fail_prepare 'combined classification does not match resolved identities' UPDATE_CLASSIFICATION_DRIFT ;;
 esac
@@ -193,6 +205,7 @@ if jq -e \
   --arg base_release "$BASE_RELEASE_ID" --argjson base_high_water "$BASE_CUSTOM_HIGH_WATER" \
   --arg update_kind "$UPDATE_KIND" --arg target_commit "$TARGET_COMMIT" \
   --arg target_custom_commit "$LOCKED_TARGET_CUSTOM_COMMIT" \
+  --argjson custom_docs_only "$CUSTOM_DOCS_ONLY" \
   --arg stable_tag "$RELEASE_TAG" --arg stable_commit "$RELEASE_COMMIT" \
   --arg target_official "$TARGET_OFFICIAL_VERSION" --arg target_custom "$TARGET_CUSTOM_VERSION" \
   --argjson proposed "$PROPOSED_CUSTOM_SEQUENCE" --argjson advances "$ADVANCES_CUSTOM_VERSION" '
@@ -202,6 +215,7 @@ if jq -e \
     and .update_kind == $update_kind
     and .target_commit == $target_commit
     and .target_custom_commit == $target_custom_commit
+    and (.custom_docs_only // false) == $custom_docs_only
     and .stable_release_tag == $stable_tag
     and .stable_release_commit == $stable_commit
     and .target_official_version == $target_official
@@ -302,6 +316,7 @@ MANIFEST_DIR="$PREPARED_ROOT/$JOB_ID"
 mkdir -p "$MANIFEST_DIR"
 jq -n \
   --arg operation_kind update --arg update_kind "$UPDATE_KIND" \
+  --argjson custom_docs_only "$CUSTOM_DOCS_ONLY" \
   --arg base_release_id "$BASE_RELEASE_ID" --argjson base_high_water "$BASE_CUSTOM_HIGH_WATER" \
   --arg target_release_id "$TARGET_RELEASE_ID" --arg current_official "$CURRENT_OFFICIAL_VERSION" --arg current_custom "$CURRENT_CUSTOM_VERSION" \
   --arg target_official "$TARGET_OFFICIAL_VERSION" --arg target_custom "$TARGET_CUSTOM_VERSION" \
@@ -317,7 +332,7 @@ jq -n \
   --arg target_env_sha "$TARGET_ENV_SHA256" --arg target_manifest_sha "$TARGET_ARTIFACT_MANIFEST_SHA256" \
   --arg backup_dir "$BACKUP_DIR" --arg backup_manifest_sha "$BACKUP_MANIFEST_SHA256" \
   --arg prepared_at "$prepared_at" --arg expires_at "$expires_at" --arg workflow_url "$WORKFLOW_URL" \
-  '{schema_version:1,operation_kind:$operation_kind,update_kind:$update_kind,base_release_id:$base_release_id,
+  '{schema_version:1,operation_kind:$operation_kind,update_kind:$update_kind,custom_docs_only:$custom_docs_only,base_release_id:$base_release_id,
     base_custom_high_water:$base_high_water,target_release_id:$target_release_id,
     current_official_version:$current_official,current_custom_version:$current_custom,
     target_official_version:$target_official,target_custom_version:$target_custom,

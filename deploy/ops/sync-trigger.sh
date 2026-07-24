@@ -9,7 +9,7 @@ TRIGGER_FILE=$DATA_DIR/release-trigger
 action=${1:-}
 job_id=${2:-}
 case "$action" in
-  prepare|apply) ;;
+  prepare|apply|expire) ;;
   '') action='' ;;
   *)
     job_id="$action"
@@ -38,7 +38,7 @@ if [ -z "$action" ]; then
   action=$(jq -r '.action // empty' "$JOBS_DIR/$job_id.json" 2>/dev/null || true)
 fi
 case "$action" in
-  prepare|apply) ;;
+  prepare|apply|expire) ;;
   '')
     # Preserve the old trigger format for pre-two-phase jobs. The host
     # dispatcher fails these closed instead of reaching a publisher.

@@ -41,3 +41,10 @@ test('sidebar delegates release UI to the additive custom badge', () => {
   assert.match(source, /import VersionBadge from '@\/features\/custom-release\/CustomReleaseBadge\.vue'/)
   assert.doesNotMatch(source, /(preparedJob|releaseLedger|customVersionHighWater|applyUpdate)/)
 })
+
+test('custom runtime image includes git for local rollback source eligibility', () => {
+  const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8')
+  const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM ${ALPINE_IMAGE}'))
+
+  assert.match(runtimeStage, /RUN apk add --no-cache[\s\S]*?\bgit\s*\\/)
+})

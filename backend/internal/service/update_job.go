@@ -21,6 +21,7 @@ const (
 	ReleaseOperationRollback = "rollback"
 	ReleasePhasePrepare      = "prepare"
 	ReleasePhaseApply        = "apply"
+	ReleasePhaseExpire       = "expire"
 
 	ReleaseStatusResolvingTarget     = "resolving_target"
 	ReleaseStatusResolvingSnapshot   = "resolving_snapshot"
@@ -115,6 +116,7 @@ type UpdateJob struct {
 	PublishedCommit        string         `json:"published_commit,omitempty"`
 	TargetCommit           string         `json:"target_commit,omitempty"`
 	TargetCustomCommit     string         `json:"target_custom_commit,omitempty"`
+	CustomDocsOnly         bool           `json:"custom_docs_only"`
 	UpdateKind             string         `json:"update_kind,omitempty"`
 	ProductionCommit       string         `json:"production_commit,omitempty"`
 	StableReleaseTag       string         `json:"stable_release_tag,omitempty"`
@@ -178,10 +180,6 @@ func IsTerminalUpdateStatus(status string) bool {
 
 func IsPollingSettledUpdateStatus(status string) bool {
 	return IsTerminalUpdateStatus(status) || status == UpdateStatusPrepared
-}
-
-func newUpdateJobID() (string, error) {
-	return newReleaseOperationID(ReleaseOperationUpdate)
 }
 
 func newReleaseOperationID(kind string) (string, error) {
@@ -320,10 +318,6 @@ func (s *UpdateService) GetUpdateStatus(ctx context.Context, jobID string) (*Upd
 	return readUpdateStatus(path, jobID)
 }
 
-func (s *UpdateService) setUpdateStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
-	return setCustomReleaseStatus(jobID, status, message, startedAt, finishedAt)
-}
-
 func setCustomReleaseStatus(jobID, status, message string, startedAt, finishedAt *time.Time) error {
 	path, err := customReleaseOperationPath(jobID)
 	if err != nil {
@@ -403,9 +397,13 @@ func syncReleaseDirectory(path string) error {
 	if err != nil {
 		return fmt.Errorf("open release state directory: %w", err)
 	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync release state directory: %w", err)
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync release state directory: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close release state directory: %w", closeErr)
 	}
 	return nil
 }

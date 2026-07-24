@@ -97,7 +97,11 @@ fi
 if [[ "${1:-}" == ps || "${1:-}" == images ]]; then printf 'runtime metadata\n'; exit 0; fi
 exit 1
 EOF
-  chmod +x "$root/bin/git" "$root/bin/docker"
+  cat > "$root/bin/flock" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$root/bin/git" "$root/bin/docker" "$root/bin/flock"
 }
 
 make_helpers() {
@@ -108,7 +112,7 @@ set -e
 source "$SUB2API_RELEASE_STATE_HELPER"
 job_id="${2:-}"
 case "$FIXTURE_SCENARIO" in
-  official) kind=official; stable=v0.1.164; stable_commit="$TARGET_STABLE_COMMIT" ;;
+  official|official-docs-only) kind=official; stable=v0.1.164; stable_commit="$TARGET_STABLE_COMMIT" ;;
   custom) kind=custom; stable=v0.1.163; stable_commit="$CURRENT_STABLE_COMMIT" ;;
   combined) kind=combined; stable=v0.1.164; stable_commit="$TARGET_STABLE_COMMIT" ;;
   docs-only) kind=docs-only; stable=v0.1.163; stable_commit="$CURRENT_STABLE_COMMIT" ;;
@@ -122,7 +126,7 @@ case "$FIXTURE_SCENARIO" in
 esac
 base="$CURRENT_COMMIT"
 case "$FIXTURE_SCENARIO" in
-  custom|combined|docs-only|docs-conflict|runtime-scope-conflict|env-drift|compose-drift|env-race|compose-race|official-custom-conflict)
+  custom|combined|official-docs-only|docs-only|docs-conflict|runtime-scope-conflict|env-drift|compose-drift|env-race|compose-race|official-custom-conflict)
     base="$TARGET_COMMIT"
     ;;
 esac
@@ -134,7 +138,7 @@ if [[ "$FIXTURE_SCENARIO" == official && -e "$FIXTURE_PROMOTED_FILE" ]]; then
   target="$TARGET_COMMIT"
 fi
 integration=''
-if [[ "$FIXTURE_SCENARIO" == official && ! -e "$FIXTURE_PROMOTED_FILE" ]]; then
+if [[ "$FIXTURE_SCENARIO" == official || "$FIXTURE_SCENARIO" == official-docs-only ]] && [[ ! -e "$FIXTURE_PROMOTED_FILE" ]]; then
   integration=integration/release-v0.1.164-fixture
 fi
 release_job_update "$job_id" resolving_target 'fixture target resolved' "$(jq -n --arg kind "$kind" --arg base "$base" --arg target "$target" --arg tag "$stable" --arg commit "$stable_commit" --arg integration "$integration" '{update_kind:$kind,base_commit:$base,target_commit:$target,release_tag:$tag,release_commit:$commit,integration_branch:$integration}')"
@@ -200,11 +204,13 @@ seed_case() {
 
   target_custom="$CURRENT_COMMIT"
   case "$scenario" in
-    custom|combined|docs-only|docs-conflict|runtime-scope-conflict|env-drift|compose-drift|env-race|compose-race|official-custom-conflict|target-custom-drift)
+    custom|combined|official-docs-only|docs-only|docs-conflict|runtime-scope-conflict|env-drift|compose-drift|env-race|compose-race|official-custom-conflict|target-custom-drift)
       target_custom="$TARGET_COMMIT"
       ;;
   esac
-  operation_metadata="$(jq -n --arg target "$target_custom" '{action:"prepare",target_custom_commit:$target}')"
+  custom_docs_only=false
+  [[ "$scenario" != official-docs-only ]] || custom_docs_only=true
+  operation_metadata="$(jq -n --arg target "$target_custom" --argjson custom_docs_only "$custom_docs_only" '{action:"prepare",target_custom_commit:$target,custom_docs_only:$custom_docs_only}')"
   SUB2API_DATA_DIR="$root/data" SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" \
     SUB2API_CURRENT_RELEASE_JOB_FILE="$root/data/release-current-job-id" \
     bash -c 'source "$1"; release_job_init "$2"; release_job_update "$2" resolving_target queued "$3"' _ \
@@ -217,7 +223,7 @@ seed_case() {
 invoke_prepare() {
   local root="$1" scenario="$2" job_id="$3"
   local stable_version=0.1.163
-  [[ "$scenario" != official && "$scenario" != combined && "$scenario" != official-custom-conflict \
+  [[ "$scenario" != official && "$scenario" != official-docs-only && "$scenario" != combined && "$scenario" != official-custom-conflict \
     && "$scenario" != combined-custom-conflict && "$scenario" != runtime-scope-conflict && "$scenario" != none-conflict ]] \
     || stable_version=0.1.164
   PATH="$root/bin:$PATH" FIXTURE_CALLS="$root/calls" FIXTURE_TARGET_SOURCE="$root/target-source" FIXTURE_SCENARIO="$scenario" \
@@ -230,6 +236,7 @@ invoke_prepare() {
     SUB2API_NGINX_VHOST="$root/nginx/sub2api.conf" SUB2API_ORIGIN_CERT="$root/nginx/origin.crt" SUB2API_ORIGIN_KEY="$root/nginx/origin.key" \
     SUB2API_RELEASE_BACKUP_ROOT="$root/data/release-backups" SUB2API_BACKUP_ROOT="$root/data/release-backups" \
     SUB2API_RELEASE_LEDGER_ROOT="$root/data/release-ledger" SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" \
+    SUB2API_RELEASE_LEDGER_LOCK_FILE="$root/data/release.lock" \
     SUB2API_CURRENT_RELEASE_JOB_FILE="$root/data/release-current-job-id" SUB2API_RELEASE_STATE_FILE="$root/data/release-state.json" \
     SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" SUB2API_RELEASE_COMMON_HELPER="$ROOT_DIR/deploy/ops/release-common.sh" \
     SUB2API_RELEASE_LEDGER_HELPER="$ROOT_DIR/deploy/ops/release-ledger.sh" SUB2API_SYNC_SCRIPT="$root/sync.sh" \
@@ -254,7 +261,6 @@ run_case() {
   set -e
   [[ "$exit_code" -eq 0 ]] || fail "$scenario prepare exited $exit_code"
 
-  assert_eq "$state_hash" "$(sha256sum "$root/data/release-ledger/state.json")" "$scenario changed ledger state"
   assert_eq "$record_hash" "$(sha256sum "$root/data/release-ledger/releases/$CURRENT_RELEASE_ID.json")" "$scenario changed current record"
   assert_eq "$projection_hash" "$(sha256sum "$root/data/release-state.json")" "$scenario changed compatibility projection"
   assert_eq "$source_hash" "$(sha256sum "$root/repo/deploy/docker-compose.yml" "$root/repo/deploy/docker-compose.custom.yml" "$root/repo/deploy/.env")" "$scenario changed production source"
@@ -262,10 +268,15 @@ run_case() {
 
   if [[ "$scenario" == docs-only || "$scenario" == none ]]; then
     [[ "$(jq -r '.status' "$job_file")" == success ]] || fail "$scenario did not settle without preparation"
+    assert_eq "$CURRENT_RELEASE_ID" "$(jq -r '.current_release_id' "$root/data/release-ledger/state.json")" "$scenario changed release pointer"
+    assert_eq 4 "$(jq -r '.custom_version_high_water' "$root/data/release-ledger/state.json")" "$scenario changed custom high-water"
+    assert_eq null "$(jq -r '.active_operation_id' "$root/data/release-ledger/state.json")" "$scenario retained the active operation"
     [[ "$(jq -r '.prepared_manifest // empty' "$job_file")" == '' ]] || fail "$scenario created a prepared manifest"
     [[ -z "$(find "$root/data/release-backups" -mindepth 1 -maxdepth 1 -type d ! -name current -print -quit)" ]] || fail "$scenario created a backup"
     return
   fi
+
+  assert_eq "$state_hash" "$(sha256sum "$root/data/release-ledger/state.json")" "$scenario changed ledger state"
 
   manifest="$(jq -r '.prepared_manifest' "$job_file")"
   [[ -s "$manifest" ]] || fail "$scenario manifest is missing"
@@ -298,7 +309,7 @@ run_case() {
   grep -q 'git .*worktree add --detach' "$root/calls" || fail "$scenario did not stage the target commit"
 
   case "$scenario" in
-    official)
+    official|official-docs-only)
       assert_eq v0.1.164 "$(jq -r '.target_official_version' "$manifest")" 'official target version mismatch'
       assert_eq v1.0.4 "$(jq -r '.target_custom_version' "$manifest")" 'official-only changed custom version'
       assert_eq 4 "$(jq -r '.proposed_custom_sequence' "$manifest")" 'official-only changed custom sequence'
@@ -327,9 +338,16 @@ run_case() {
   fi
 }
 
-for scenario in official custom combined docs-only none; do
+prepare_scenarios=(official official-docs-only custom combined docs-only none)
+[[ -z "${FIXTURE_ONLY:-}" ]] || prepare_scenarios=("$FIXTURE_ONLY")
+for scenario in "${prepare_scenarios[@]}"; do
   run_case "$scenario"
 done
+
+if [[ -n "${FIXTURE_ONLY:-}" ]]; then
+  printf 'prepare-release-ledger=%s=PASS\n' "$FIXTURE_ONLY"
+  exit 0
+fi
 
 official_gate_call_count() {
   grep -Ec '^(wait |verify |docker pull )' "$OFFICIAL_ROOT/calls" || true
@@ -364,7 +382,9 @@ run_refusal_case() {
   exit_code=$?
   set -e
   [[ "$exit_code" -ne 0 ]] || fail "$scenario was not rejected"
-  assert_eq "$before_state" "$(sha256sum "$root/data/release-ledger/state.json")" "$scenario changed ledger state"
+  assert_eq "$CURRENT_RELEASE_ID" "$(jq -r '.current_release_id' "$root/data/release-ledger/state.json")" "$scenario changed release pointer"
+  assert_eq 4 "$(jq -r '.custom_version_high_water' "$root/data/release-ledger/state.json")" "$scenario changed custom high-water"
+  assert_eq null "$(jq -r '.active_operation_id' "$root/data/release-ledger/state.json")" "$scenario retained the failed active operation"
   assert_eq "$before_projection" "$(sha256sum "$root/data/release-state.json")" "$scenario changed compatibility projection"
   if [[ "$scenario" == env-race || "$scenario" == compose-race ]]; then
     grep -q '^wait ' "$root/calls" || fail "$scenario did not reach the injected remote gate"

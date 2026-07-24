@@ -3,7 +3,6 @@ import { apiClient } from '@/api/client'
 import {
   applyUpdate,
   prepareUpdate,
-  performUpdate,
   prepareRollback,
   applyRollback,
   isTerminalUpdateStatus,
@@ -18,6 +17,19 @@ afterEach(() => {
 })
 
 describe('upstream preparation jobs', () => {
+	it('exposes proposed official and custom versions from detection', async () => {
+		const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: {
+			current_version: '0.1.164', latest_version: '0.1.165', has_update: true,
+			build_type: 'release', update_kind: 'combined', official_update: true,
+			custom_update: true, docs_only: false, runtime_update: true, detection_complete: true,
+			target_official_version: 'v0.1.165', target_custom_version: 'v1.0.6'
+		} })
+		const { checkUpdates } = await import('@/features/custom-release/api')
+		const result = await checkUpdates()
+		expect(result.target_official_version).toBe('v0.1.165')
+		expect(result.target_custom_version).toBe('v1.0.6')
+		expect(get).toHaveBeenCalled()
+	})
 	it('uses separate prepare and apply endpoints with independent idempotency keys', async () => {
 		const prepareJob: UpdateJob = {
 			job_id: 'update-two-phase',
@@ -51,21 +63,6 @@ describe('upstream preparation jobs', () => {
 		)
 	})
 
-	it('starts a durable update with an idempotency key instead of a long browser timeout', async () => {
-    const job: UpdateJob = {
-      job_id: 'update-async',
-      status: 'checking_release',
-      message: 'queued',
-      need_restart: false
-    }
-    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: job })
-
-    await expect(performUpdate()).resolves.toEqual(job)
-    expect(post).toHaveBeenCalledWith('/admin/system/update', undefined, {
-      headers: { 'Idempotency-Key': expect.any(String) }
-    })
-  })
-
   it('uses separate prepare and apply endpoints for complete snapshot rollback', async () => {
     const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: { job_id: 'rollback-1' } })
     await prepareRollback('release-1')
@@ -96,7 +93,15 @@ describe('upstream preparation jobs', () => {
     ]
 
 		for (const phase of phases) expect(isTerminalUpdateStatus(phase)).toBe(false)
-		for (const phase of ['success', 'failed', 'conflict', 'expired', 'drifted'] as const) {
+		for (const phase of [
+      'success',
+      'failed',
+      'conflict',
+      'expired',
+      'drifted',
+      'failed_rolled_back',
+      'rollback_failed'
+    ] as const) {
       expect(isTerminalUpdateStatus(phase)).toBe(true)
     }
   })

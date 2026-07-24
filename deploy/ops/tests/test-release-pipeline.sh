@@ -38,6 +38,12 @@ release_job_update update-explicit checking_updates queued '{"action":"apply"}'
 printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" apply update-explicit >/dev/null
 assert_eq 'apply update-explicit' "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger ignored the explicit phase and durable job id'
+release_job_init rollback-expire-trigger
+release_job_update rollback-expire-trigger prepared prepared \
+  '{"action":"prepare","operation_kind":"rollback"}'
+SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" expire rollback-expire-trigger >/dev/null
+assert_eq 'expire rollback-expire-trigger' "$(cat "$SUB2API_DATA_DIR/release-trigger")" \
+  'trigger did not persist the explicit expiration settlement action'
 printf 'update-a.b\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 mkdir -p "$SUB2API_DATA_DIR/release-ledger/operations"
 touch "$SUB2API_DATA_DIR/release-ledger/operations/update-a.b.json"
@@ -55,13 +61,21 @@ done
 printf '#!/usr/bin/env sh\nexit 0\n' > "$DISPATCH_DIR/bin/flock"
 chmod +x "$DISPATCH_DIR/bin/flock"
 run_dispatch() {
-  local kind="$1" action="$2" status="$3" job_id expected
+  local kind="$1" action="$2" status="$3" claim_mode="${4:-trigger}" job_id expected
   job_id="$kind-$action"
   SUB2API_DATA_DIR="$DISPATCH_DIR/data" RELEASE_LEDGER_ROOT="$DISPATCH_DIR/data/release-ledger" RELEASE_OPERATIONS_DIR="$DISPATCH_DIR/data/release-ledger/operations" RELEASE_JOBS_DIR="$DISPATCH_DIR/data/release-ledger/operations" CURRENT_RELEASE_JOB_FILE="$DISPATCH_DIR/data/release-current-job-id"
   mkdir -p "$RELEASE_OPERATIONS_DIR"
   release_job_init "$job_id"
   release_job_update "$job_id" "$status" queued "$(jq -n --arg action "$action" '{action:$action}')"
-  printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger"
+  jq -n --arg release release-dispatch-fixture \
+    '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:null,updated_at:"2026-07-23T08:00:00Z"}' \
+    > "$RELEASE_LEDGER_ROOT/state.json"
+  rm -f "$DISPATCH_DIR/data/release-trigger" "$DISPATCH_DIR/data/release-trigger.processing."*
+  if [[ "$claim_mode" == stale ]]; then
+    printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger.processing.99999"
+  else
+    printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger"
+  fi
   : > "$DISPATCH_DIR/calls"
   PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
     SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/prepare-release.sh" SUB2API_APPLY_SCRIPT="$DISPATCH_DIR/bin/apply-release.sh" \
@@ -70,11 +84,121 @@ run_dispatch() {
     "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
   if [[ "$kind" == update ]]; then expected="$action-release"; else expected="$action-rollback"; fi
   assert_eq "$expected $job_id" "$(cat "$DISPATCH_DIR/calls")" "$kind $action dispatched to wrong executor"
+  assert_eq "$job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+    "$kind $action executor ran before the ledger operation was claimed"
 }
 run_dispatch update prepare checking_updates
 run_dispatch update apply apply_queued
 run_dispatch rollback prepare checking_updates
 run_dispatch rollback apply apply_queued
+run_dispatch update prepare checking_updates stale
+
+missing_job_id='update-missing-executor'
+release_job_init "$missing_job_id"
+release_job_update "$missing_job_id" checking_updates queued '{"action":"prepare"}'
+jq -n --arg release release-dispatch-fixture \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:null,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'prepare %s\n' "$missing_job_id" > "$DISPATCH_DIR/data/release-trigger"
+if PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/missing-prepare-release.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh" >/dev/null 2>&1; then
+  fail 'dispatcher accepted a missing executor'
+fi
+assert_eq '' "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'missing executor retained the active ledger operation'
+
+expired_job_id='rollback-expired'
+release_job_init "$expired_job_id"
+expired_at="$(date -u -d '1 minute ago' '+%Y-%m-%dT%H:%M:%SZ')"
+release_job_update "$expired_job_id" prepared prepared \
+  "$(jq -n --arg expires_at "$expired_at" '{action:"prepare",operation_kind:"rollback",expires_at:$expires_at,published:false,production_changed:false}')"
+jq -n --arg release release-dispatch-fixture --arg operation "$expired_job_id" \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'expire %s\n' "$expired_job_id" > "$DISPATCH_DIR/data/release-trigger"
+: > "$DISPATCH_DIR/calls"
+PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
+assert_eq expired "$(jq -r '.status' "$RELEASE_OPERATIONS_DIR/$expired_job_id.json")" \
+  'expired preparation was not settled by the locked host dispatcher'
+assert_eq '' "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'expired preparation retained the active ledger operation'
+assert_eq release-dispatch-fixture "$(jq -r '.current_release_id' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'expiration settlement changed the current release'
+assert_eq 4 "$(jq -r '.custom_version_high_water' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'expiration settlement changed the custom version high-water mark'
+assert_eq '' "$(cat "$DISPATCH_DIR/calls")" 'expiration settlement invoked a release executor'
+
+stale_job_id='rollback-stale-terminal'
+release_job_init "$stale_job_id"
+release_job_update "$stale_job_id" expired expired \
+  '{"action":"prepare","operation_kind":"rollback","published":false,"production_changed":false}'
+next_job_id='update-after-stale-terminal'
+release_job_init "$next_job_id"
+release_job_update "$next_job_id" checking_updates queued \
+  '{"action":"prepare","operation_kind":"update"}'
+jq -n --arg release release-dispatch-fixture --arg operation "$stale_job_id" \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'prepare %s\n' "$next_job_id" > "$DISPATCH_DIR/data/release-trigger"
+: > "$DISPATCH_DIR/calls"
+PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/prepare-release.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
+assert_eq "$next_job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'terminal stale ledger owner was not recovered before the next operation'
+assert_eq "prepare-release $next_job_id" "$(cat "$DISPATCH_DIR/calls")" \
+  'next operation did not run after terminal stale owner recovery'
+
+noop_job_id='update-stale-noop-success'
+release_job_init "$noop_job_id"
+release_job_update "$noop_job_id" success complete \
+  '{"action":"prepare","operation_kind":"update","published":false,"production_changed":false}'
+after_noop_job_id='update-after-stale-noop'
+release_job_init "$after_noop_job_id"
+release_job_update "$after_noop_job_id" checking_updates queued \
+  '{"action":"prepare","operation_kind":"update"}'
+jq -n --arg release release-dispatch-fixture --arg operation "$noop_job_id" \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'prepare %s\n' "$after_noop_job_id" > "$DISPATCH_DIR/data/release-trigger"
+: > "$DISPATCH_DIR/calls"
+PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/prepare-release.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
+assert_eq "$after_noop_job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'stale no-op success owner was not recovered before the next operation'
+assert_eq "prepare-release $after_noop_job_id" "$(cat "$DISPATCH_DIR/calls")" \
+  'next operation did not run after stale no-op success recovery'
+
+unresolved_job_id='rollback-unresolved-production'
+release_job_init "$unresolved_job_id"
+release_job_update "$unresolved_job_id" rollback_failed unresolved \
+  '{"action":"apply","operation_kind":"rollback","published":false,"production_changed":true}'
+jq -n --arg release release-dispatch-fixture --arg operation "$unresolved_job_id" \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'apply %s\n' "$unresolved_job_id" > "$DISPATCH_DIR/data/release-trigger"
+set +e
+PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_APPLY_ROLLBACK_SCRIPT="$DISPATCH_DIR/bin/apply-rollback.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh" >/dev/null 2>&1
+unresolved_code=$?
+set -e
+[[ "$unresolved_code" -ne 0 ]] || fail 'unresolved changed-production terminal trigger was accepted'
+assert_eq "$unresolved_job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'unresolved changed-production terminal cleared the active ledger owner'
+
+if [[ "${DISPATCH_ONLY:-0}" == 1 ]]; then
+  printf 'release-dispatch=PASS\n'
+  exit 0
+fi
 
 bash "$ROOT_DIR/deploy/ops/tests/test-sync-upstream-behind.sh"
 bash "$ROOT_DIR/deploy/ops/tests/test-release-ledger.sh"
@@ -307,6 +431,9 @@ run_scenario() {
   RELEASE_JOBS_DIR="$SUB2API_DATA_DIR/release-ledger/operations"
   CURRENT_RELEASE_JOB_FILE="$SUB2API_DATA_DIR/release-current-job-id"
   PRODUCTION_RELEASE_STATE_FILE="$SUB2API_DATA_DIR/release-state.json"
+  mkdir -p "$SUB2API_DATA_DIR/release-ledger"
+  jq -n '{schema_version:1,current_release_id:"release-fixture",custom_version_high_water:0,active_operation_id:null,updated_at:"2026-07-16T12:00:00Z"}' \
+    > "$SUB2API_DATA_DIR/release-ledger/state.json"
   release_job_init "$job_id"
   release_job_update "$job_id" checking_updates 'Fixture prepare queued' '{"action":"prepare"}'
   release_production_state_write "$(jq -n \
