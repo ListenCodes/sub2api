@@ -102,6 +102,30 @@ func TestCustomReleaseLedgerUsesConfiguredBackupRoot(t *testing.T) {
 	require.Equal(t, record.ReleaseID, current.ReleaseID)
 }
 
+func TestCustomReleaseLedgerMapsHostBackupPathIntoContainerRoot(t *testing.T) {
+	ledgerRoot := t.TempDir()
+	containerBackupRoot := t.TempDir()
+	hostBackupRoot := filepath.Join(string(filepath.Separator), "var", "lib", "docker", "volumes", "deploy_sub2api_data", "_data", "release-backups")
+	record := releaseLedgerTestRecord(ledgerRoot, "release-current", 1, "2026-07-24T10:48:23Z")
+	containerBackupDir := filepath.Join(containerBackupRoot, record.ReleaseID)
+	require.NoError(t, os.Rename(record.BackupDir, containerBackupDir))
+	record.BackupDir = filepath.Join(hostBackupRoot, record.ReleaseID)
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{
+		SchemaVersion:          1,
+		CurrentReleaseID:       record.ReleaseID,
+		CustomVersionHighWater: 1,
+		UpdatedAt:              "2026-07-24T10:48:23Z",
+	}, record)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	t.Setenv("SUB2API_RELEASE_BACKUP_ROOT", containerBackupRoot)
+	t.Setenv("SUB2API_RELEASE_RECORD_BACKUP_ROOT", hostBackupRoot)
+
+	current, err := NewUpdateService(nil, nil, "0.1.164", "release").CurrentRelease(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "v1.0.1", current.CustomVersion)
+	require.True(t, newCustomReleaseLedgerStore().rollbackArtifactsAvailable(current))
+}
+
 func TestCustomReleaseCheckClassifiesRuntimeAndDocumentationChanges(t *testing.T) {
 	productionCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	customCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

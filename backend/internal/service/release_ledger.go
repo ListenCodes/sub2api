@@ -61,13 +61,22 @@ type ReleaseRecord struct {
 }
 
 type releaseLedgerStore struct {
-	root         string
-	artifactRoot string
+	root               string
+	artifactRoot       string
+	recordArtifactRoot string
 }
 
 func newReleaseLedgerStoreWithArtifactRoot(root, artifactRoot string) *releaseLedgerStore {
+	return newReleaseLedgerStoreWithArtifactRoots(root, artifactRoot, artifactRoot)
+}
+
+func newReleaseLedgerStoreWithArtifactRoots(root, artifactRoot, recordArtifactRoot string) *releaseLedgerStore {
 	cleanRoot := filepath.Clean(root)
-	return &releaseLedgerStore{root: cleanRoot, artifactRoot: filepath.Clean(artifactRoot)}
+	return &releaseLedgerStore{
+		root:               cleanRoot,
+		artifactRoot:       filepath.Clean(artifactRoot),
+		recordArtifactRoot: filepath.Clean(recordArtifactRoot),
+	}
 }
 
 func (s *releaseLedgerStore) ReadState() (*ReleaseLedgerState, error) {
@@ -403,6 +412,15 @@ func (s *releaseLedgerStore) canonicalArtifactPath(path string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	if _, inside := releaseArtifactRelativePath(root, candidate); !inside {
+		recordRoot, rootErr := filepath.Abs(s.recordArtifactRoot)
+		if rootErr != nil {
+			return "", rootErr
+		}
+		if relative, mapped := releaseArtifactRelativePath(recordRoot, candidate); mapped {
+			candidate = filepath.Join(root, relative)
+		}
+	}
 	if resolved, resolveErr := filepath.EvalSymlinks(candidate); resolveErr == nil {
 		candidate = resolved
 	} else if !errors.Is(resolveErr, os.ErrNotExist) {
@@ -413,11 +431,18 @@ func (s *releaseLedgerStore) canonicalArtifactPath(path string) (string, error) 
 	} else if !errors.Is(resolveErr, os.ErrNotExist) {
 		return "", resolveErr
 	}
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+	if _, inside := releaseArtifactRelativePath(root, candidate); !inside {
 		return "", fmt.Errorf("path is outside artifact root")
 	}
 	return candidate, nil
+}
+
+func releaseArtifactRelativePath(root, candidate string) (string, bool) {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", false
+	}
+	return relative, true
 }
 
 func readReleaseLedgerJSON(path string, target any) error {
