@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -252,13 +253,27 @@ func TestCustomReleasePrepareAndApplyUseTheSameDurableJob(t *testing.T) {
 	job.Status = UpdateStatusPrepared
 	job.PreparedAt = preparedAt.Format(time.RFC3339)
 	job.ExpiresAt = preparedAt.Add(15 * time.Minute).Format(time.RFC3339)
-	require.NoError(t, writeUpdateStatus(filepath.Join(temporary, "release-ledger", "operations", job.JobID+".json"), job))
+	jobPath := filepath.Join(temporary, "release-ledger", "operations", job.JobID+".json")
+	require.NoError(t, writeUpdateStatus(jobPath, job))
+	jobJSON, err := os.ReadFile(jobPath)
+	require.NoError(t, err)
+	var preparedJob map[string]any
+	require.NoError(t, json.Unmarshal(jobJSON, &preparedJob))
+	preparedJob["base_custom_high_water"] = 4
+	jobJSON, err = json.Marshal(preparedJob)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(jobPath, jobJSON, 0o600))
 
 	applied, err := svc.ApplyUpdate(context.Background(), job.JobID)
 	require.NoError(t, err)
 	require.Equal(t, job.JobID, applied.JobID)
 	require.Equal(t, UpdateActionApply, applied.Action)
 	require.Equal(t, UpdateStatusApplyQueued, applied.Status)
+	jobJSON, err = os.ReadFile(jobPath)
+	require.NoError(t, err)
+	var queuedJob map[string]any
+	require.NoError(t, json.Unmarshal(jobJSON, &queuedJob))
+	require.Equal(t, float64(4), queuedJob["base_custom_high_water"])
 }
 
 func TestCustomReleaseRollbackPrepareAndApplyUseCompleteSnapshot(t *testing.T) {
