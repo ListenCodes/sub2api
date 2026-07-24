@@ -105,3 +105,10 @@ test('the Linux bootstrap fixture is an enforced deployment workflow gate', () =
   const workflow = load('.github/workflows/custom-release.yml')
   assert.match(workflow, /bash deploy\/tests\/site-bootstrap-test\.sh/)
 })
+
+test('the Linux bootstrap fixture does not require Windows path conversion', () => {
+  const fixture = load('deploy/tests/site-bootstrap-test.sh')
+
+  assert.doesNotMatch(fixture, /\bcygpath\b/)
+  assert.match(fixture, /export SUB2API_DATA_DIR="\$TMP\/data"/)
+})
