@@ -154,6 +154,28 @@ assert_eq "$next_job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDG
 assert_eq "prepare-release $next_job_id" "$(cat "$DISPATCH_DIR/calls")" \
   'next operation did not run after terminal stale owner recovery'
 
+noop_job_id='update-stale-noop-success'
+release_job_init "$noop_job_id"
+release_job_update "$noop_job_id" success complete \
+  '{"action":"prepare","operation_kind":"update","published":false,"production_changed":false}'
+after_noop_job_id='update-after-stale-noop'
+release_job_init "$after_noop_job_id"
+release_job_update "$after_noop_job_id" checking_updates queued \
+  '{"action":"prepare","operation_kind":"update"}'
+jq -n --arg release release-dispatch-fixture --arg operation "$noop_job_id" \
+  '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
+  > "$RELEASE_LEDGER_ROOT/state.json"
+printf 'prepare %s\n' "$after_noop_job_id" > "$DISPATCH_DIR/data/release-trigger"
+: > "$DISPATCH_DIR/calls"
+PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
+  SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/prepare-release.sh" \
+  SUB2API_SYNC_PUBLISH_LOCK="$DISPATCH_DIR/release.lock" SUB2API_SYNC_PUBLISH_LOG="$DISPATCH_DIR/release.log" \
+  "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
+assert_eq "$after_noop_job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+  'stale no-op success owner was not recovered before the next operation'
+assert_eq "prepare-release $after_noop_job_id" "$(cat "$DISPATCH_DIR/calls")" \
+  'next operation did not run after stale no-op success recovery'
+
 if [[ "${DISPATCH_ONLY:-0}" == 1 ]]; then
   printf 'release-dispatch=PASS\n'
   exit 0

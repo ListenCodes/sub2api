@@ -375,7 +375,7 @@ _ledger_recover_pre_mutation_terminal_unlocked() {
   [[ -f "$operation_path" && ! -L "$operation_path" ]] || return 1
   operation="$(cat "$operation_path")"
   jq -e '
-    (.status | IN("failed", "conflict", "expired", "drifted", "failed_rolled_back"))
+    ((.status | IN("failed", "conflict", "expired", "drifted", "failed_rolled_back")) or .status == "success")
     and .published == false
     and .production_changed == false
   ' <<< "$operation" >/dev/null || return 1
