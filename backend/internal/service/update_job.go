@@ -21,6 +21,7 @@ const (
 	ReleaseOperationRollback = "rollback"
 	ReleasePhasePrepare      = "prepare"
 	ReleasePhaseApply        = "apply"
+	ReleasePhaseExpire       = "expire"
 
 	ReleaseStatusResolvingTarget     = "resolving_target"
 	ReleaseStatusResolvingSnapshot   = "resolving_snapshot"

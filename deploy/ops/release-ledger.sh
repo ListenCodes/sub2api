@@ -268,6 +268,11 @@ _ledger_set_active_operation_unlocked() {
   ledger_validate_state "$state_path" || return 1
   state="$(cat "$state_path")"
   current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  if [[ -n "$current" && "$current" != "$operation_id" ]] \
+    && _ledger_recover_pre_mutation_terminal_unlocked "$current"; then
+    state="$(cat "$state_path")"
+    current="$(jq -r '.active_operation_id // empty' <<< "$state")"
+  fi
   [[ -z "$current" || "$current" == "$operation_id" ]] || return 1
   [[ "$current" != "$operation_id" ]] || return 0
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"

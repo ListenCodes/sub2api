@@ -45,7 +45,7 @@ claim_job() {
   TRIGGER_CLAIM="$TRIGGER_FILE.processing.$$"
   mv "$TRIGGER_FILE" "$TRIGGER_CLAIM"
   read -r first second _ < "$TRIGGER_CLAIM"
-  if [[ "$first" == prepare || "$first" == apply ]]; then
+  if [[ "$first" == prepare || "$first" == apply || "$first" == expire ]]; then
     ACTION="$first"
     JOB_ID="$second"
   else
@@ -97,7 +97,7 @@ if [[ "$ACTION" == legacy || -z "$JOB_ACTION" ]]; then
   log "Rejected legacy release job $JOB_ID"
   exit 1
 fi
-[[ "$ACTION" == "$JOB_ACTION" ]] || {
+[[ "$ACTION" == expire || "$ACTION" == "$JOB_ACTION" ]] || {
   release_job_update "$JOB_ID" failed 'Release action does not match its durable job' '{"error_code":"ACTION_MISMATCH","production_changed":false}' || true
   exit 1
 }
@@ -106,6 +106,22 @@ status="$(jq -r '.status // empty' "$JOB_FILE")"
 if release_terminal_status "$status"; then
   release_reconcile_active_operation "$JOB_ID" "$status" || true
   log "Release operation $JOB_ID is already terminal: $status"
+  exit 0
+fi
+
+if [[ "$ACTION" == expire ]]; then
+  if [[ "$status" != prepared ]] || ! jq -e '
+    (.expires_at | type == "string")
+    and ((.expires_at | fromdateiso8601) <= now)
+  ' "$JOB_FILE" >/dev/null; then
+    log "Rejected expiration settlement for non-expired operation $JOB_ID"
+    rm -f "$TRIGGER_CLAIM"
+    TRIGGER_CLAIM=""
+    exit 1
+  fi
+  ledger_settle_pre_mutation_failure "$JOB_ID" expired 'Prepared operation expired; prepare again' \
+    '{"error_code":"PREPARED_EXPIRED","published":false,"production_changed":false}'
+  log "Settled expired prepared operation $JOB_ID"
   exit 0
 fi
 

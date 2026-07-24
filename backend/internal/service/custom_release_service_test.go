@@ -292,6 +292,13 @@ func TestCustomReleasePrepareIsIdempotentForSameOperationAndRejectsDifferentTarg
 
 func TestCustomReleaseRollbackApplyRejectsExpiredPreparation(t *testing.T) {
 	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	var startedAction string
+	previousStart := customReleaseStartScript
+	customReleaseStartScript = func(_ string, action string, _ string) (func() error, error) {
+		startedAction = action
+		return func() error { return nil }, nil
+	}
+	t.Cleanup(func() { customReleaseStartScript = previousStart })
 	ledgerRoot := t.TempDir()
 	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
 	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
@@ -313,16 +320,24 @@ func TestCustomReleaseRollbackApplyRejectsExpiredPreparation(t *testing.T) {
 
 	_, err = svc.ApplyRollback(context.Background(), job.JobID)
 	require.ErrorIs(t, err, ErrUpdateExpired)
-	expired, readErr := readUpdateStatus(path, job.JobID)
+	queued, readErr := readUpdateStatus(path, job.JobID)
 	require.NoError(t, readErr)
-	require.Equal(t, ReleaseStatusExpired, expired.Status)
+	require.Equal(t, ReleaseStatusPrepared, queued.Status)
+	require.Equal(t, "expire", startedAction)
 	state, stateErr := newReleaseLedgerStoreWithArtifactRoot(ledgerRoot, ledgerRoot).ReadState()
 	require.NoError(t, stateErr)
-	require.Empty(t, state.ActiveOperationID)
+	require.Equal(t, job.JobID, state.ActiveOperationID)
 }
 
-func TestCustomReleasePrepareReclaimsExpiredActiveOperation(t *testing.T) {
+func TestCustomReleasePrepareQueuesExpiredActiveOperationSettlement(t *testing.T) {
 	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	var startedAction string
+	previousStart := customReleaseStartScript
+	customReleaseStartScript = func(_ string, action string, _ string) (func() error, error) {
+		startedAction = action
+		return func() error { return nil }, nil
+	}
+	t.Cleanup(func() { customReleaseStartScript = previousStart })
 	ledgerRoot := t.TempDir()
 	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
 	target := releaseLedgerTestRecord(ledgerRoot, "release-v101", 1, "2026-07-20T08:00:00Z")
@@ -341,12 +356,12 @@ func TestCustomReleasePrepareReclaimsExpiredActiveOperation(t *testing.T) {
 		ActiveOperationID: job.JobID, UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	next, err := svc.PrepareRollback(context.Background(), other.ReleaseID)
-	require.NoError(t, err)
-	require.NotEqual(t, job.JobID, next.JobID)
+	_, err = svc.PrepareRollback(context.Background(), other.ReleaseID)
+	require.ErrorIs(t, err, ErrUpdateInProgress)
+	require.Equal(t, "expire", startedAction)
 	state, stateErr := newReleaseLedgerStoreWithArtifactRoot(ledgerRoot, ledgerRoot).ReadState()
 	require.NoError(t, stateErr)
-	require.Empty(t, state.ActiveOperationID)
+	require.Equal(t, job.JobID, state.ActiveOperationID)
 }
 
 func TestCustomReleasePrepareRefusesNoneAndDocsOnlyUpdates(t *testing.T) {

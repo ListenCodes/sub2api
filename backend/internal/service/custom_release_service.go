@@ -338,9 +338,10 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 		}
 		if !IsTerminalUpdateStatus(existing.Status) || existing.Status == ReleaseStatusPrepared {
 			if existing.Status == ReleaseStatusPrepared && preparedJobExpired(existing) {
-				if err := expirePreparedOperation(currentPath, existing); err != nil {
+				if err := queuePreparedOperationExpiration(existing); err != nil {
 					return nil, err
 				}
+				return nil, ErrUpdateInProgress
 			} else if existing.OperationKind == kind && existing.Action == ReleasePhasePrepare && existing.TargetReleaseID == reference {
 				return existing, nil
 			} else {
@@ -485,7 +486,7 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 	}
 	if job.Status == ReleaseStatusPrepared {
 		if preparedJobExpired(job) {
-			if err := expirePreparedOperation(jobPath, job); err != nil {
+			if err := queuePreparedOperationExpiration(job); err != nil {
 				return nil, err
 			}
 			return nil, ErrUpdateExpired
@@ -521,14 +522,22 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 	return nil, ErrUpdateNotPrepared
 }
 
-func expirePreparedOperation(jobPath string, job *UpdateJob) error {
-	job.Status = ReleaseStatusExpired
-	job.Message = "prepared operation expired; prepare again"
-	job.UpdatedAt = time.Now().UTC()
-	if err := writeUpdateStatus(jobPath, job); err != nil {
-		return err
+func queuePreparedOperationExpiration(job *UpdateJob) error {
+	if job == nil || !operationIDPattern.MatchString(job.JobID) {
+		return ErrReleaseOperationInconsistent
 	}
-	return newCustomReleaseLedgerStore().ClearActiveOperation(job.JobID)
+	scriptPath := customReleaseScriptPath()
+	if _, err := os.Stat(scriptPath); err != nil {
+		return fmt.Errorf("sync script not found at %s: %w", scriptPath, err)
+	}
+	wait, err := customReleaseStartScript(scriptPath, ReleasePhaseExpire, job.JobID)
+	if err != nil {
+		return fmt.Errorf("start expiration settlement: %w", err)
+	}
+	if err := wait(); err != nil {
+		return fmt.Errorf("queue expiration settlement: %w", err)
+	}
+	return nil
 }
 
 func preparedJobExpired(job *UpdateJob) bool {
