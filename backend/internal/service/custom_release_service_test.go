@@ -398,7 +398,7 @@ func TestCustomReleaseRollbackApplyRejectsExpiredPreparation(t *testing.T) {
 	require.NoError(t, readErr)
 	require.Equal(t, ReleaseStatusPrepared, queued.Status)
 	require.Equal(t, "expire", startedAction)
-	state, stateErr := newReleaseLedgerStoreWithArtifactRoot(ledgerRoot, ledgerRoot).ReadState()
+	state, stateErr := newReleaseLedgerStoreWithArtifactRoots(ledgerRoot, ledgerRoot, ledgerRoot).ReadState()
 	require.NoError(t, stateErr)
 	require.Equal(t, job.JobID, state.ActiveOperationID)
 }
@@ -433,7 +433,7 @@ func TestCustomReleasePrepareQueuesExpiredActiveOperationSettlement(t *testing.T
 	_, err = svc.PrepareRollback(context.Background(), other.ReleaseID)
 	require.ErrorIs(t, err, ErrUpdateInProgress)
 	require.Equal(t, "expire", startedAction)
-	state, stateErr := newReleaseLedgerStoreWithArtifactRoot(ledgerRoot, ledgerRoot).ReadState()
+	state, stateErr := newReleaseLedgerStoreWithArtifactRoots(ledgerRoot, ledgerRoot, ledgerRoot).ReadState()
 	require.NoError(t, stateErr)
 	require.Equal(t, job.JobID, state.ActiveOperationID)
 }

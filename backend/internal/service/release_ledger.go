@@ -66,10 +66,6 @@ type releaseLedgerStore struct {
 	recordArtifactRoot string
 }
 
-func newReleaseLedgerStoreWithArtifactRoot(root, artifactRoot string) *releaseLedgerStore {
-	return newReleaseLedgerStoreWithArtifactRoots(root, artifactRoot, artifactRoot)
-}
-
 func newReleaseLedgerStoreWithArtifactRoots(root, artifactRoot, recordArtifactRoot string) *releaseLedgerStore {
 	cleanRoot := filepath.Clean(root)
 	return &releaseLedgerStore{
