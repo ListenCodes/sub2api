@@ -38,7 +38,8 @@ COMPLETED=false
 STAGED_ENV=''
 RENDERED_JSON=''
 CREATED_VOLUMES=()
-CREATED_CONTAINERS=(sub2api extensions-self risk-control-postgres sub2api-postgres sub2api-redis)
+TARGET_CONTAINERS=(sub2api extensions-self risk-control-postgres sub2api-postgres sub2api-redis)
+CREATED_CONTAINERS=()
 INSTALLED_ENV=false
 INSTALLED_OPS=false
 INSTALLED_UNITS=false
@@ -126,7 +127,7 @@ ORIGIN_COMMIT="$(git -C "$REPO" rev-parse origin/custom-release 2>/dev/null || t
 [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] || fail 'repository is dirty'
 [[ -r "$COMPOSE_BASE" && -r "$COMPOSE_CUSTOM" && -r "$BASELINE_FILE" ]] || fail 'Compose pair or Stable metadata is missing'
 
-for container in "${CREATED_CONTAINERS[@]}"; do
+for container in "${TARGET_CONTAINERS[@]}"; do
   ! docker container inspect "$container" >/dev/null 2>&1 || fail "target container already exists: $container"
 done
 for volume in deploy_sub2api_data deploy_postgres_data deploy_redis_data deploy_risk_control_postgres_data; do
@@ -290,6 +291,8 @@ wait_container_healthy() {
 start_service() {
   local service="$1" container="$2"
   compose up -d --no-deps --pull never "$service"
+  docker container inspect "$container" >/dev/null 2>&1 || fail "service container was not created: $service"
+  CREATED_CONTAINERS+=("$container")
   wait_container_healthy "$container" || fail "service did not become healthy: $service"
 }
 

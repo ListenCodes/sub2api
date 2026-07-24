@@ -69,3 +69,12 @@ test('site bootstrap supports only fail-closed fresh and migrate modes', () => {
 
   for (const pattern of forbidden) assert.doesNotMatch(script, pattern)
 })
+
+test('bootstrap cleanup only removes containers created by the current run', () => {
+  const script = load('deploy/ops/bootstrap-custom-site.sh')
+
+  assert.match(script, /TARGET_CONTAINERS=\([^)]*sub2api[^)]*extensions-self[^)]*\)/s)
+  assert.match(script, /CREATED_CONTAINERS=\(\)/)
+  assert.match(script, /CREATED_CONTAINERS\+=\("\$container"\)/)
+  assert.doesNotMatch(script, /CREATED_CONTAINERS=\(sub2api/)
+})
