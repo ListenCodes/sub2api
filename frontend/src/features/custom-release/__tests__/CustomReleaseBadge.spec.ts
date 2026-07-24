@@ -11,14 +11,17 @@ const mocks = vi.hoisted(() => ({
     hasUpdate: true,
     releaseInfo: undefined,
     buildType: 'source',
+    currentRelease: null as Record<string, unknown> | null,
     fetchVersion: vi.fn(),
+    fetchCurrentRelease: vi.fn(),
     clearVersionCache: vi.fn()
   },
-  performUpdate: vi.fn(),
   prepareUpdate: vi.fn(),
   applyUpdate: vi.fn(),
   getUpdateStatus: vi.fn(),
-  getRollbackVersions: vi.fn(),
+  getRollbackReleases: vi.fn(),
+  prepareRollback: vi.fn(),
+  applyRollback: vi.fn(),
   rollback: vi.fn(),
   restartService: vi.fn()
 }))
@@ -36,23 +39,20 @@ vi.mock('vue-i18n', () => ({
 }))
 
 vi.mock('@/features/custom-release/api', () => ({
-  performUpdate: mocks.performUpdate,
   prepareUpdate: mocks.prepareUpdate,
   applyUpdate: mocks.applyUpdate,
   getUpdateStatus: mocks.getUpdateStatus,
-  getRollbackVersions: mocks.getRollbackVersions,
+  getRollbackReleases: mocks.getRollbackReleases,
+  prepareRollback: mocks.prepareRollback,
+  applyRollback: mocks.applyRollback,
   rollback: mocks.rollback,
   restartService: mocks.restartService,
   isTerminalUpdateStatus: (status: string) =>
-    status === 'success' || status === 'failed' || status === 'conflict' || status === 'expired' || status === 'drifted',
+    status === 'success' || status === 'failed' || status === 'conflict' || status === 'expired' || status === 'drifted' || status === 'failed_rolled_back' || status === 'rollback_failed',
   isPollingSettledUpdateStatus: (status: string) =>
     status === 'success' || status === 'failed' || status === 'conflict' || status === 'prepared',
   updateNeedsRestart: (job: { need_restart: boolean }) => job.need_restart,
   updateWasPublished: (job: { published?: boolean }) => job.published === true
-}))
-
-vi.mock('@/composables/useClipboard', () => ({
-  useClipboard: () => ({ copied: { value: false }, copyToClipboard: vi.fn() })
 }))
 
 describe('VersionBadge conflict reporting', () => {
@@ -65,7 +65,17 @@ describe('VersionBadge conflict reporting', () => {
     mocks.appStore.detectionComplete = true
     mocks.appStore.updateWarning = ''
     mocks.appStore.targetCustomShortSHA = ''
-    mocks.prepareUpdate.mockImplementation(mocks.performUpdate)
+    mocks.appStore.currentRelease = {
+      release_id: 'release-current',
+      official_version: 'v0.1.164',
+      official_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      custom_version: 'v1.0.5',
+      custom_version_sequence: 5,
+      custom_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      main_digest: `sha256:${'1'.repeat(64)}`,
+      extensions_digest: `sha256:${'2'.repeat(64)}`,
+      published_at: '2026-07-24T00:00:00Z'
+    }
     mocks.getUpdateStatus.mockRejectedValueOnce({ response: { status: 404 } })
   })
 
@@ -74,7 +84,7 @@ describe('VersionBadge conflict reporting', () => {
   })
 
   it('shows conflicted files and production safety state after a failed update', async () => {
-    mocks.performUpdate.mockResolvedValue({ job_id: 'update-conflict' })
+    mocks.prepareUpdate.mockResolvedValue({ job_id: 'update-conflict' })
     mocks.getUpdateStatus.mockResolvedValue({
       job_id: 'update-conflict',
       status: 'conflict',
@@ -100,7 +110,7 @@ describe('VersionBadge conflict reporting', () => {
 
     await flushPromises()
 
-    await wrapper.find('button').trigger('click')
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
     const updateButton = wrapper
       .findAll('button')
       .find((button) => button.text().includes('version.updateNow'))
@@ -120,7 +130,7 @@ describe('VersionBadge conflict reporting', () => {
   })
 
   it('shows the stable Release tag and short commit after publishing', async () => {
-    mocks.performUpdate.mockResolvedValue({ job_id: 'update-published' })
+    mocks.prepareUpdate.mockResolvedValue({ job_id: 'update-published' })
     mocks.getUpdateStatus.mockResolvedValue({
       job_id: 'update-published',
       status: 'success',
@@ -156,7 +166,7 @@ describe('VersionBadge conflict reporting', () => {
   })
 
   it('does not show the previous terminal result when the update dialog is reopened', async () => {
-    mocks.performUpdate.mockResolvedValue({ job_id: 'update-published' })
+    mocks.prepareUpdate.mockResolvedValue({ job_id: 'update-published' })
     mocks.getUpdateStatus.mockResolvedValue({
       job_id: 'update-published',
       status: 'success',
@@ -294,7 +304,7 @@ describe('VersionBadge conflict reporting', () => {
     vi.useFakeTimers()
     mocks.appStore.hasUpdate = false
     mocks.appStore.updateKind = 'custom'
-    mocks.performUpdate.mockResolvedValue({
+    mocks.prepareUpdate.mockResolvedValue({
       job_id: 'update-custom',
       status: 'checking_release',
       message: 'Release job queued',
@@ -327,6 +337,96 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).not.toContain('status polling timed out')
     expect(mocks.getUpdateStatus).toHaveBeenCalled()
 
+    wrapper.unmount()
+  })
+
+  it('uses the paired release panel and prepares the selected rollback snapshot', async () => {
+    const target = {
+      release_id: 'release-target',
+      official_version: 'v0.1.162',
+      official_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+      custom_version: 'v1.0.3',
+      custom_version_sequence: 3,
+      custom_commit: 'dddddddddddddddddddddddddddddddddddddddd',
+      main_digest: `sha256:${'3'.repeat(64)}`,
+      extensions_digest: `sha256:${'4'.repeat(64)}`,
+      published_at: '2026-07-22T00:00:00Z'
+    }
+    mocks.getRollbackReleases.mockResolvedValue([target])
+    mocks.prepareRollback.mockResolvedValue({
+      job_id: 'rollback-prepare',
+      operation_kind: 'rollback',
+      action: 'prepare',
+      status: 'resolving_snapshot',
+      message: 'queued',
+      need_restart: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+    await wrapper.find('[data-testid="rollback-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="rollback-panel"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="rollback-panel"] button').trigger('click')
+    await wrapper.find('[data-testid="prepare-rollback"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.prepareRollback).toHaveBeenCalledWith('release-target')
+    expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('restores a server-side prepared rollback and applies only after confirmation', async () => {
+    const target = {
+      release_id: 'release-target',
+      official_version: 'v0.1.162',
+      official_commit: 'c'.repeat(40),
+      custom_version: 'v1.0.3',
+      custom_version_sequence: 3,
+      custom_commit: 'd'.repeat(40),
+      published_at: '2026-07-22T00:00:00Z'
+    }
+    mocks.getRollbackReleases.mockResolvedValue([target])
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'rollback-prepared',
+      operation_kind: 'rollback',
+      action: 'prepare',
+      status: 'prepared',
+      message: 'prepared',
+      need_restart: false,
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    })
+    mocks.applyRollback.mockResolvedValue({
+      job_id: 'rollback-prepared',
+      operation_kind: 'rollback',
+      action: 'apply',
+      status: 'apply_queued',
+      message: 'queued',
+      need_restart: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+    await wrapper.find('[data-testid="rollback-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(true)
+    expect(mocks.applyUpdate).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="confirm-rollback"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.applyRollback).toHaveBeenCalledWith('rollback-prepared')
+    expect(mocks.applyUpdate).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

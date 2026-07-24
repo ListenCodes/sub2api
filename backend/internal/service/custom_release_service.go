@@ -243,7 +243,7 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 	switch {
 	case !info.HasUpdate:
 		info.UpdateKind = UpdateKindNone
-	case info.OfficialUpdate && info.CustomUpdate:
+	case info.OfficialUpdate && info.CustomUpdate && !info.DocsOnly:
 		info.UpdateKind = UpdateKindCombined
 	case info.OfficialUpdate:
 		info.UpdateKind = UpdateKindOfficial
@@ -259,6 +259,8 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 		}
 		if info.CustomUpdate && !info.DocsOnly {
 			info.TargetCustomVersion = fmt.Sprintf("v1.0.%d", state.CustomVersionHighWater+1)
+		} else if info.OfficialUpdate {
+			info.TargetCustomVersion = current.CustomVersion
 		} else if info.DocsOnly {
 			info.TargetCustomVersion = ""
 		}
@@ -425,6 +427,7 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 		job.TargetOfficialVersion = info.TargetOfficialVersion
 		job.TargetCustomVersion = info.TargetCustomVersion
 		job.TargetCustomCommit = info.TargetCustomCommit
+		job.CustomDocsOnly = info.DocsOnly
 		job.UpdateKind = info.UpdateKind
 		job.ProductionCommit = current.CustomCommit
 		job.StableReleaseTag = current.OfficialVersion

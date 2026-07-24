@@ -115,6 +115,7 @@ type UpdateJob struct {
 	PublishedCommit        string         `json:"published_commit,omitempty"`
 	TargetCommit           string         `json:"target_commit,omitempty"`
 	TargetCustomCommit     string         `json:"target_custom_commit,omitempty"`
+	CustomDocsOnly         bool           `json:"custom_docs_only"`
 	UpdateKind             string         `json:"update_kind,omitempty"`
 	ProductionCommit       string         `json:"production_commit,omitempty"`
 	StableReleaseTag       string         `json:"stable_release_tag,omitempty"`

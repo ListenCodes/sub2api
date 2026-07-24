@@ -148,7 +148,9 @@ export function isTerminalUpdateStatus(status: UpdateJobStatus): boolean {
     status === 'failed' ||
     status === 'conflict' ||
     status === 'expired' ||
-    status === 'drifted'
+    status === 'drifted' ||
+    status === 'failed_rolled_back' ||
+    status === 'rollback_failed'
   )
 }
 
@@ -171,36 +173,8 @@ function newSystemOperationIdempotencyKey(): string {
   return `update-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-export interface RollbackVersionInfo {
-  version: string
-  published_at: string
-  html_url: string
-}
-
-/**
- * Get versions available for rollback (up to 3 versions older than current)
- */
-export async function getRollbackVersions(): Promise<{ versions: RollbackVersionInfo[] }> {
-  const releases = await getRollbackReleases()
-  return { versions: releases.map((release) => ({ version: release.release_id, published_at: release.published_at, html_url: '' })) }
-}
-
-/**
- * In-place update/rollback downloads a full release binary from GitHub, which
- * can take several minutes on slow links. The global 30s axios timeout would
- * abort the request mid-download (#4504), so these calls wait as long as the
- * backend allows (15 minutes server-side).
- */
-/**
- * Perform system update
- * Downloads and applies the latest version
- */
-export async function performUpdate(): Promise<UpdateJob> {
-  return prepareUpdate('/admin/system/update')
-}
-
-export async function prepareUpdate(endpoint = '/admin/system/update/prepare'): Promise<UpdateJob> {
-  const { data } = await apiClient.post<UpdateJob>(endpoint, undefined, {
+export async function prepareUpdate(): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>('/admin/system/update/prepare', undefined, {
     headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() }
   })
   return data
@@ -260,11 +234,9 @@ export async function restartService(): Promise<{ message: string }> {
 export const systemAPI = {
   getVersion,
   checkUpdates,
-  performUpdate,
   prepareUpdate,
   applyUpdate,
   getUpdateStatus,
-  getRollbackVersions,
   prepareRollback,
   applyRollback,
   getCurrentRelease,

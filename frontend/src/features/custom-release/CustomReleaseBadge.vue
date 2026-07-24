@@ -500,255 +500,49 @@
                   {{ t('version.viewRelease') }}
                 </a>
 
-                <!-- Version rollback entry -->
-                <div class="border-t border-gray-100 pt-2 dark:border-dark-700">
-                  <button
-                    @click="toggleRollbackPanel"
-                    class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
-                  >
-                    <span class="flex items-center gap-1.5">
-                      <Icon name="clock" size="xs" :stroke-width="2" />
-                      {{ t('version.rollback') }}
-                    </span>
-                    <Icon
-                      name="chevronDown"
-                      size="xs"
-                      :stroke-width="2"
-                      class="transition-transform duration-200"
-                      :class="{ 'rotate-180': rollbackPanelOpen }"
+              </div>
+
+              <!-- Version rollback remains available independently of update availability. -->
+              <div class="mt-2 border-t border-gray-100 pt-2 dark:border-dark-700">
+                <button
+                  data-testid="rollback-toggle"
+                  @click="toggleRollbackPanel"
+                  class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
+                >
+                  <span class="flex items-center gap-1.5">
+                    <Icon name="clock" size="xs" :stroke-width="2" />
+                    {{ t('version.rollback') }}
+                  </span>
+                  <Icon
+                    name="chevronDown"
+                    size="xs"
+                    :stroke-width="2"
+                    class="transition-transform duration-200"
+                    :class="{ 'rotate-180': rollbackPanelOpen }"
+                  />
+                </button>
+
+                <transition name="rollback">
+                  <div v-if="rollbackPanelOpen" class="mt-2">
+                    <ReleaseRollbackPanel
+                      v-if="isReleaseBuild && currentReleaseIdentity"
+                      v-model:selected="selectedRollbackVersion"
+                      :current="currentReleaseIdentity"
+                      :releases="rollbackReleases"
+                      :operation="rollbackOperation"
+                      :loading="rollbackVersionsLoading || rollingBack"
+                      :error="rollbackVersionsError || rollbackError"
+                      @prepare="handlePrepareRollback"
+                      @apply="handleApplyRollback"
                     />
-                  </button>
-
-                  <transition name="rollback">
-                    <div v-if="rollbackPanelOpen" class="mt-2 space-y-2">
-                      <!-- Source build: online rollback unavailable, use git instead -->
-                      <div
-                        v-if="!isReleaseBuild"
-                        class="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-2 dark:border-blue-800/50 dark:bg-blue-900/20"
-                      >
-                        <svg
-                          class="h-3.5 w-3.5 flex-shrink-0 text-blue-500 dark:text-blue-400"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <p class="min-w-0 flex-1 text-xs leading-4 text-blue-600 dark:text-blue-400">
-                          {{ t('version.rollbackSourceHint') }}
-                        </p>
-                      </div>
-
-                      <!-- Loading versions -->
-                      <div
-                        v-else-if="rollbackVersionsLoading"
-                        class="flex items-center justify-center py-4"
-                      >
-                        <svg
-                          class="h-5 w-5 animate-spin text-primary-500"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            class="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            stroke-width="4"
-                          ></circle>
-                          <path
-                            class="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                          ></path>
-                        </svg>
-                      </div>
-
-                      <!-- Load error + retry -->
-                      <div v-else-if="rollbackVersionsError" class="space-y-2">
-                        <p
-                          class="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-600 dark:border-red-800/50 dark:bg-red-900/20 dark:text-red-400"
-                        >
-                          {{ rollbackVersionsError }}
-                        </p>
-                        <button
-                          @click="loadRollbackVersions"
-                          class="w-full rounded-lg border border-gray-200 py-1.5 text-xs text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700 dark:border-dark-700 dark:text-dark-400 dark:hover:bg-dark-700/50 dark:hover:text-dark-200"
-                        >
-                          {{ t('version.retry') }}
-                        </button>
-                      </div>
-
-                      <!-- No versions available -->
-                      <p
-                        v-else-if="rollbackVersions.length === 0"
-                        class="py-3 text-center text-xs text-gray-400 dark:text-dark-500"
-                      >
-                        {{ t('version.noRollbackVersions') }}
-                      </p>
-
-                      <!-- Version list -->
-                      <template v-else>
-                        <p class="px-0.5 text-[11px] text-gray-400 dark:text-dark-500">
-                          {{ t('version.rollbackSelectVersion') }}
-                        </p>
-
-                        <button
-                          v-for="item in rollbackVersions"
-                          :key="item.version"
-                          @click="selectRollbackVersion(item.version)"
-                          :disabled="rollingBack"
-                          class="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                          :class="
-                            selectedRollbackVersion === item.version
-                              ? 'border-amber-300 bg-amber-50 shadow-sm dark:border-amber-700 dark:bg-amber-900/20'
-                              : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:border-dark-700 dark:hover:border-dark-600 dark:hover:bg-dark-700/40'
-                          "
-                        >
-                          <span class="flex items-center gap-2">
-                            <span
-                              class="flex h-3.5 w-3.5 items-center justify-center rounded-full border transition-colors"
-                              :class="
-                                selectedRollbackVersion === item.version
-                                  ? 'border-amber-500'
-                                  : 'border-gray-300 dark:border-dark-500'
-                              "
-                            >
-                              <span
-                                v-if="selectedRollbackVersion === item.version"
-                                class="h-1.5 w-1.5 rounded-full bg-amber-500"
-                              ></span>
-                            </span>
-                            <span
-                              class="text-sm font-semibold"
-                              :class="
-                                selectedRollbackVersion === item.version
-                                  ? 'text-amber-700 dark:text-amber-300'
-                                  : 'text-gray-700 dark:text-dark-200'
-                              "
-                              >v{{ item.version }}</span
-                            >
-                          </span>
-                          <span class="text-[11px] tabular-nums text-gray-400 dark:text-dark-500">
-                            {{ formatPublishedAt(item.published_at) }}
-                          </span>
-                        </button>
-
-                        <!-- Selected version: manual command (per deploy method) + confirm -->
-                        <transition name="rollback">
-                          <div v-if="selectedRollbackVersion" class="space-y-2">
-                            <p class="px-0.5 text-[11px] text-gray-400 dark:text-dark-500">
-                              {{ t('version.manualRollbackCommand') }}
-                            </p>
-
-                            <!-- Terminal-style block with deploy-method tabs -->
-                            <div
-                              class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-600"
-                            >
-                              <div
-                                class="flex items-center justify-between border-b border-gray-200 bg-gray-100 px-2 py-1.5 dark:border-dark-600 dark:bg-dark-700"
-                              >
-                                <div
-                                  class="flex items-center gap-0.5 rounded-md bg-gray-200/70 p-0.5 dark:bg-dark-600/70"
-                                >
-                                  <button
-                                    v-for="tab in manualTabs"
-                                    :key="tab.key"
-                                    @click="manualTab = tab.key"
-                                    class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
-                                    :class="
-                                      manualTab === tab.key
-                                        ? 'bg-white text-gray-700 shadow-sm dark:bg-dark-800 dark:text-dark-100'
-                                        : 'text-gray-400 hover:text-gray-600 dark:text-dark-400 dark:hover:text-dark-200'
-                                    "
-                                  >
-                                    {{ tab.label }}
-                                  </button>
-                                </div>
-                                <button
-                                  @click="copyToClipboard(activeManualCommand)"
-                                  class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-dark-400 dark:hover:bg-dark-600 dark:hover:text-dark-200"
-                                >
-                                  <Icon
-                                    :name="copied ? 'check' : 'copy'"
-                                    size="xs"
-                                    :stroke-width="2"
-                                    :class="copied ? 'text-green-500' : ''"
-                                  />
-                                  {{ copied ? t('version.copied') : t('version.copyCommand') }}
-                                </button>
-                              </div>
-                              <code
-                                class="block select-all whitespace-pre-wrap break-all bg-gray-50 p-2.5 font-mono text-[10px] leading-relaxed text-gray-600 dark:bg-dark-900 dark:text-dark-300"
-                                >{{ activeManualCommand }}</code
-                              >
-                            </div>
-
-                            <p
-                              class="flex items-start gap-1.5 px-0.5 text-[11px] leading-4 text-amber-600 dark:text-amber-400"
-                            >
-                              <Icon
-                                name="exclamationTriangle"
-                                size="xs"
-                                :stroke-width="2"
-                                class="mt-px flex-shrink-0"
-                              />
-                              {{ t('version.rollbackWarning') }}
-                            </p>
-
-                            <p
-                              v-if="rollbackError"
-                              class="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-600 dark:border-red-800/50 dark:bg-red-900/20 dark:text-red-400"
-                            >
-                              {{ rollbackError }}
-                            </p>
-
-                            <button
-                              @click="handleRollback"
-                              :disabled="rollingBack"
-                              class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              <svg
-                                v-if="rollingBack"
-                                class="h-4 w-4 animate-spin"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                              >
-                                <circle
-                                  class="opacity-25"
-                                  cx="12"
-                                  cy="12"
-                                  r="10"
-                                  stroke="currentColor"
-                                  stroke-width="4"
-                                ></circle>
-                                <path
-                                  class="opacity-75"
-                                  fill="currentColor"
-                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                ></path>
-                              </svg>
-                              <Icon v-else name="clock" size="sm" :stroke-width="2" />
-                              <span>{{
-                                rollingBack
-                                  ? t('version.rollingBack')
-                                  : t('version.rollbackConfirm', {
-                                      version: 'v' + selectedRollbackVersion
-                                    })
-                              }}</span>
-                            </button>
-                          </div>
-                        </transition>
-                      </template>
-                    </div>
-                  </transition>
-                </div>
+                    <p
+                      v-else-if="!isReleaseBuild"
+                      class="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-600 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-400"
+                    >
+                      {{ t('version.rollbackSourceHint') }}
+                    </p>
+                  </div>
+                </transition>
               </div>
             </template>
           </div>
@@ -768,6 +562,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores'
 import { useCustomReleaseStore } from './store'
+import ReleaseRollbackPanel from './ReleaseRollbackPanel.vue'
 import {
   prepareUpdate,
   applyUpdate,
@@ -776,20 +571,16 @@ import {
   isPollingSettledUpdateStatus,
   updateNeedsRestart,
   restartService,
-  getRollbackVersions,
+  getRollbackReleases,
   prepareRollback,
   applyRollback,
-  type RollbackVersionInfo,
+  type ReleaseIdentity,
   type UpdateJob,
   type UpdateJobStatus,
   updateWasPublished
 } from './api'
-import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
 
-const GITHUB_REPO = 'Wei-Shaw/sub2api'
-// Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
-const DOCKER_IMAGE = 'weishaw/sub2api'
 const RELEASE_JOB_STORAGE_KEY = 'sub2api-release-job-id'
 const UPDATE_POLL_INTERVAL_MS = 5000
 const UPDATE_POLL_DEADLINE_MS = 90 * 60 * 1000
@@ -904,6 +695,7 @@ const dropdownRef = ref<HTMLElement | null>(null)
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
 const currentVersion = computed(() => appStore.currentVersion || props.version || '')
+const currentReleaseIdentity = computed<ReleaseIdentity | null>(() => appStore.currentRelease || null)
 const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
@@ -954,45 +746,14 @@ const applying = ref(false)
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
-const rollbackVersions = ref<RollbackVersionInfo[]>([])
+const rollbackReleases = ref<ReleaseIdentity[]>([])
+const rollbackOperation = ref<UpdateJob | null>(null)
 const rollbackVersionsLoading = ref(false)
 const rollbackVersionsError = ref('')
 const selectedRollbackVersion = ref('')
 const preparedRollbackJobID = ref('')
 const rollingBack = ref(false)
 const rollbackError = ref('')
-
-const { copied, copyToClipboard } = useClipboard()
-
-// Manual rollback methods differ by deployment: script installs use install.sh,
-// docker deployments pin the image tag instead
-const manualTab = ref<'script' | 'docker'>('script')
-
-const manualTabs = computed(() => [
-  { key: 'script' as const, label: t('version.deployScript') },
-  { key: 'docker' as const, label: t('version.deployDocker') }
-])
-
-const scriptRollbackCommand = computed(() => {
-  if (!selectedRollbackVersion.value) return ''
-  const tag = `v${selectedRollbackVersion.value}`
-  return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
-})
-
-const dockerRollbackCommand = computed(() => {
-  if (!selectedRollbackVersion.value) return ''
-  return [
-    `# ${t('version.dockerEditCompose')}`,
-    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value}`,
-    '',
-    `# ${t('version.dockerRecreate')}`,
-    'docker compose up -d'
-  ].join('\n')
-})
-
-const activeManualCommand = computed(() =>
-  manualTab.value === 'docker' ? dockerRollbackCommand.value : scriptRollbackCommand.value
-)
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
@@ -1234,6 +995,41 @@ function finishUpdateFailure(
   updating.value = false
 }
 
+function finishRollbackPrepared(status: UpdateJob) {
+  stopUpdatePolling()
+  rollbackOperation.value = status
+  preparedRollbackJobID.value = status.job_id
+  rollingBack.value = false
+  updating.value = false
+  localStorage.setItem(RELEASE_JOB_STORAGE_KEY, status.job_id)
+}
+
+function finishRollbackSuccess(status: UpdateJob) {
+  stopUpdatePolling()
+  localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  rollbackOperation.value = status
+  preparedRollbackJobID.value = ''
+  rollingBack.value = false
+  updating.value = false
+  successKind.value = 'rollback'
+  updateSuccess.value = true
+  needRestart.value = updateNeedsRestart({ need_restart: status.need_restart })
+  updateSuccessMessage.value = status.message
+  rollbackPanelOpen.value = false
+  appStore.clearVersionCache()
+}
+
+function finishRollbackFailure(status: UpdateJob) {
+  stopUpdatePolling()
+  localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  rollbackOperation.value = status
+  preparedRollbackJobID.value = ''
+  rollingBack.value = false
+  updating.value = false
+  rollbackError.value = status.message || t('version.rollbackFailed')
+  rollbackMessage.value = status.rollback?.attempted ? status.rollback.message : ''
+}
+
 async function pollUpdateStatus(jobID: string) {
   if (updatePollInFlight) return
   updatePollInFlight = true
@@ -1241,6 +1037,13 @@ async function pollUpdateStatus(jobID: string) {
     const status = await getUpdateStatus(jobID)
     updateStage.value = status.status
     updateStageMessage.value = status.message
+    if (status.operation_kind === 'rollback') {
+      rollbackOperation.value = status
+      if (status.status === 'prepared') finishRollbackPrepared(status)
+      else if (status.status === 'success') finishRollbackSuccess(status)
+      else if (isTerminalUpdateStatus(status.status)) finishRollbackFailure(status)
+      return
+    }
     if (status.status === 'prepared') {
       finishPrepared(status)
     } else if (status.status === 'success') {
@@ -1269,7 +1072,8 @@ function startUpdatePolling(jobID: string, initial?: UpdateJob) {
     updateStageMessage.value = initial.message
   }
   if (initial?.status === 'prepared') {
-    finishPrepared(initial)
+    if (initial.operation_kind === 'rollback') finishRollbackPrepared(initial)
+    else finishPrepared(initial)
     return
   }
   if (!initial || !isPollingSettledUpdateStatus(initial.status)) {
@@ -1304,11 +1108,11 @@ async function resumeUpdatePolling() {
 
 function resetRollbackState() {
   rollbackPanelOpen.value = false
-  rollbackVersions.value = []
+  rollbackReleases.value = []
+  rollbackOperation.value = null
   rollbackVersionsError.value = ''
   selectedRollbackVersion.value = ''
   rollbackError.value = ''
-  manualTab.value = 'script'
 }
 
 async function toggleRollbackPanel() {
@@ -1318,7 +1122,7 @@ async function toggleRollbackPanel() {
   if (
     rollbackPanelOpen.value &&
     isReleaseBuild.value &&
-    rollbackVersions.value.length === 0 &&
+    rollbackReleases.value.length === 0 &&
     !rollbackVersionsLoading.value
   ) {
     await loadRollbackVersions()
@@ -1330,8 +1134,7 @@ async function loadRollbackVersions() {
   rollbackVersionsLoading.value = true
   rollbackVersionsError.value = ''
   try {
-    const data = await getRollbackVersions()
-    rollbackVersions.value = data.versions || []
+    rollbackReleases.value = await getRollbackReleases()
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackVersionsError.value =
@@ -1341,17 +1144,35 @@ async function loadRollbackVersions() {
   }
 }
 
-function selectRollbackVersion(version: string) {
-  if (rollingBack.value) return
+async function handlePrepareRollback(releaseID: string) {
+  if (!isAdmin.value || rollingBack.value) return
+  rollingBack.value = true
   rollbackError.value = ''
-  selectedRollbackVersion.value = selectedRollbackVersion.value === version ? '' : version
+  try {
+    const queued = await prepareRollback(releaseID)
+    rollbackOperation.value = queued
+    startUpdatePolling(queued.job_id, queued)
+  } catch (error: unknown) {
+    const err = error as { response?: { data?: { message?: string } }; message?: string }
+    rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
+    rollingBack.value = false
+  }
 }
 
-function formatPublishedAt(publishedAt: string): string {
-  if (!publishedAt) return ''
-  const date = new Date(publishedAt)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleDateString()
+async function handleApplyRollback(jobID: string) {
+  if (!isAdmin.value || rollingBack.value) return
+  rollingBack.value = true
+  rollbackError.value = ''
+  try {
+    const queued = await applyRollback(jobID)
+    rollbackOperation.value = queued
+    preparedRollbackJobID.value = ''
+    startUpdatePolling(queued.job_id, queued)
+  } catch (error: unknown) {
+    const err = error as { response?: { data?: { message?: string } }; message?: string }
+    rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
+    rollingBack.value = false
+  }
 }
 
 function formatConflictTarget(
@@ -1371,38 +1192,6 @@ function formatConflictTarget(
     return commit ? `${tag}@${commit.slice(0, 12)}` : tag
   }
   return legacyUpstream.slice(0, 12) || '-'
-}
-
-async function handleRollback() {
-  if (!isAdmin.value) return
-  if (rollingBack.value || !selectedRollbackVersion.value) return
-
-  rollingBack.value = true
-  rollbackError.value = ''
-
-  try {
-    if (!preparedRollbackJobID.value) {
-      const prepared = await prepareRollback(selectedRollbackVersion.value)
-      preparedRollbackJobID.value = prepared.job_id
-      return
-    }
-    const result = await applyRollback(preparedRollbackJobID.value)
-    successKind.value = 'rollback'
-    updateSuccess.value = true
-    needRestart.value = result.need_restart
-    published.value = false
-    publishedCommit.value = ''
-    updateSuccessMessage.value = result.message
-    rollbackPanelOpen.value = false
-    // Clear version cache so the next check reflects the rolled-back version
-    appStore.clearVersionCache()
-    preparedRollbackJobID.value = ''
-  } catch (error: unknown) {
-    const err = error as { response?: { data?: { message?: string } }; message?: string }
-    rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
-  } finally {
-    rollingBack.value = false
-  }
 }
 
 async function handleRestart() {

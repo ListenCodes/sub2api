@@ -32,12 +32,14 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
   const currentOfficialVersion = ref('')
   const currentCustomVersion = ref('')
   const currentReleaseID = ref('')
+  const currentRelease = ref<ReleaseIdentity | null>(null)
   const targetOfficialVersion = ref('')
   const targetCustomVersion = ref('')
 
   async function fetchCurrentRelease(): Promise<ReleaseIdentity | null> {
     try {
       const identity = await getCurrentRelease()
+      currentRelease.value = identity
       currentOfficialVersion.value = identity.official_version
       currentCustomVersion.value = identity.custom_version
       currentReleaseID.value = identity.release_id
@@ -134,6 +136,7 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
     currentOfficialVersion,
     currentCustomVersion,
     currentReleaseID,
+    currentRelease,
     targetOfficialVersion,
     targetCustomVersion,
     fetchCurrentRelease,

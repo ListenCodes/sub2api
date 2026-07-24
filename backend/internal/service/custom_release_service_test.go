@@ -153,6 +153,7 @@ func TestUpdateServiceCheckUpdateDualVersionMatrix(t *testing.T) {
 		{name: "official", releaseTag: "v0.1.164", releaseCommit: newOfficialCommit, customCommit: currentCustomCommit, wantKind: UpdateKindOfficial, wantOfficial: "v0.1.164", wantCustom: "v1.0.4", wantRuntime: true, wantHasUpdate: true},
 		{name: "custom", releaseTag: "v0.1.163", releaseCommit: strings.Repeat("a", 40), customCommit: newCustomCommit, files: []ChangedFile{{Filename: "backend/main.go"}}, wantKind: UpdateKindCustom, wantOfficial: "v0.1.163", wantCustom: "v1.0.5", wantRuntime: true, wantHasUpdate: true},
 		{name: "combined", releaseTag: "v0.1.164", releaseCommit: newOfficialCommit, customCommit: newCustomCommit, files: []ChangedFile{{Filename: "frontend/src/main.ts"}}, wantKind: UpdateKindCombined, wantOfficial: "v0.1.164", wantCustom: "v1.0.5", wantRuntime: true, wantHasUpdate: true},
+		{name: "official with docs-only custom delta", releaseTag: "v0.1.164", releaseCommit: newOfficialCommit, customCommit: newCustomCommit, files: []ChangedFile{{Filename: "docs/guide.md"}}, wantKind: UpdateKindOfficial, wantOfficial: "v0.1.164", wantCustom: "v1.0.4", wantRuntime: true, wantHasUpdate: true},
 		{name: "docs only", releaseTag: "v0.1.163", releaseCommit: strings.Repeat("a", 40), customCommit: newCustomCommit, files: []ChangedFile{{Filename: "docs/guide.md"}}, wantKind: UpdateKindDocsOnly, wantOfficial: "v0.1.163", wantCustom: "", wantRuntime: false, wantHasUpdate: true},
 		{name: "none", releaseTag: "v0.1.163", releaseCommit: strings.Repeat("a", 40), customCommit: currentCustomCommit, wantKind: UpdateKindNone, wantOfficial: "v0.1.163", wantCustom: "v1.0.4", wantRuntime: false, wantHasUpdate: false},
 	}
@@ -173,7 +174,7 @@ func TestUpdateServiceCheckUpdateDualVersionMatrix(t *testing.T) {
 
 			info, err := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.163", "release").CheckCustomRelease(context.Background(), true)
 			require.NoError(t, err)
-			require.True(t, info.DetectionComplete)
+			require.Truef(t, info.DetectionComplete, "detection warning: %s", info.Warning)
 			require.Equal(t, current.ReleaseID, info.ReleaseID)
 			require.Equal(t, "v0.1.163", info.CurrentOfficialVersion)
 			require.Equal(t, "v1.0.4", info.CurrentCustomVersion)

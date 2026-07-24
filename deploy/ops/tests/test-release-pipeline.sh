@@ -55,13 +55,21 @@ done
 printf '#!/usr/bin/env sh\nexit 0\n' > "$DISPATCH_DIR/bin/flock"
 chmod +x "$DISPATCH_DIR/bin/flock"
 run_dispatch() {
-  local kind="$1" action="$2" status="$3" job_id expected
+  local kind="$1" action="$2" status="$3" claim_mode="${4:-trigger}" job_id expected
   job_id="$kind-$action"
   SUB2API_DATA_DIR="$DISPATCH_DIR/data" RELEASE_LEDGER_ROOT="$DISPATCH_DIR/data/release-ledger" RELEASE_OPERATIONS_DIR="$DISPATCH_DIR/data/release-ledger/operations" RELEASE_JOBS_DIR="$DISPATCH_DIR/data/release-ledger/operations" CURRENT_RELEASE_JOB_FILE="$DISPATCH_DIR/data/release-current-job-id"
   mkdir -p "$RELEASE_OPERATIONS_DIR"
   release_job_init "$job_id"
   release_job_update "$job_id" "$status" queued "$(jq -n --arg action "$action" '{action:$action}')"
-  printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger"
+  jq -n --arg release release-dispatch-fixture \
+    '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:null,updated_at:"2026-07-23T08:00:00Z"}' \
+    > "$RELEASE_LEDGER_ROOT/state.json"
+  rm -f "$DISPATCH_DIR/data/release-trigger" "$DISPATCH_DIR/data/release-trigger.processing."*
+  if [[ "$claim_mode" == stale ]]; then
+    printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger.processing.99999"
+  else
+    printf '%s %s\n' "$action" "$job_id" > "$DISPATCH_DIR/data/release-trigger"
+  fi
   : > "$DISPATCH_DIR/calls"
   PATH="$DISPATCH_DIR/bin:$PATH" DISPATCH_CALLS="$DISPATCH_DIR/calls" SUB2API_DATA_DIR="$DISPATCH_DIR/data" \
     SUB2API_PREPARE_SCRIPT="$DISPATCH_DIR/bin/prepare-release.sh" SUB2API_APPLY_SCRIPT="$DISPATCH_DIR/bin/apply-release.sh" \
@@ -70,11 +78,19 @@ run_dispatch() {
     "$ROOT_DIR/deploy/ops/sync-and-publish.sh"
   if [[ "$kind" == update ]]; then expected="$action-release"; else expected="$action-rollback"; fi
   assert_eq "$expected $job_id" "$(cat "$DISPATCH_DIR/calls")" "$kind $action dispatched to wrong executor"
+  assert_eq "$job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
+    "$kind $action executor ran before the ledger operation was claimed"
 }
 run_dispatch update prepare checking_updates
 run_dispatch update apply apply_queued
 run_dispatch rollback prepare checking_updates
 run_dispatch rollback apply apply_queued
+run_dispatch update prepare checking_updates stale
+
+if [[ "${DISPATCH_ONLY:-0}" == 1 ]]; then
+  printf 'release-dispatch=PASS\n'
+  exit 0
+fi
 
 bash "$ROOT_DIR/deploy/ops/tests/test-sync-upstream-behind.sh"
 bash "$ROOT_DIR/deploy/ops/tests/test-release-ledger.sh"

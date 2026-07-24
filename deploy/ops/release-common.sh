@@ -48,6 +48,7 @@ release_manifest_valid() {
     and (.target_custom_version | type == "string" and test("^v1\\.0\\.[0-9]+$"))
     and (.proposed_custom_sequence | type == "number" and floor == . and . >= 0)
     and (.advances_custom_version | type == "boolean")
+    and (.custom_docs_only | type == "boolean")
     and (.source_commit | type == "string" and test("^[0-9a-f]{40}$"))
     and (.target_commit | type == "string" and test("^[0-9a-f]{40}$"))
     and (.target_custom_commit | type == "string" and test("^[0-9a-f]{40}$"))
@@ -68,10 +69,12 @@ release_manifest_valid() {
     and .images_verified == true
     and (if .update_kind == "official" then
       .advances_custom_version == false
+      and (if .custom_docs_only then .target_custom_commit != .source_commit else .target_custom_commit == .source_commit end)
       and .target_custom_version == .current_custom_version
       and .target_custom_version == ("v1.0." + (.proposed_custom_sequence | tostring))
     else
-      .advances_custom_version == true
+      .custom_docs_only == false
+      and .advances_custom_version == true
       and .proposed_custom_sequence == (.base_custom_high_water + 1)
       and .target_custom_version == ("v1.0." + (.proposed_custom_sequence | tostring))
     end)

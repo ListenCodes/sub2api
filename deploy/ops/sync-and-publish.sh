@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 STATE_HELPER="${SUB2API_RELEASE_STATE_HELPER:-$SCRIPT_DIR/release-state.sh}"
+LEDGER_HELPER="${SUB2API_RELEASE_LEDGER_HELPER:-$SCRIPT_DIR/release-ledger.sh}"
 PREPARE_SCRIPT="${SUB2API_PREPARE_SCRIPT:-$SCRIPT_DIR/prepare-release.sh}"
 APPLY_SCRIPT="${SUB2API_APPLY_SCRIPT:-$SCRIPT_DIR/apply-release.sh}"
 PREPARE_ROLLBACK_SCRIPT="${SUB2API_PREPARE_ROLLBACK_SCRIPT:-$SCRIPT_DIR/prepare-rollback.sh}"
@@ -14,10 +15,24 @@ TRIGGER_FILE="$DATA_DIR/release-trigger"
 TRIGGER_CLAIM=""
 
 source "$STATE_HELPER"
+source "$LEDGER_HELPER"
 mkdir -p "$DATA_DIR" "$(dirname "$LOCK_FILE")" "$(dirname "$LOG")"
 touch "$LOG" "$LOCK_FILE"
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG"; }
+
+recover_stale_claim() {
+  local claims=()
+  [[ ! -e "$TRIGGER_FILE" && ! -L "$TRIGGER_FILE" ]] || return 0
+  shopt -s nullglob
+  claims=("$TRIGGER_FILE".processing.*)
+  shopt -u nullglob
+  [[ "${#claims[@]}" -le 1 ]] || { log 'Multiple stale release trigger claims require manual inspection'; return 1; }
+  [[ "${#claims[@]}" -eq 1 ]] || return 0
+  [[ -f "${claims[0]}" && ! -L "${claims[0]}" ]] || return 1
+  mv "${claims[0]}" "$TRIGGER_FILE"
+  log 'Recovered an interrupted durable release trigger claim'
+}
 
 claim_job() {
   if [[ -n "${SUB2API_JOB_ID:-}" ]]; then
@@ -25,6 +40,7 @@ claim_job() {
     ACTION="$(jq -r '.action // empty' "$(release_job_path "$JOB_ID")" 2>/dev/null || true)"
     return
   fi
+  recover_stale_claim || return 1
   [[ -s "$TRIGGER_FILE" ]] || return 1
   TRIGGER_CLAIM="$TRIGGER_FILE.processing.$$"
   mv "$TRIGGER_FILE" "$TRIGGER_CLAIM"
@@ -38,7 +54,16 @@ claim_job() {
   fi
 }
 
-cleanup() { [[ -z "$TRIGGER_CLAIM" ]] || rm -f "$TRIGGER_CLAIM"; }
+cleanup() {
+  local status=''
+  [[ -n "$TRIGGER_CLAIM" && -e "$TRIGGER_CLAIM" ]] || return 0
+  status="$(jq -r '.status // empty' "$(release_job_path "${JOB_ID:-}")" 2>/dev/null || true)"
+  if release_terminal_status "$status" || [[ "$status" == prepared ]]; then
+    rm -f "$TRIGGER_CLAIM"
+  elif [[ ! -e "$TRIGGER_FILE" && ! -L "$TRIGGER_FILE" ]]; then
+    mv "$TRIGGER_CLAIM" "$TRIGGER_FILE"
+  fi
+}
 trap cleanup EXIT
 
 exec 9>"$LOCK_FILE"
@@ -101,6 +126,11 @@ if [[ "$ACTION" == apply ]]; then
       exit 1
     }
 fi
+if ! ledger_set_active_operation "$JOB_ID"; then
+  release_job_update "$JOB_ID" failed 'Another release operation owns the ledger' \
+    '{"error_code":"OPERATION_IN_PROGRESS","published":false,"production_changed":false}' || true
+  exit 1
+fi
 [[ -x "$EXECUTOR" ]] || { release_job_update "$JOB_ID" failed 'Release executor is missing' '{"error_code":"RELEASE_EXECUTOR_MISSING"}'; exit 1; }
 log "Starting $OPERATION_KIND $ACTION phase for administrator job $JOB_ID"
-exec "$EXECUTOR" --job-id "$JOB_ID"
+"$EXECUTOR" --job-id "$JOB_ID"

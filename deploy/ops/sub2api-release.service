@@ -10,6 +10,8 @@ User=root
 Group=root
 Environment=SUB2API_DATA_DIR=/var/lib/docker/volumes/deploy_sub2api_data/_data
 ExecStart=/opt/sub2api-custom/sync-and-publish.sh
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
