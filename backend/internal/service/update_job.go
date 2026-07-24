@@ -92,6 +92,7 @@ type UpdateJob struct {
 	Action                 string         `json:"action,omitempty"`
 	Status                 string         `json:"status"`
 	BaseReleaseID          string         `json:"base_release_id,omitempty"`
+	BaseCustomHighWater    *int           `json:"base_custom_high_water,omitempty"`
 	TargetReleaseID        string         `json:"target_release_id,omitempty"`
 	CurrentOfficialVersion string         `json:"current_official_version,omitempty"`
 	CurrentCustomVersion   string         `json:"current_custom_version,omitempty"`
