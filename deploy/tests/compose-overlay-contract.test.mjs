@@ -10,6 +10,9 @@ const repoRoot = resolve(deployRoot, '..')
 const basePath = resolve(deployRoot, 'docker-compose.yml')
 const overlayPath = resolve(deployRoot, 'docker-compose.custom.yml')
 const envPath = resolve(deployRoot, 'tests/fixtures/compose.env')
+const stableBaseline = JSON.parse(
+  readFileSync(resolve(deployRoot, 'stable-release-baseline.json'), 'utf8')
+)
 
 function read(relativePath) {
   return readFileSync(resolve(repoRoot, relativePath), 'utf8')
@@ -29,10 +32,10 @@ function reportComposeFailure(error, result) {
   }
 }
 
-test('production base Compose remains byte-identical to Stable Release v0.1.163', () => {
+test(`production base Compose remains byte-identical to Stable Release ${stableBaseline.tag}`, () => {
   const upstream = execFileSync('git', [
     'show',
-    'd0bdd7e771636a8d315f542cafd39484f39bd60c:deploy/docker-compose.yml'
+    `${stableBaseline.commit_sha}:deploy/docker-compose.yml`
   ], { cwd: repoRoot, encoding: 'utf8' })
   assert.equal(read('deploy/docker-compose.yml'), upstream)
 })
