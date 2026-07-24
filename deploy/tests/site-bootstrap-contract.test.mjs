@@ -36,6 +36,12 @@ test('site exporter creates a complete checksummed migration bundle', () => {
   ]) assert.match(script, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 
   for (const pattern of forbidden) assert.doesNotMatch(script, pattern)
+
+  assert.ok(script.indexOf('flock -n 8') < script.indexOf('ledger_validate_state'), 'export must lock before reading release state')
+  assert.match(script, /ledger_validate_current_projection/)
+  assert.match(script, /env_value POSTGRES_USER "\$ENV_FILE"/)
+  assert.match(script, /env_value RISK_CONTROL_POSTGRES_USER "\$ENV_FILE"/)
+  assert.doesNotMatch(script, /RISK_POSTGRES_USER/)
 })
 
 test('site bootstrap supports only fail-closed fresh and migrate modes', () => {
@@ -68,6 +74,12 @@ test('site bootstrap supports only fail-closed fresh and migrate modes', () => {
   assert.ok(postgres >= 0 && postgres < redis && redis < risk && risk < extensions && extensions < main)
 
   for (const pattern of forbidden) assert.doesNotMatch(script, pattern)
+
+  assert.match(script, /ledger_validate_current_projection/)
+  assert.match(script, /--no-pull/)
+  assert.match(script, /BOOTSTRAP_OWNER/)
+  assert.match(script, /com\.listencodes\.sub2api\.bootstrap-owner/)
+  assert.ok(script.indexOf('volume_owner=') < script.indexOf('CREATED_VOLUMES+=("$volume")'))
 })
 
 test('bootstrap cleanup only removes containers created by the current run', () => {
@@ -76,5 +88,20 @@ test('bootstrap cleanup only removes containers created by the current run', () 
   assert.match(script, /TARGET_CONTAINERS=\([^)]*sub2api[^)]*extensions-self[^)]*\)/s)
   assert.match(script, /CREATED_CONTAINERS=\(\)/)
   assert.match(script, /CREATED_CONTAINERS\+=\("\$container"\)/)
+  assert.match(script, /CREATED_CONTAINER_IDS\+=\("\$container_id"\)/)
+  assert.match(script, /container_id="\$\(docker container inspect --format '\{\{\.Id\}\}'/)
   assert.doesNotMatch(script, /CREATED_CONTAINERS=\(sub2api/)
+})
+
+test('image verification exposes a registry-only mode for check-only bootstrap', () => {
+  const script = load('deploy/ops/verify-release-images.sh')
+
+  assert.match(script, /--no-pull/)
+  assert.match(script, /imagetools inspect "\$tag" --format/)
+  assert.match(script, /if \[\[ "\$NO_PULL" == true \]\]/)
+})
+
+test('the Linux bootstrap fixture is an enforced deployment workflow gate', () => {
+  const workflow = load('.github/workflows/custom-release.yml')
+  assert.match(workflow, /bash deploy\/tests\/site-bootstrap-test\.sh/)
 })

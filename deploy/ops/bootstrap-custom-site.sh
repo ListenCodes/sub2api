@@ -21,6 +21,7 @@ PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-}"
 MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
 EXTENSIONS_REPOSITORY="${SUB2API_EXTENSIONS_REPOSITORY:-ghcr.io/listencodes/sub2api-extensions}"
 EXPECTED_PLATFORM='linux/amd64'
+BOOTSTRAP_OWNER="bootstrap-$(date -u '+%Y%m%dT%H%M%S%NZ')-$$"
 
 MODE="${1:-}"
 [[ "$MODE" == fresh || "$MODE" == migrate ]] || {
@@ -40,6 +41,7 @@ RENDERED_JSON=''
 CREATED_VOLUMES=()
 TARGET_CONTAINERS=(sub2api extensions-self risk-control-postgres sub2api-postgres sub2api-redis)
 CREATED_CONTAINERS=()
+CREATED_CONTAINER_IDS=()
 INSTALLED_ENV=false
 INSTALLED_OPS=false
 INSTALLED_UNITS=false
@@ -56,7 +58,7 @@ compose() {
 }
 
 cleanup_new_site() {
-  local container volume path source_path
+  local index container container_id volume volume_owner path source_path
   [[ "$MUTATED" == true && "$COMPLETED" != true ]] || return 0
   if [[ "$WATCHER_ENABLED" == true ]]; then
     systemctl disable --now sub2api-release.path >/dev/null 2>&1 || true
@@ -71,11 +73,14 @@ cleanup_new_site() {
     done
     rmdir -- "$INSTALL_ROOT" >/dev/null 2>&1 || true
   fi
-  for container in "${CREATED_CONTAINERS[@]}"; do
-    docker rm -f "$container" >/dev/null 2>&1 || true
+  for index in "${!CREATED_CONTAINERS[@]}"; do
+    container="${CREATED_CONTAINERS[$index]}"
+    container_id="$(docker container inspect --format '{{.Id}}' "$container" 2>/dev/null || true)"
+    [[ "$container_id" != "${CREATED_CONTAINER_IDS[$index]}" ]] || docker rm -f "$container" >/dev/null 2>&1 || true
   done
   for volume in "${CREATED_VOLUMES[@]}"; do
-    docker volume rm "$volume" >/dev/null 2>&1 || true
+    volume_owner="$(docker volume inspect --format '{{index .Labels "com.listencodes.sub2api.bootstrap-owner"}}' "$volume" 2>/dev/null || true)"
+    [[ "$volume_owner" != "$BOOTSTRAP_OWNER" ]] || docker volume rm "$volume" >/dev/null 2>&1 || true
   done
   for path in "${CREATED_NGINX_FILES[@]}"; do
     rm -f -- "$path"
@@ -150,7 +155,7 @@ source "$COMMON_HELPER"
 source "$LEDGER_HELPER"
 
 verify_bundle() {
-  local expected_commit state_commit current_release record original_backup relative_backup mapped_backup record_tmp
+  local expected_commit state_commit current_release record original_backup relative_backup mapped_backup record_tmp bundled_key
   BUNDLE_REAL="$(cd "$BUNDLE" && pwd -P)" || return 1
   (
     [[ -s "$BUNDLE_REAL/SHA256SUMS" && ! -L "$BUNDLE_REAL/SHA256SUMS" ]] || return 1
@@ -158,10 +163,13 @@ verify_bundle() {
     RELEASE_BACKUP_ROOT="$BUNDLE_REAL"
     ledger_validate_manifest_exact "$BUNDLE_REAL" SHA256SUMS || return 1
     for required in bundle.json release-state.json sub2api_db.dump sub2api_db.list risk_control_db.dump risk_control_db.list \
-      config/.env config/docker-compose.yml config/docker-compose.custom.yml release-ledger/state.json; do
+      config/.env config/docker-compose.yml config/docker-compose.custom.yml nginx/origin-key.path release-ledger/state.json; do
       [[ -s "$BUNDLE_REAL/$required" && ! -L "$BUNDLE_REAL/$required" ]] || return 1
     done
     secure_file "$BUNDLE_REAL/config/.env" || return 1
+    bundled_key="$(head -n 1 "$BUNDLE_REAL/nginx/origin-key.path")"
+    [[ "$bundled_key" == /* && "$bundled_key" != / ]] || return 1
+    secure_file "$BUNDLE_REAL/nginx/$(basename "$bundled_key")" || return 1
     expected_commit="$(jq -r '.source_commit // empty' "$BUNDLE_REAL/bundle.json")"
     state_commit="$(jq -r '.production_commit // empty' "$BUNDLE_REAL/release-state.json")"
     [[ "$expected_commit" == "$HEAD_COMMIT" && "$state_commit" == "$HEAD_COMMIT" ]] || return 1
@@ -170,7 +178,6 @@ verify_bundle() {
     RELEASE_BACKUP_ROOT="$BUNDLE_REAL/release-backups"
     ledger_validate_state "$RELEASE_LEDGER_ROOT/state.json" || return 1
     [[ "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" == '' ]] || return 1
-    ledger_validate_projection "$(cat "$PRODUCTION_RELEASE_STATE_FILE")" || return 1
     current_release="$(jq -r '.current_release_id' "$RELEASE_LEDGER_ROOT/state.json")"
     [[ -s "$RELEASE_LEDGER_ROOT/releases/$current_release.json" ]] || return 1
     shopt -s nullglob
@@ -187,6 +194,8 @@ verify_bundle() {
       ledger_validate_release_artifacts "$record_tmp" || { rm -f -- "$record_tmp"; return 1; }
       rm -f -- "$record_tmp"
     done
+    ledger_validate_current_projection_consistency "$RELEASE_LEDGER_ROOT/state.json" \
+      "$PRODUCTION_RELEASE_STATE_FILE" "$RELEASE_LEDGER_ROOT/releases/$current_release.json" || return 1
     grep -q . "$BUNDLE_REAL/sub2api_db.list" && grep -q . "$BUNDLE_REAL/risk_control_db.list"
   )
 }
@@ -208,7 +217,9 @@ else
   [[ "$(sha256sum "$COMPOSE_CUSTOM" | awk '{print $1}')" == "$(sha256sum "$BUNDLE_REAL/config/docker-compose.custom.yml" | awk '{print $1}')" ]] || fail 'bundled custom Compose does not match source'
 fi
 
-images_output="$($VERIFY_IMAGES_SCRIPT "$HEAD_COMMIT" "${STABLE_TAG#v}")" || fail 'paired public image verification failed'
+VERIFY_ARGS=()
+[[ "$CHECK_ONLY" != true ]] || VERIFY_ARGS+=(--no-pull)
+images_output="$($VERIFY_IMAGES_SCRIPT "${VERIFY_ARGS[@]}" "$HEAD_COMMIT" "${STABLE_TAG#v}")" || fail 'paired public image verification failed'
 MAIN_DIGEST="$(awk -F= '$1=="main_digest" {print $2}' <<< "$images_output")"
 EXTENSIONS_DIGEST="$(awk -F= '$1=="extensions_digest" {print $2}' <<< "$images_output")"
 [[ "$MAIN_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$EXTENSIONS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'image verifier returned invalid digests'
@@ -263,7 +274,10 @@ rm -f -- "$STAGED_ENV"
 STAGED_ENV=''
 compose pull postgres redis risk-control-postgres
 for volume in deploy_sub2api_data deploy_postgres_data deploy_redis_data deploy_risk_control_postgres_data; do
-  docker volume create --label com.docker.compose.project=deploy --label "com.docker.compose.volume=${volume#deploy_}" "$volume" >/dev/null
+  docker volume create --label com.docker.compose.project=deploy --label "com.docker.compose.volume=${volume#deploy_}" \
+    --label "com.listencodes.sub2api.bootstrap-owner=$BOOTSTRAP_OWNER" "$volume" >/dev/null
+  volume_owner="$(docker volume inspect --format '{{index .Labels "com.listencodes.sub2api.bootstrap-owner"}}' "$volume" 2>/dev/null || true)"
+  [[ "$volume_owner" == "$BOOTSTRAP_OWNER" ]] || fail "target volume ownership changed during bootstrap: $volume"
   CREATED_VOLUMES+=("$volume")
 done
 DATA_MOUNT="$(docker volume inspect --format '{{.Mountpoint}}' deploy_sub2api_data)"
@@ -289,10 +303,12 @@ wait_container_healthy() {
 }
 
 start_service() {
-  local service="$1" container="$2"
+  local service="$1" container="$2" container_id
   compose up -d --no-deps --pull never "$service"
-  docker container inspect "$container" >/dev/null 2>&1 || fail "service container was not created: $service"
+  container_id="$(docker container inspect --format '{{.Id}}' "$container" 2>/dev/null || true)"
+  [[ -n "$container_id" ]] || fail "service container was not created: $service"
   CREATED_CONTAINERS+=("$container")
+  CREATED_CONTAINER_IDS+=("$container_id")
   wait_container_healthy "$container" || fail "service did not become healthy: $service"
 }
 

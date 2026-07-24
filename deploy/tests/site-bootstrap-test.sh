@@ -156,6 +156,24 @@ else
   ok 'migrate check-only emitted no runtime mutation'
 fi
 
+jq '.main_digest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"' \
+  "$BUNDLE/release-state.json" > "$BUNDLE/release-state.tmp"
+mv "$BUNDLE/release-state.tmp" "$BUNDLE/release-state.json"
+(cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
+expect_failure 'migrate rejects an internally inconsistent projection with valid checksums' \
+  "$BOOTSTRAP" migrate --bundle "$BUNDLE" --confirm RESTORE-MIGRATION --check-only
+jq --arg main "$MAIN_DIGEST" '.main_digest = $main' "$BUNDLE/release-state.json" > "$BUNDLE/release-state.tmp"
+mv "$BUNDLE/release-state.tmp" "$BUNDLE/release-state.json"
+
+jq '.custom_version_high_water = 1' "$BUNDLE/release-ledger/state.json" > "$BUNDLE/release-ledger/state.tmp"
+mv "$BUNDLE/release-ledger/state.tmp" "$BUNDLE/release-ledger/state.json"
+(cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
+expect_failure 'migrate rejects high-water below historical release sequences' \
+  "$BOOTSTRAP" migrate --bundle "$BUNDLE" --confirm RESTORE-MIGRATION --check-only
+jq '.custom_version_high_water = 2' "$BUNDLE/release-ledger/state.json" > "$BUNDLE/release-ledger/state.tmp"
+mv "$BUNDLE/release-ledger/state.tmp" "$BUNDLE/release-ledger/state.json"
+
+(cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
 printf '\ncorrupt\n' >> "$BUNDLE/bundle.json"
 expect_failure 'migrate rejects checksum drift' \
   "$BOOTSTRAP" migrate --bundle "$BUNDLE" --confirm RESTORE-MIGRATION --check-only
