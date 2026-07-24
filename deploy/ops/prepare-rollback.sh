@@ -122,7 +122,7 @@ release_validate_snapshot_against_record "$BACKUP_DIR/docker-compose.yml" "$BACK
 rm -f "$RENDERED"; RENDERED=''
 
 prepared_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-expires_at="$(date -u -d "$prepared_at +15 minutes" '+%Y-%m-%dT%H:%M:%SZ')"
+expires_at="$(date -u -d "$prepared_at +60 minutes" '+%Y-%m-%dT%H:%M:%SZ')"
 MANIFEST_DIR="$PREPARED_ROOT/$JOB_ID"
 mkdir -p "$MANIFEST_DIR"
 jq -n --arg operation rollback --arg base "$BASE_RELEASE_ID" --arg target "$TARGET_RELEASE_ID" --argjson high "$BASE_CUSTOM_HIGH_WATER" \
