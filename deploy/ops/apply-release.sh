@@ -312,6 +312,8 @@ if [[ -e "$TARGET_RECORD_PATH" || -L "$TARGET_RECORD_PATH" ]]; then
   elif [[ "$operation_status" != success ]]; then
     fail_before_mutation 'partial ledger recovery has an invalid operation phase' LEDGER_INCONSISTENT failed
   fi
+  release_attach_source_branch "$TARGET_COMMIT" "$BRANCH" \
+    || fail_before_mutation 'target source could not be attached to the production branch' SOURCE_BRANCH_ATTACH_FAILED failed
 
   if [[ "$state_release_id" == "$TARGET_RELEASE_ID" ]]; then
     ledger_recover_or_refuse "$TARGET_RECORD" "$TARGET_PROJECTION" "$expected_high_water" "$JOB_ID" \
@@ -344,6 +346,8 @@ if [[ "$state_release_id" == "$BASE_RELEASE_ID" && "$state_high_water" -eq "$BAS
   && live_target_identity_matches; then
   run_complete_health "$TARGET_DIR/rendered-compose.json" \
     || fail_before_mutation 'interrupted target runtime failed the complete health suite' LEDGER_INCONSISTENT failed
+  release_attach_source_branch "$TARGET_COMMIT" "$BRANCH" \
+    || fail_before_mutation 'interrupted target source could not be attached to the production branch' SOURCE_BRANCH_ATTACH_FAILED failed
   published_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   RELEASE_RECORD="$(build_release_record "$published_at")" \
     || fail_before_mutation 'interrupted release record construction failed' LEDGER_INCONSISTENT failed
@@ -492,6 +496,8 @@ wait_container_healthy sub2api || abort_apply 'main application health check fai
 release_job_update "$JOB_ID" health_checking 'Checking internal, public, native admin, extension, and data-quality health' '{}'
 run_complete_health "$TARGET_DIR/rendered-compose.json" || abort_apply 'complete production health suite failed' COMPLETE_HEALTH_FAILED
 live_target_identity_matches || abort_apply 'running target identity failed exact validation' TARGET_RUNTIME_DRIFT
+release_attach_source_branch "$TARGET_COMMIT" "$BRANCH" >> "$LOG" 2>&1 \
+  || abort_apply 'target source could not be attached to the production branch' SOURCE_BRANCH_ATTACH_FAILED
 
 published_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 RELEASE_RECORD="$(build_release_record "$published_at")" || abort_apply 'release record construction failed' RELEASE_RECORD_INVALID

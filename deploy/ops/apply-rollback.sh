@@ -203,6 +203,7 @@ release_job_update "$JOB_ID" health_checking 'Checking complete health after sna
 run_complete_health "$TARGET_DIR/rendered-compose.json" || abort_apply 'historical release failed complete health' HEALTH_CHECK_FAILED
 release_running_container_matches_image extensions-self "$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" || abort_apply 'historical extensions runtime identity drifted' RUNTIME_IMAGE_DRIFT
 release_running_container_matches_image sub2api "$MAIN_REPOSITORY@$MAIN_DIGEST" || abort_apply 'historical main runtime identity drifted' RUNTIME_IMAGE_DRIFT
+release_attach_source_branch "$TARGET_COMMIT" "$BRANCH" >> "$LOG" 2>&1 || abort_apply 'historical source could not be attached to the production branch' SOURCE_BRANCH_ATTACH_FAILED
 if ! ledger_commit_rollback "$TARGET_RELEASE_ID" "$JOB_ID"; then
   # A metadata failpoint can leave the target projection durable while state is
   # still on the base release. Retry the idempotent commit before restoring

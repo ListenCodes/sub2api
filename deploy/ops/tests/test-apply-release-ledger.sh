@@ -82,6 +82,7 @@ case "${1:-}" in
     if [[ "${2:-}" == --show-current ]]; then
       cat "$FIXTURE_REPO_STATE/ref"
     elif [[ "${2:-}" == -f ]]; then
+      [[ "$(cat "$FIXTURE_REPO_STATE/ref")" != "${3:-}" ]] || exit 1
       printf '%s\n' "$4" > "$FIXTURE_REPO_STATE/branch"
     else
       exit 1
@@ -453,7 +454,11 @@ apply_scenario_mutation() {
         "$manifest" > "$manifest.tmp" && mv "$manifest.tmp" "$manifest"
       sha256sum "$manifest" > "$root/data/release-prepared/$job_id/manifest.sha256"
       ;;
-    duplicate) seed_committed_target "$root" success ;;
+    duplicate)
+      seed_committed_target "$root" success
+      printf '%s\n' "$TARGET_COMMIT" > "$root/repo-state/branch"
+      printf 'custom-release\n' > "$root/repo-state/ref"
+      ;;
     recovery) seed_committed_target "$root" health_checking ;;
     partial-record)
       cp -p "$root/data/release-ledger/state.json" "$root/base-state.json"
@@ -558,6 +563,7 @@ run_success_case() {
   assert_eq true "$(jq -r '.production_changed' "$root/data/release-ledger/operations/$job_id.json")" "$scenario operation did not record production change"
   assert_eq "$TARGET_COMMIT" "$(jq -r '.published_commit' "$root/data/release-ledger/operations/$job_id.json")" "$scenario published commit mismatch"
   assert_eq "$TARGET_COMMIT" "$(cat "$root/repo-state/head")" "$scenario source did not switch"
+  assert_eq custom-release "$(cat "$root/repo-state/ref")" "$scenario source branch was left detached"
   cmp -s "$root/repo/deploy/docker-compose.yml" "$(jq -r '.backup_dir' "$manifest")/target/docker-compose.yml" || fail "$scenario did not install target base Compose"
   cmp -s "$root/repo/deploy/.env" "$(jq -r '.backup_dir' "$manifest")/target/.env" || fail "$scenario did not install target environment"
   if [[ "$scenario" == duplicate || "$scenario" == recovery || "$scenario" == partial-record || "$scenario" == partial-projection || "$scenario" == partial-expired || "$scenario" == runtime-only || "$scenario" == runtime-only-expired ]]; then
