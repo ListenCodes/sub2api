@@ -252,6 +252,38 @@ SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@sha256:<digest>
 EXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@sha256:<digest>
 ```
 
+Update and rollback preparation manifests remain valid for one hour. The
+administrator must still explicitly confirm apply before expiry.
+
+For a new Linux amd64 host, clone `ListenCodes/sub2api`, check out the exact
+clean `origin/custom-release`, create a mode-0600 secrets file outside the
+checkout, and validate before making changes:
+
+```bash
+sudo deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE --check-only
+sudo deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE
+```
+
+To move an existing custom site, export it while healthy, copy the resulting
+directory securely, then validate and restore it on an empty target host:
+
+```bash
+sudo deploy/ops/export-custom-site.sh \
+  --output /root/sub2api-site-export --confirm EXPORT-SITE
+sudo deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION --check-only
+sudo deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION
+```
+
+`fresh` initializes Custom v1.0.0 with high-water zero; `migrate` preserves
+the exported dual-version ledger. Both modes require empty target containers
+and named volumes, digest-only paired public images, and the explicit Compose
+pair. The scripts do not configure DNS/CDN or externally managed TLS routing.
+Later upgrades still use the administrator prepare + confirm flow.
+
 The versioned scripts in `deploy/ops/` are installed on the VPS as follows:
 
 ```bash

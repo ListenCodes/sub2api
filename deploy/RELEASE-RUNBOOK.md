@@ -5,7 +5,7 @@ commit `aa2d24106cab0a03785330d8e0ff4e02b0474a0e`. The first successful custom
 runtime release is v1.0.1. Official-only releases retain the custom version;
 combined releases advance it once. Failed, expired, drifted, unconfirmed, and
 docs-only operations allocate no number. Complete rollback uses prepare then
-explicit apply within 15 minutes, only the last three complete snapshots
+explicit apply within one hour, only the last three complete snapshots
 excluding current, never lowers/reuses high-water, and normally restores neither
 database. Legacy single-stage and official binary rollback endpoints fail closed.
 
@@ -122,6 +122,51 @@ valid `release-state.json`.
 
 Do not call `publish-custom.sh` directly for final acceptance. Trigger the same
 durable job used by the administrator UI and monitor its persisted states.
+
+## New Site And Full-Site Migration
+
+Use only a clean Linux amd64 checkout whose `custom-release` HEAD exactly equals
+`origin/custom-release`. A new host must have none of the target containers,
+named volumes, installed release units, or production `.env`. Keep the input
+secret file outside the checkout with mode `0600`, and run `--check-only`
+before the real command:
+
+```bash
+deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE --check-only
+deploy/ops/bootstrap-custom-site.sh fresh \
+  --env-file /root/sub2api-site.env --confirm FRESH-EMPTY-SITE
+```
+
+This initializes the recorded Official Stable, Custom v1.0.0, and custom
+high-water zero. It verifies the paired public GHCR images and explicit Compose
+render, then starts PostgreSQL, Redis, risk-control PostgreSQL,
+`extensions-self`, and `sub2api` in dependency order.
+
+For migration, first export a healthy source site to a new absolute directory:
+
+```bash
+deploy/ops/export-custom-site.sh \
+  --output /root/sub2api-site-export --confirm EXPORT-SITE
+```
+
+Transfer that directory using an operator-approved secure channel, clone the
+same exact `custom-release` commit on the empty target, and run:
+
+```bash
+deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION --check-only
+deploy/ops/bootstrap-custom-site.sh migrate \
+  --bundle /root/sub2api-site-export --confirm RESTORE-MIGRATION
+```
+
+The export contains fresh validated dumps of both databases, `.env`, the
+Compose pair, Nginx/TLS files, the full dual-version ledger, release backups,
+runtime metadata, and exact checksums. Migration restores both databases before
+application writers start and preserves the historical display and high-water.
+Neither command changes DNS/CDN. Review and activate Nginx/TLS routing
+separately. Later releases use the normal administrator update button; prepared
+update and rollback manifests require explicit apply within one hour.
 
 If a stable Release merge conflicts, the update status reports the exact files,
 approved branch base, Release tag/commit, and diagnostic artifact path. The
@@ -396,7 +441,7 @@ the same `job_id`:
 ```text
 check-updates (read-only)
   -> prepare: Actions + paired GHCR digests + explicit Compose render + backups
-  -> prepared (15 minute expiry, immutable manifest)
+  -> prepared (60-minute expiry, immutable manifest)
   -> administrator confirmation
   -> apply: local drift gate + --pull never + extensions-self -> sub2api
   -> health checks -> atomic release-state.json
