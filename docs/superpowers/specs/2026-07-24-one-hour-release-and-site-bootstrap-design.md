@@ -29,6 +29,11 @@ Add `deploy/ops/bootstrap-custom-site.sh` with two explicit modes:
   rollback evidence. It preserves the migrated site's dual-version history and
   high-water.
 
+Add `deploy/ops/export-custom-site.sh` to create the migration bundle consumed
+by `migrate`. It takes fresh dumps of both databases and copies the current
+ledger, release-state projection, rollback artifacts, Compose pair, `.env`,
+Nginx/certificates, and image metadata into one checksummed directory.
+
 The operator runs the versioned script from an already-cloned
 `origin/custom-release` checkout. A secrets file with mode `0600` is supplied by
 path; secrets are never accepted as command-line values or written to Git.
@@ -56,8 +61,10 @@ backup paths remain canonical and verifiable on the new host.
 After validation it starts dependencies, then `extensions-self`, then
 `sub2api`, performs the same internal and public health gates used by releases,
 creates or restores the ledger, installs `/opt/sub2api-custom` scripts and the
-systemd path watcher, and emits a deployment report. Any failure after mutation
-restores the captured pre-bootstrap state. It never recreates an existing
+systemd path watcher, and emits a deployment report. Both modes require an empty
+target host. On failure, only containers, files, and named volumes created by
+that exact bootstrap attempt may be removed; existing resources are never
+deleted or replaced. It never recreates an existing
 `risk-control-postgres`, restores a database in ordinary release rollback,
 uses mutable application tags, or edits a running container.
 
@@ -67,11 +74,12 @@ The script can install supplied Nginx/certificate files but cannot change DNS.
 
 ## Testing
 
-Node contract tests inspect the bootstrap script for fail-closed mode parsing,
+Node contract tests inspect the bootstrap and export scripts for fail-closed mode parsing,
 digest-only images, explicit Compose pairing, secret-file checks, restore
 confirmation, ledger initialization/restoration, safe service order, systemd
 installation, and prohibition of `docker compose down`, volume deletion,
-mutable tags, and direct database replacement. Shell syntax and fixture-driven
+mutable tags, broad prune/delete operations, and replacement of pre-existing
+databases. Shell syntax and fixture-driven
 dry runs cover fresh and migrate preflight without touching Docker or production.
 The existing deployment contract suite remains green.
 
