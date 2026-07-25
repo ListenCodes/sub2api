@@ -39,7 +39,7 @@ func TestPostgresSourceReadsErrorsAndDimensionsFromSafeViews(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(errorSourceColumns()))
 	mock.ExpectQuery(regexp.QuoteMeta(accountDimensionQuery)).
 		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at", "account_identity"}))
 	mock.ExpectQuery(regexp.QuoteMeta(userDimensionQuery)).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "username", "status", "deleted_at"}))
@@ -93,6 +93,26 @@ func TestPostgresSourceReadsAllGroupDimensions(t *testing.T) {
 	}
 	if len(groups) != 2 || groups[0].ID != 7 || groups[1].DeletedAt == nil {
 		t.Fatalf("groups = %+v", groups)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresSourceReadPublicGroups(t *testing.T) {
+	db, mock := newSourceMock(t)
+	mock.ExpectQuery(regexp.QuoteMeta(publicGroupsQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"name", "platform", "rate_multiplier", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier",
+		}).AddRow("GPT Pro", "openai", 0.3, true, "14:00", "22:00", 1.2),
+	)
+
+	items, err := NewPostgresSource(db, time.Second, 100).ReadPublicGroups(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Name != "GPT Pro" || items[0].RateMultiplier != 0.3 {
+		t.Fatalf("public groups = %+v", items)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

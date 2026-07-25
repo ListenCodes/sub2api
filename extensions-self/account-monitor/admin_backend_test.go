@@ -672,9 +672,9 @@ func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
 	sourceMock.ExpectQuery(regexp.QuoteMeta(allAccountDimensionsQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}).
-			AddRow(int64(9), nil, "active account", "openai", "active", true, nil).
-			AddRow(int64(10), nil, "inactive account", "openai", "inactive", false, nil),
+		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at", "account_identity"}).
+			AddRow(int64(9), nil, "active account", "openai", "active", true, nil, "").
+			AddRow(int64(10), nil, "inactive account", "openai", "inactive", false, nil, ""),
 	)
 	sourceMock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_rate_multiplier", "group_deleted_at"}),
@@ -925,10 +925,10 @@ func healthMetricColumns() []string {
 func expectAccountInventory(mock sqlmock.Sqlmock) {
 	deletedAt := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(regexp.QuoteMeta(allAccountDimensionsQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at"}).
-			AddRow(int64(1), nil, "idle", "grok", "active", true, nil).
-			AddRow(int64(2), nil, "busy", "openai", "active", true, nil).
-			AddRow(int64(3), nil, "multi", "anthropic", "active", true, nil),
+		sqlmock.NewRows([]string{"id", "parent_account_id", "name", "platform", "status", "schedulable", "deleted_at", "account_identity"}).
+			AddRow(int64(1), nil, "idle", "grok", "active", true, nil, "").
+			AddRow(int64(2), nil, "busy", "openai", "active", true, nil, "").
+			AddRow(int64(3), nil, "multi", "anthropic", "active", true, nil, ""),
 	)
 	mock.ExpectQuery(regexp.QuoteMeta(accountGroupDimensionsQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"account_id", "group_id", "group_name", "group_platform", "group_status", "group_rate_multiplier", "group_deleted_at"}).

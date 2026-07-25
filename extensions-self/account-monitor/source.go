@@ -94,6 +94,7 @@ type AccountDimension struct {
 	Status          string
 	Schedulable     bool
 	DeletedAt       *time.Time
+	AccountIdentity string
 }
 
 type UserDimension struct {
@@ -126,6 +127,16 @@ type GroupDimension struct {
 type AccountGroupDimension struct {
 	AccountID int64
 	Group     GroupDimension
+}
+
+type PublicGroup struct {
+	Name               string  `json:"name"`
+	Platform           string  `json:"platform"`
+	RateMultiplier     float64 `json:"rate_multiplier"`
+	PeakRateEnabled    bool    `json:"peak_rate_enabled"`
+	PeakStart          string  `json:"peak_start"`
+	PeakEnd            string  `json:"peak_end"`
+	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
 }
 
 type Dimensions struct {
@@ -339,7 +350,7 @@ func (s *PostgresSource) ReadAccountDimensions(ctx context.Context) ([]AccountDi
 		var item AccountDimension
 		var parent sql.NullInt64
 		var deleted sql.NullTime
-		if err := rows.Scan(&item.ID, &parent, &item.Name, &item.Platform, &item.Status, &item.Schedulable, &deleted); err != nil {
+		if err := rows.Scan(&item.ID, &parent, &item.Name, &item.Platform, &item.Status, &item.Schedulable, &deleted, &item.AccountIdentity); err != nil {
 			return nil, err
 		}
 		item.ParentAccountID = parent.Int64
@@ -411,6 +422,36 @@ func (s *PostgresSource) ReadGroupDimensions(ctx context.Context) ([]GroupDimens
 	return result, rows.Err()
 }
 
+func (s *PostgresSource) ReadPublicGroups(ctx context.Context) ([]PublicGroup, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("account monitor source database is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, publicGroupsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]PublicGroup, 0)
+	for rows.Next() {
+		var item PublicGroup
+		if err := rows.Scan(
+			&item.Name,
+			&item.Platform,
+			&item.RateMultiplier,
+			&item.PeakRateEnabled,
+			&item.PeakStart,
+			&item.PeakEnd,
+			&item.PeakRateMultiplier,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresSource) pageSize(limit int) int {
 	if limit <= 0 || limit > s.batchSize {
 		return s.batchSize
@@ -431,7 +472,7 @@ func (s *PostgresSource) readAccountDimensions(ctx context.Context, ids []int64,
 		var item AccountDimension
 		var parent sql.NullInt64
 		var deleted sql.NullTime
-		if err := rows.Scan(&item.ID, &parent, &item.Name, &item.Platform, &item.Status, &item.Schedulable, &deleted); err != nil {
+		if err := rows.Scan(&item.ID, &parent, &item.Name, &item.Platform, &item.Status, &item.Schedulable, &deleted, &item.AccountIdentity); err != nil {
 			return err
 		}
 		item.ParentAccountID = parent.Int64
@@ -575,12 +616,12 @@ ORDER BY created_at, id
 LIMIT $5`
 
 const accountDimensionQuery = `
-SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
+SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at, account_identity
 FROM extensions_self_ro.account_dimension
 WHERE id = ANY($1)`
 
 const allAccountDimensionsQuery = `
-SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
+SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at, account_identity
 FROM extensions_self_ro.account_dimension
 ORDER BY id`
 
@@ -612,3 +653,9 @@ const allGroupDimensionsQuery = `
 SELECT id, name, platform, status, deleted_at
 FROM extensions_self_ro.group_dimension
 ORDER BY id`
+
+const publicGroupsQuery = `
+SELECT name, platform, rate_multiplier, peak_rate_enabled, peak_start, peak_end,
+       peak_rate_multiplier
+FROM extensions_self_ro.public_group_catalog
+ORDER BY sort_order, LOWER(platform), LOWER(name)`

@@ -17,6 +17,7 @@ func TestSourceQueriesUseOnlySafeViews(t *testing.T) {
 		"users":          userDimensionQuery,
 		"api_keys":       apiKeyDimensionQuery,
 		"groups":         groupDimensionQuery,
+		"public_groups":  publicGroupsQuery,
 	}
 
 	for name, query := range queries {
@@ -40,8 +41,8 @@ func TestSourceViewSQLDoesNotExposeSensitiveColumns(t *testing.T) {
 	lower := strings.ToLower(string(raw))
 
 	for _, forbidden := range []string{
-		"a.credentials",
-		"accounts.credentials",
+		"select credentials",
+		"credentials as",
 		"k.key,",
 		"api_keys.key,",
 		"request_body",
@@ -61,10 +62,43 @@ func TestSourceViewSQLDoesNotExposeSensitiveColumns(t *testing.T) {
 		"create or replace view extensions_self_ro.user_dimension",
 		"create or replace view extensions_self_ro.api_key_dimension",
 		"create or replace view extensions_self_ro.group_dimension",
+		"create or replace view extensions_self_ro.public_group_catalog",
 		"revoke all on schema extensions_self_ro from public",
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("safe view SQL missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"nullif(a.extra ->> 'email_address', '')",
+		"nullif(a.extra ->> 'email', '')",
+		"nullif(a.credentials ->> 'email', '')",
+		"nullif(parent.credentials ->> 'email', '')",
+		") as account_identity",
+		"where status = 'active'",
+		"deleted_at is null",
+		"is_exclusive = false",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Errorf("safe view SQL missing %q", required)
+		}
+	}
+}
+
+func TestPublicGroupCatalogExposesOnlyHomepageFields(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("sql", "main_source_views.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(raw))
+	start := strings.Index(lower, "create or replace view extensions_self_ro.public_group_catalog")
+	if start < 0 {
+		t.Fatal("public_group_catalog view is missing")
+	}
+	view := lower[start:]
+	for _, forbidden := range []string{"credentials", "account_id", "subscription", "is_exclusive as", "status as"} {
+		if strings.Contains(view, forbidden) {
+			t.Errorf("public group catalog exposes forbidden field %q", forbidden)
 		}
 	}
 }

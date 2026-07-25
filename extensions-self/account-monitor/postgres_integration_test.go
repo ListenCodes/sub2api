@@ -296,6 +296,15 @@ func TestPostgresSourceViewsAndRestrictedRole(t *testing.T) {
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.group_dimension WHERE id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_id=7", 1)
 	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.account_group_dimension WHERE account_id=101 AND group_rate_multiplier=1.5", 1)
+	assertDatabaseCount(t, restrictedDB, "SELECT COUNT(*) FROM extensions_self_ro.public_group_catalog WHERE name='OpenAI Production' AND rate_multiplier=1.5", 1)
+
+	var accountIdentity string
+	if err := restrictedDB.QueryRowContext(ctx, "SELECT account_identity FROM extensions_self_ro.account_dimension WHERE id=101").Scan(&accountIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if accountIdentity != "owner@example.test" {
+		t.Fatalf("account identity = %q, want %q", accountIdentity, "owner@example.test")
+	}
 
 	var maskedPrefix string
 	if err := restrictedDB.QueryRowContext(ctx, "SELECT masked_prefix FROM extensions_self_ro.api_key_dimension WHERE id=70").Scan(&maskedPrefix); err != nil {
@@ -335,12 +344,12 @@ func TestPostgresSourceViewsAndRestrictedRole(t *testing.T) {
 }
 
 const sourceIntegrationSchemaSQL = `
-CREATE TABLE public.accounts (id BIGINT PRIMARY KEY,parent_account_id BIGINT,name TEXT,platform TEXT,status TEXT,schedulable BOOLEAN,deleted_at TIMESTAMPTZ,credentials JSONB);
+CREATE TABLE public.accounts (id BIGINT PRIMARY KEY,parent_account_id BIGINT,name TEXT,platform TEXT,status TEXT,schedulable BOOLEAN,deleted_at TIMESTAMPTZ,credentials JSONB,extra JSONB);
 CREATE TABLE public.usage_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,user_id BIGINT,api_key_id BIGINT,account_id BIGINT,group_id BIGINT,request_id TEXT,model TEXT,requested_model TEXT,upstream_model TEXT,input_tokens BIGINT,output_tokens BIGINT,cache_creation_tokens BIGINT,cache_read_tokens BIGINT,total_cost NUMERIC,actual_cost NUMERIC,account_rate_multiplier NUMERIC,duration_ms BIGINT,request_type SMALLINT,stream BOOLEAN,image_count INT,image_size TEXT,image_input_size TEXT,image_output_size TEXT,image_size_breakdown JSONB,video_count INT,video_resolution TEXT,video_duration_seconds INT);
 CREATE TABLE public.ops_error_logs (id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ,request_id TEXT,client_request_id TEXT,user_id BIGINT,api_key_id BIGINT,account_id BIGINT,group_id BIGINT,platform TEXT,model TEXT,requested_model TEXT,upstream_model TEXT,request_type SMALLINT,stream BOOLEAN,error_phase TEXT,error_type TEXT,error_source TEXT,error_owner TEXT,status_code INT,upstream_status_code INT,provider_error_code TEXT,provider_error_type TEXT,network_error_type TEXT,duration_ms BIGINT,error_message TEXT,upstream_error_message TEXT,upstream_errors JSONB);
 CREATE TABLE public.users (id BIGINT PRIMARY KEY,email TEXT,username TEXT,status TEXT,deleted_at TIMESTAMPTZ);
 CREATE TABLE public.api_keys (id BIGINT PRIMARY KEY,user_id BIGINT,name TEXT,key TEXT,status TEXT,deleted_at TIMESTAMPTZ);
-CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,rate_multiplier NUMERIC,deleted_at TIMESTAMPTZ);
+CREATE TABLE public.groups (id BIGINT PRIMARY KEY,name TEXT,platform TEXT,status TEXT,rate_multiplier NUMERIC,deleted_at TIMESTAMPTZ,peak_rate_enabled BOOLEAN,peak_start TEXT,peak_end TEXT,peak_rate_multiplier NUMERIC,is_exclusive BOOLEAN,sort_order INT);
 CREATE TABLE public.account_groups (account_id BIGINT NOT NULL,group_id BIGINT NOT NULL,PRIMARY KEY(account_id,group_id));`
 
 const sourceIntegrationLegacyViewsSQL = `
@@ -389,12 +398,12 @@ FROM public.account_groups AS ag
 JOIN public.groups AS g ON g.id = ag.group_id;`
 
 const sourceIntegrationSeedSQL = `
-INSERT INTO public.accounts VALUES (101,NULL,'OpenAI Primary','openai','active',TRUE,NULL,'{"access_token":"secret"}'::jsonb);
+INSERT INTO public.accounts VALUES (101,NULL,'OpenAI Primary','openai','active',TRUE,NULL,'{"access_token":"secret","email":"owner@example.test"}'::jsonb,'{}'::jsonb);
 INSERT INTO public.usage_logs (id,created_at,user_id,api_key_id,account_id,group_id,request_id,model,requested_model,upstream_model) VALUES (1,NOW(),7,70,101,7,'request-1','gpt-5','gpt-5','gpt-5');
 INSERT INTO public.ops_error_logs (id,created_at,request_id,user_id,api_key_id,account_id,group_id,platform,error_message,upstream_error_message,upstream_errors) VALUES (44,NOW(),'request-1',7,70,101,7,'openai',repeat('e',600),repeat('u',600),jsonb_build_array(jsonb_build_object('message',repeat('m',600),'detail',repeat('d',600))));
 INSERT INTO public.users VALUES (7,'alice@example.test','alice','active',NULL);
 INSERT INTO public.api_keys VALUES (70,7,'QA Key','secret-abcdef','active',NULL);
-INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',1.5,NULL);
+INSERT INTO public.groups VALUES (7,'OpenAI Production','openai','active',1.5,NULL,FALSE,'','',1,FALSE,10);
 INSERT INTO public.account_groups VALUES (101,7);`
 
 func integrationDatabaseURL(t *testing.T, databaseURL, databaseName, username, password string) string {

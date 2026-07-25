@@ -93,8 +93,23 @@ FROM public.ops_error_logs AS o;
 
 CREATE OR REPLACE VIEW extensions_self_ro.account_dimension
 WITH (security_barrier = true) AS
-SELECT id, parent_account_id, name, platform, status, schedulable, deleted_at
-FROM public.accounts;
+SELECT
+    a.id,
+    a.parent_account_id,
+    a.name,
+    a.platform,
+    a.status,
+    a.schedulable,
+    a.deleted_at,
+    COALESCE(
+        NULLIF(a.extra ->> 'email_address', ''),
+        NULLIF(a.extra ->> 'email', ''),
+        NULLIF(a.credentials ->> 'email', ''),
+        NULLIF(parent.credentials ->> 'email', ''),
+        ''
+    ) AS account_identity
+FROM public.accounts AS a
+LEFT JOIN public.accounts AS parent ON parent.id = a.parent_account_id;
 
 CREATE OR REPLACE VIEW extensions_self_ro.account_group_dimension
 WITH (security_barrier = true) AS
@@ -125,6 +140,22 @@ CREATE OR REPLACE VIEW extensions_self_ro.group_dimension
 WITH (security_barrier = true) AS
 SELECT id, name, platform, status, deleted_at
 FROM public.groups;
+
+CREATE OR REPLACE VIEW extensions_self_ro.public_group_catalog
+WITH (security_barrier = true) AS
+SELECT
+    name,
+    platform,
+    rate_multiplier,
+    peak_rate_enabled,
+    peak_start,
+    peak_end,
+    peak_rate_multiplier,
+    sort_order
+FROM public.groups
+WHERE status = 'active'
+  AND deleted_at IS NULL
+  AND is_exclusive = FALSE;
 
 GRANT USAGE ON SCHEMA extensions_self_ro TO extensions_self_monitor_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA extensions_self_ro TO extensions_self_monitor_ro;
