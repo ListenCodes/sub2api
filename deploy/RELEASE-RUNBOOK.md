@@ -346,9 +346,12 @@ historical gaps must be reported rather than backfilled with zeros.
 
 ### Inventory And Group Reconciliation
 
-Run `deploy/ops/install-account-monitor-source.sql` as the main database owner for every
-release that changes these views. Run the allow probes with the dedicated source login;
-all five must succeed:
+Normal release apply refreshes `main_source_views.sql` automatically and must
+be used for every release that changes these views. Run the full
+`deploy/ops/install-account-monitor-source.sql` only for initial installation
+or an explicit manual repair, and keep its password argument synchronized with
+the deployed source DSN. After the release, run the allow probes with the
+dedicated source login; all five must succeed:
 
 ```sql
 SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1;
