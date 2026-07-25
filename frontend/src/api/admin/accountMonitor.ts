@@ -47,6 +47,7 @@ export interface AccountMonitorAccount {
   account_id: number
   parent_account_id?: number
   account_name: string
+  account_identity?: string
   platform: string
   status: string
   attempts: number
@@ -93,6 +94,7 @@ export interface AccountFilters extends TimeRange {
   sortBy?: string
   sortOrder?: SortOrder
   platform?: string
+  query?: string
   accountID?: number
   parentAccountID?: number
   accountStatus?: string
@@ -325,6 +327,7 @@ function accountParams(filters: AccountFilters = {}) {
     sort_by: filters.sortBy,
     sort_order: filters.sortOrder,
     platform: filters.platform,
+    query: filters.query,
     account_id: filters.accountID,
     parent_account_id: filters.parentAccountID,
     account_status: filters.accountStatus,

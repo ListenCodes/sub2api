@@ -60,7 +60,7 @@ function accountGroups(items: AccountMonitorAccount[]) {
 }
 const requestFilters = computed<AccountFilters>(() => {
   const range = resolveTimeRange(state)
-	return { ...range, page: state.page, pageSize: state.pageSize, sortBy: state.sortBy, sortOrder: state.sortOrder, platform: state.platform, accountID: state.accountID, parentAccountID: state.parentAccountID, accountStatus: state.accountStatus, model: state.model, userID: state.userID, apiKeyID: state.apiKeyID, requestType: state.requestType, result: state.result, errorCategory: state.errorCategory, statusCode: state.statusCode, rollup: state.rollup, minRiskScore: state.minRiskScore, maxRiskScore: state.maxRiskScore, groupID: state.groupID }
+	return { ...range, page: state.page, pageSize: state.pageSize, sortBy: state.sortBy, sortOrder: state.sortOrder, platform: state.platform, query: state.query, accountID: state.accountID, parentAccountID: state.parentAccountID, accountStatus: state.accountStatus, model: state.model, userID: state.userID, apiKeyID: state.apiKeyID, requestType: state.requestType, result: state.result, errorCategory: state.errorCategory, statusCode: state.statusCode, rollup: state.rollup, minRiskScore: state.minRiskScore, maxRiskScore: state.maxRiskScore, groupID: state.groupID }
 })
 const message = (value: unknown) => value instanceof Error ? value.message : typeof value === 'object' && value && 'message' in value ? String(value.message) : '账号监控加载失败'
 async function loadAll() {

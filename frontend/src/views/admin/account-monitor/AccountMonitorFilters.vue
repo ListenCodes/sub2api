@@ -1,6 +1,7 @@
 <template>
   <section class="flex flex-wrap items-center gap-3" data-testid="account-monitor-filters">
 		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-range-label">时间范围</span><Select v-model="draft.range" class="w-full sm:w-36" :options="rangeOptions" @update:model-value="runImmediate" /></label>
+		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-query-label">账号</span><SearchInput :model-value="draft.query || ''" class="w-full sm:w-64" placeholder="搜索账号名称或实际账号" @update:model-value="updateQuery" @search="runImmediate" /></label>
 		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-platform-label">平台</span><Select v-model="draft.platform" class="w-full sm:w-40" :options="platformOptions" @update:model-value="runImmediate" /></label>
 		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-group-label">分组</span><Select v-model="draft.groupID" class="w-full sm:w-48" :options="groupOptions" @update:model-value="runImmediate" /></label>
 		<label class="flex w-full items-center gap-2 sm:w-auto"><span class="input-label !mb-0 shrink-0" data-testid="account-filter-model-label">实际模型</span><SearchInput :model-value="draft.model || ''" class="w-full sm:w-52" placeholder="输入模型名称" @update:model-value="updateModel" @search="runImmediate" /></label>
@@ -41,5 +42,6 @@ const resultOptions = [{ value: '', label: '全部结果' }, { value: 'succeeded
 const rollupOptions = [{ value: 'physical', label: '物理账号' }, { value: 'parent', label: '母账号汇总' }]
 function apply() { emit('apply', { ...draft, minRiskScore: draft.minRiskScore === undefined ? undefined : Math.max(0, Math.min(100, Number(draft.minRiskScore))), maxRiskScore: draft.maxRiskScore === undefined ? undefined : Math.max(0, Math.min(100, Number(draft.maxRiskScore))) }) }
 const { schedule, runNow: runImmediate } = useDebouncedAction(apply, 300)
+function updateQuery(value: string) { draft.query = value; schedule() }
 function updateModel(value: string) { draft.model = value; schedule() }
 </script>

@@ -1,12 +1,14 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import { accountMonitorAPI } from '@/api/admin/accountMonitor'
 import AccountMonitorPanel from '@/views/admin/account-monitor/AccountMonitorPanel.vue'
 import AccountMonitorDrawer from '@/views/admin/account-monitor/AccountMonitorDrawer.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'
+import AccountMonitorFilters from '@/views/admin/account-monitor/AccountMonitorFilters.vue'
 
 vi.mock('@/api/admin/accountMonitor', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/api/admin/accountMonitor')>()
@@ -42,6 +44,7 @@ enableAutoUnmount(afterEach)
 const account = {
   account_id: 42,
   account_name: 'Primary OpenAI',
+  account_identity: 'owner@example.com',
   platform: 'openai',
   status: 'active',
   attempts: 100,
@@ -123,6 +126,7 @@ describe('AccountMonitorPanel', () => {
     expect(wrapper.text()).toContain('账号尝试')
     expect(wrapper.text()).toContain('数据质量')
     expect(wrapper.text()).toContain('Primary OpenAI')
+		expect(wrapper.text()).toContain('owner@example.com')
 		expect(wrapper.text()).toContain('Idle Grok')
 		expect(wrapper.text()).toContain('GPT Pro')
 		expect(wrapper.text()).toContain('Shared Pool')
@@ -143,6 +147,25 @@ describe('AccountMonitorPanel', () => {
 		expect(wrapper.text()).toContain('错误游标 22')
     expect(wrapper.find('iframe').exists()).toBe(false)
   })
+
+	it('sends account search to page one after changing it on a later page', async () => {
+		const router = createRouter({
+			history: createMemoryHistory(),
+			routes: [{ path: '/admin/account-monitor', component: AccountMonitorPanel }],
+		})
+		await router.push({ path: '/admin/account-monitor', query: { page: '3' } })
+		await router.isReady()
+		const wrapper = mount(AccountMonitorPanel, { global: { plugins: [router], stubs: { Icon: true } } })
+		await flushPromises()
+
+		wrapper.findComponent(AccountMonitorFilters).vm.$emit('apply', { query: 'owner@example.com' })
+		await flushPromises()
+
+		expect(accountMonitorAPI.listAccounts).toHaveBeenLastCalledWith(expect.objectContaining({
+			query: 'owner@example.com',
+			page: 1,
+		}))
+	})
 
 	it('offers groups from the complete inventory rather than only the current account page', async () => {
 		const wrapper = mount(AccountMonitorPanel, { global: { stubs: { Icon: true } } })

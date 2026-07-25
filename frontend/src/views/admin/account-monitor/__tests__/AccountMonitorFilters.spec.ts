@@ -18,6 +18,7 @@ describe('AccountMonitorFilters', () => {
 
 		for (const [testID, label] of [
 			['account-filter-range-label', '时间范围'],
+			['account-filter-query-label', '账号'],
 			['account-filter-platform-label', '平台'],
 			['account-filter-group-label', '分组'],
 			['account-filter-model-label', '实际模型'],
@@ -27,6 +28,23 @@ describe('AccountMonitorFilters', () => {
 			['account-filter-risk-label', '风险分'],
 		] as const) {
 			expect(wrapper.get(`[data-testid="${testID}"]`).text()).toBe(label)
+		}
+	})
+
+	it('debounces account name or identity searches into the existing apply event', async () => {
+		vi.useFakeTimers()
+		try {
+			const wrapper = mount(AccountMonitorFilters, {
+				props: { state: parseAccountMonitorQuery({}), groups: [] },
+				global: { stubs: { Icon: true } },
+			})
+			const input = wrapper.get('input[placeholder="搜索账号名称或实际账号"]')
+			await input.setValue('owner@example.com')
+			await vi.advanceTimersByTimeAsync(350)
+
+			expect(wrapper.emitted('apply')?.at(-1)?.[0]).toMatchObject({ query: 'owner@example.com' })
+		} finally {
+			vi.useRealTimers()
 		}
 	})
 
