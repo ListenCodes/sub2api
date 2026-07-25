@@ -172,8 +172,10 @@ facts/aggregates in `risk-control-postgres`. It reads Sub2API only through the
 `extensions_self_ro` views with the dedicated `extensions_self_monitor` login.
 Do not reuse `POSTGRES_USER` in `ACCOUNT_MONITOR_SOURCE_DATABASE_URL`.
 
-The default is disabled. For production, URL-encode the generated login
-password and configure:
+Collection is disabled by default, but the homepage live-rate endpoint still
+uses the same read-only source connection. For production, always URL-encode
+the generated login password and configure the DSN; enable the remaining
+settings when account-monitor collection is required:
 
 ```dotenv
 ACCOUNT_MONITOR_ENABLED=true
@@ -410,7 +412,7 @@ docker compose down -v
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
 | `ACCOUNT_MONITOR_ENABLED` | No | `false` | Enable account-monitor collection and admin page |
-| `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | When enabled | - | Dedicated `extensions_self_monitor` read-only DSN |
+| `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | **Yes** (custom homepage) | - | Dedicated `extensions_self_monitor` read-only DSN for homepage live rates and account-monitor collection |
 | `ACCOUNT_MONITOR_POLL_SECONDS` | No | `60` | Incremental collection interval |
 | `ACCOUNT_MONITOR_LOOKBACK_SECONDS` | No | `300` | Late-event lookback window |
 | `ACCOUNT_MONITOR_BATCH_SIZE` | No | `1000` | Maximum source rows per page |
