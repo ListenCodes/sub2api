@@ -20,7 +20,10 @@ vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
 afterAll(() => { delete config.global.stubs.RouterLink })
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  document.body.innerHTML = ''
+  vi.clearAllMocks()
+})
 
 function bodyElement<T extends HTMLElement = HTMLElement>(selector: string): T {
   const matches = document.body.querySelectorAll<T>(selector)
