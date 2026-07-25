@@ -21,9 +21,9 @@ export SUB2API_DATA_DIR="$TMP_DIR/data"
 source "$ROOT_DIR/deploy/ops/release-state.sh"
 
 release_job_init update-fixture
-release_job_update update-fixture waiting_actions 'Waiting for Actions' '{"action":"prepare","target_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+release_job_update update-fixture resolving_target 'Waiting for Actions' '{"action":"prepare","target_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 job_file="$SUB2API_DATA_DIR/release-ledger/operations/update-fixture.json"
-assert_eq waiting_actions "$(jq -r '.status' "$job_file")" 'job state was not persisted'
+assert_eq resolving_target "$(jq -r '.status' "$job_file")" 'job state was not persisted'
 assert_eq aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$(jq -r '.target_commit' "$job_file")" 'job metadata was not merged'
 assert_eq update-fixture "$(cat "$SUB2API_DATA_DIR/release-current-job-id")" 'current job id was not persisted'
 if release_job_update update-fixture unknown_state invalid '{}' >/dev/null 2>&1; then
@@ -34,7 +34,7 @@ trigger_output="$(SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy
 assert_eq 'prepare update-fixture' "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger did not carry phase and durable job id'
 [[ "$trigger_output" == *'release triggered: update-fixture'* ]] || fail 'trigger did not return immediately with the job id'
 release_job_init update-explicit
-release_job_update update-explicit checking_updates queued '{"action":"apply"}'
+release_job_update update-explicit resolving_target queued '{"action":"apply"}'
 printf 'update-fixture\n' > "$SUB2API_DATA_DIR/release-current-job-id"
 SUB2API_DATA_DIR="$SUB2API_DATA_DIR" /bin/sh "$ROOT_DIR/deploy/ops/sync-trigger.sh" apply update-explicit >/dev/null
 assert_eq 'apply update-explicit' "$(cat "$SUB2API_DATA_DIR/release-trigger")" 'trigger ignored the explicit phase and durable job id'
@@ -87,15 +87,15 @@ run_dispatch() {
   assert_eq "$job_id" "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" \
     "$kind $action executor ran before the ledger operation was claimed"
 }
-run_dispatch update prepare checking_updates
+run_dispatch update prepare resolving_target
 run_dispatch update apply apply_queued
-run_dispatch rollback prepare checking_updates
+run_dispatch rollback prepare resolving_target
 run_dispatch rollback apply apply_queued
-run_dispatch update prepare checking_updates stale
+run_dispatch update prepare resolving_target stale
 
 missing_job_id='update-missing-executor'
 release_job_init "$missing_job_id"
-release_job_update "$missing_job_id" checking_updates queued '{"action":"prepare"}'
+release_job_update "$missing_job_id" resolving_target queued '{"action":"prepare"}'
 jq -n --arg release release-dispatch-fixture \
   '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:null,updated_at:"2026-07-23T08:00:00Z"}' \
   > "$RELEASE_LEDGER_ROOT/state.json"
@@ -138,7 +138,7 @@ release_job_update "$stale_job_id" expired expired \
   '{"action":"prepare","operation_kind":"rollback","published":false,"production_changed":false}'
 next_job_id='update-after-stale-terminal'
 release_job_init "$next_job_id"
-release_job_update "$next_job_id" checking_updates queued \
+release_job_update "$next_job_id" resolving_target queued \
   '{"action":"prepare","operation_kind":"update"}'
 jq -n --arg release release-dispatch-fixture --arg operation "$stale_job_id" \
   '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
@@ -160,7 +160,7 @@ release_job_update "$noop_job_id" success complete \
   '{"action":"prepare","operation_kind":"update","published":false,"production_changed":false}'
 after_noop_job_id='update-after-stale-noop'
 release_job_init "$after_noop_job_id"
-release_job_update "$after_noop_job_id" checking_updates queued \
+release_job_update "$after_noop_job_id" resolving_target queued \
   '{"action":"prepare","operation_kind":"update"}'
 jq -n --arg release release-dispatch-fixture --arg operation "$noop_job_id" \
   '{schema_version:1,current_release_id:$release,custom_version_high_water:4,active_operation_id:$operation,updated_at:"2026-07-23T08:00:00Z"}' \
@@ -342,7 +342,7 @@ case "$PIPELINE_SCENARIO" in
     ;;
   *) exit 2 ;;
 esac
-release_job_update "$job_id" waiting_actions 'Waiting for Actions' "$metadata"
+  release_job_update "$job_id" resolving_target 'Waiting for Actions' "$metadata"
 SH
 cat > "$FAKE_BIN/wait.sh" <<'SH'
 #!/usr/bin/env bash
@@ -435,7 +435,7 @@ run_scenario() {
   jq -n '{schema_version:1,current_release_id:"release-fixture",custom_version_high_water:0,active_operation_id:null,updated_at:"2026-07-16T12:00:00Z"}' \
     > "$SUB2API_DATA_DIR/release-ledger/state.json"
   release_job_init "$job_id"
-  release_job_update "$job_id" checking_updates 'Fixture prepare queued' '{"action":"prepare"}'
+  release_job_update "$job_id" resolving_target 'Fixture prepare queued' '{"action":"prepare"}'
   release_production_state_write "$(jq -n \
     --arg production_commit "$production_commit" \
     '{production_commit:$production_commit,stable_release_tag:"v0.1.158",stable_release_commit:"26abd19a2812edba02bbef93c3e2a620141cc257",main_digest:("sha256:"+("0"*64)),extensions_digest:("sha256:"+("1"*64)),published_at:"2026-07-16T12:00:00Z",backup_dir:"/root/backups/sub2api/fixture"}')"

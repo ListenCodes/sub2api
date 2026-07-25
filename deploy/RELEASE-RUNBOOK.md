@@ -98,6 +98,30 @@ Production `.env` pins `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE` to the
 verified `ghcr.io/...@sha256:...` references. The VPS pulls them anonymously.
 There is no release polling job or automatic source update.
 
+### Release status contract
+
+Versioned host scripts must persist only the canonical status values declared
+by the backend `ReleaseStatus*` constants in
+`backend/internal/service/update_job.go`:
+
+```text
+resolving_target resolving_snapshot verifying_snapshot verifying_images
+downloading_images rendering_compose backing_up validating_backup prepared
+apply_queued validating_manifest switching_extensions switching_main
+health_checking rolling_back success failed conflict expired drifted
+failed_rolled_back rollback_failed
+```
+
+Shell sub-steps such as checking the stable Release, validating its tag,
+merging a candidate, or waiting for Actions belong in the operation message and
+metadata. They must not introduce private status values. The deployment
+contract tests compare `deploy/ops/release-state.sh` and literal script writes
+with the backend constants.
+
+Installing a newer script set does not rewrite an already-running or historical
+operation. Let an operation created by older scripts reach a terminal state
+before starting another update.
+
 Production always uses an explicit Compose pair. The base
 `deploy/docker-compose.yml` is the unmodified file from the recorded official
 Stable Release. All production-only services, digest image substitutions,

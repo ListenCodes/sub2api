@@ -73,7 +73,7 @@ SUB2API_SYNC_LOG="$TMP_DIR/release.log" \
   "$ROOT_DIR/deploy/ops/sync-upstream.sh" --job-id update-behind
 
 job_file="$DATA_DIR/release-ledger/operations/update-behind.json"
-[[ "$(jq -r '.status' "$job_file")" == waiting_actions ]]
+[[ "$(jq -r '.status' "$job_file")" == resolving_target ]]
 [[ "$(jq -r '.base_commit' "$job_file")" == "$origin_commit" ]]
 [[ "$(jq -r '.target_commit' "$job_file")" == "$origin_commit" ]]
 [[ "$(jq -r '.integration_branch' "$job_file")" == '' ]]

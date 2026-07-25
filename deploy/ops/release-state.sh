@@ -14,7 +14,7 @@ release_valid_job_id() {
 
 release_valid_status() {
   case "${1:-}" in
-    checking_updates|checking_release|validating_tag|merging_release|waiting_actions|waiting_images|downloading_images|preparing_compose|promoting_release|resolving_target|resolving_snapshot|verifying_snapshot|verifying_images|rendering_compose|backing_up|validating_backup|prepared|apply_queued|validating_manifest|deploying_extensions|deploying_main|switching_extensions|switching_main|health_checking|rolling_back|success|failed|conflict|expired|drifted|failed_rolled_back|rollback_failed)
+    resolving_target|resolving_snapshot|verifying_snapshot|verifying_images|downloading_images|rendering_compose|backing_up|validating_backup|prepared|apply_queued|validating_manifest|switching_extensions|switching_main|health_checking|rolling_back|success|failed|conflict|expired|drifted|failed_rolled_back|rollback_failed)
       return 0
       ;;
     *)
@@ -81,7 +81,7 @@ release_job_init() {
       job_id:$job_id,
       operation_kind:$operation_kind,
       action:"",
-      status:"checking_updates",
+      status:"resolving_target",
       message:"release job queued",
       ts:$now,
       updated_at:$now,

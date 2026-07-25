@@ -240,7 +240,7 @@ if [[ "$REUSE_VERIFIED_EVIDENCE" == true ]]; then
     "$(jq -n --arg url "$WORKFLOW_URL" --arg main "$MAIN_DIGEST" --arg ext "$EXTENSIONS_DIGEST" \
       '{workflow_url:$url,main_digest:$main,extensions_digest:$ext,images_verified:true}')"
 else
-  release_job_update "$JOB_ID" waiting_actions "Waiting for Actions on $TARGET_COMMIT" '{}'
+  release_job_update "$JOB_ID" resolving_target "Waiting for Actions on $TARGET_COMMIT" '{}'
   actions_output="$($WAIT_ACTIONS_SCRIPT "$TARGET_COMMIT")" || fail_prepare 'required GitHub Actions checks failed' ACTIONS_FAILED
   WORKFLOW_URL="${actions_output#workflow_url=}"
   [[ "$actions_output" == workflow_url=* && -n "$WORKFLOW_URL" ]] || fail_prepare 'Actions waiter returned invalid evidence' ACTIONS_EVIDENCE_INVALID

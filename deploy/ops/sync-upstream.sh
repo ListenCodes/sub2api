@@ -84,7 +84,7 @@ esac
 [[ "$(git branch --show-current)" == "$BRANCH" ]] || fail_job "VPS source branch is not $BRANCH" WRONG_SOURCE_BRANCH
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail_job 'VPS source worktree is dirty' DIRTY_SOURCE
 
-release_job_update "$JOB_ID" checking_release 'Checking the latest stable Release' '{}'
+release_job_update "$JOB_ID" resolving_target 'Checking the latest stable Release' '{}'
 release_output="$($RESOLVER 2>>"$LOG")" || fail_job 'stable Release resolution failed' RELEASE_RESOLUTION_FAILED
 RELEASE_TAG=''
 RELEASE_PUBLISHED_AT=''
@@ -94,7 +94,7 @@ RELEASE_COMMIT=''
 parse_release_output "$release_output" || fail_job 'stable Release resolver output was invalid' RELEASE_IDENTITY_INVALID
 [[ "$RELEASE_TAG_OBJECT_TYPE" == tag ]] || fail_job 'latest Release does not use an annotated tag' RELEASE_TAG_NOT_ANNOTATED
 
-release_job_update "$JOB_ID" validating_tag "Validating annotated tag $RELEASE_TAG" "$(jq -n \
+release_job_update "$JOB_ID" resolving_target "Validating annotated tag $RELEASE_TAG" "$(jq -n \
   --arg tag "$RELEASE_TAG" \
   --arg commit "$RELEASE_COMMIT" \
   --arg published "$RELEASE_PUBLISHED_AT" \
@@ -139,7 +139,7 @@ if [[ "$baseline_matches" -eq 1 ]] && git merge-base --is-ancestor "$RELEASE_COM
     --arg commit "$RELEASE_COMMIT" \
     --arg published "$RELEASE_PUBLISHED_AT" \
     '{base_commit:$base,target_commit:$target,integration_branch:"",release_tag:$tag,release_commit:$commit,release_published_at:$published}')"
-  release_job_update "$JOB_ID" waiting_actions "Stable Release $RELEASE_TAG is already integrated" "$metadata"
+  release_job_update "$JOB_ID" resolving_target "Stable Release $RELEASE_TAG is already integrated" "$metadata"
   exit 0
 fi
 
@@ -148,7 +148,7 @@ WORKTREE="$WORKTREE_ROOT/$JOB_ID"
 [[ ! -e "$WORKTREE" ]] || fail_job 'candidate worktree path already exists' WORKTREE_PATH_EXISTS
 git worktree add --detach "$WORKTREE" "$ORIGIN_REMOTE/$BRANCH" >> "$LOG" 2>&1 || fail_job 'create candidate worktree failed' WORKTREE_CREATE_FAILED
 git -C "$WORKTREE" switch -c "$INTEGRATION_BRANCH" >> "$LOG" 2>&1 || fail_job 'create candidate branch failed' INTEGRATION_BRANCH_FAILED
-release_job_update "$JOB_ID" merging_release "Merging $RELEASE_TAG into $INTEGRATION_BRANCH" "$(jq -n --arg branch "$INTEGRATION_BRANCH" --arg base "$BASE_COMMIT" '{integration_branch:$branch,base_commit:$base}')"
+release_job_update "$JOB_ID" resolving_target "Merging $RELEASE_TAG into $INTEGRATION_BRANCH" "$(jq -n --arg branch "$INTEGRATION_BRANCH" --arg base "$BASE_COMMIT" '{integration_branch:$branch,base_commit:$base}')"
 
 if ! git -C "$WORKTREE" merge --no-ff --no-edit "$RELEASE_COMMIT" >> "$LOG" 2>&1; then
   conflict_snapshot_dir="$CONFLICT_DIR/$JOB_ID"
@@ -203,5 +203,5 @@ metadata="$(jq -n \
   --arg commit "$RELEASE_COMMIT" \
   --arg published "$RELEASE_PUBLISHED_AT" \
   '{integration_branch:$branch,base_commit:$base,target_commit:$target,release_tag:$tag,release_commit:$commit,release_published_at:$published}')"
-release_job_update "$JOB_ID" waiting_actions "Candidate $TARGET_COMMIT is waiting for Actions" "$metadata"
+release_job_update "$JOB_ID" resolving_target "Candidate $TARGET_COMMIT is waiting for Actions" "$metadata"
 printf 'candidate_commit=%s\n' "$TARGET_COMMIT"
