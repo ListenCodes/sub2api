@@ -706,6 +706,58 @@ func TestAdminServiceAccountsFiltersStatusThroughSafeDimensions(t *testing.T) {
 	}
 }
 
+func TestFilterAccountInventoryMatchesNameOrIdentity(t *testing.T) {
+	inventory := accountInventory{
+		Accounts: map[int64]AccountDimension{
+			1: {ID: 1, Name: "Primary OpenAI", AccountIdentity: "owner@example.com"},
+			2: {ID: 2, Name: "Backup Claude", AccountIdentity: "backup@example.com"},
+		},
+		Members: map[int64][]AccountDimension{
+			1: {{ID: 1, Name: "Primary OpenAI", AccountIdentity: "owner@example.com"}},
+			2: {{ID: 2, Name: "Backup Claude", AccountIdentity: "backup@example.com"}},
+		},
+		Groups: map[int64][]AccountGroupSummary{},
+	}
+
+	byName := filterAccountInventory(inventory, map[string]string{"query": "PRIMARY"})
+	if len(byName.Accounts) != 1 || byName.Accounts[1].Name != "Primary OpenAI" {
+		t.Fatalf("name-filtered inventory = %+v", byName.Accounts)
+	}
+	byIdentity := filterAccountInventory(inventory, map[string]string{"query": "OWNER@EXAMPLE"})
+	if len(byIdentity.Accounts) != 1 || byIdentity.Accounts[1].AccountIdentity != "owner@example.com" {
+		t.Fatalf("identity-filtered inventory = %+v", byIdentity.Accounts)
+	}
+}
+
+func TestFilterAccountInventoryKeepsParentWhenChildIdentityMatches(t *testing.T) {
+	parent := AccountDimension{ID: 10, Name: "Parent"}
+	child := AccountDimension{ID: 11, ParentAccountID: 10, Name: "Child", AccountIdentity: "child@example.com"}
+	inventory := accountInventory{
+		Accounts: map[int64]AccountDimension{10: parent},
+		Members:  map[int64][]AccountDimension{10: {parent, child}},
+		Groups:   map[int64][]AccountGroupSummary{},
+	}
+
+	filtered := filterAccountInventory(inventory, map[string]string{"query": "CHILD@EXAMPLE"})
+	if len(filtered.Accounts) != 1 || filtered.Accounts[10].Name != "Parent" {
+		t.Fatalf("parent-rollup inventory = %+v", filtered.Accounts)
+	}
+}
+
+func TestMergeAccountStatsReturnsAccountIdentity(t *testing.T) {
+	inventory := accountInventory{
+		Accounts: map[int64]AccountDimension{
+			1: {ID: 1, Name: "Primary", AccountIdentity: "owner@example.com"},
+		},
+		Groups: map[int64][]AccountGroupSummary{},
+	}
+
+	items := mergeAccountStats(inventory, nil, false)
+	if len(items) != 1 || items[0].AccountIdentity != "owner@example.com" {
+		t.Fatalf("account summaries = %+v", items)
+	}
+}
+
 func TestDetailQueriesApplyServerSideFilters(t *testing.T) {
 	for name, query := range map[string]string{
 		"models": modelsSQL, "users": usersSQL, "errors": errorsSQL, "attempts": attemptsSQL,

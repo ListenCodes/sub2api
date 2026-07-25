@@ -317,6 +317,7 @@ type AccountSummary struct {
 	AccountID            int64                 `json:"account_id"`
 	ParentAccountID      int64                 `json:"parent_account_id,omitempty"`
 	AccountName          string                `json:"account_name"`
+	AccountIdentity      string                `json:"account_identity,omitempty"`
 	Platform             string                `json:"platform"`
 	Status               string                `json:"status"`
 	Attempts             int64                 `json:"attempts"`
@@ -891,6 +892,7 @@ func filterAccountInventory(in accountInventory, query map[string]string) accoun
 	parentAccountID, _ := strconv.ParseInt(strings.TrimSpace(query["parent_account_id"]), 10, 64)
 	platform := strings.TrimSpace(query["platform"])
 	status := strings.TrimSpace(query["account_status"])
+	search := strings.ToLower(strings.TrimSpace(query["query"]))
 	groupFilter := strings.TrimSpace(query["group_id"])
 	groupID, _ := strconv.ParseInt(groupFilter, 10, 64)
 
@@ -903,6 +905,12 @@ func filterAccountInventory(in accountInventory, query map[string]string) accoun
 				}
 			}
 			return false
+		}
+		if search != "" && !memberMatches(func(member AccountDimension) bool {
+			return strings.Contains(strings.ToLower(member.Name), search) ||
+				strings.Contains(strings.ToLower(member.AccountIdentity), search)
+		}) {
+			continue
 		}
 		if accountID > 0 && !memberMatches(func(member AccountDimension) bool {
 			return member.ID == accountID || member.ParentAccountID == accountID
@@ -968,6 +976,7 @@ func mergeAccountStats(in accountInventory, stats []AccountSummary, requireFacts
 		}
 		item.AccountID = accountID
 		item.AccountName = dimension.Name
+		item.AccountIdentity = dimension.AccountIdentity
 		item.Platform = dimension.Platform
 		item.Status = dimension.Status
 		if item.ParentAccountID == 0 {
