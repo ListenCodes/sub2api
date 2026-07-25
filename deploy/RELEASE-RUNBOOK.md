@@ -83,6 +83,14 @@ systemctl daemon-reload
 systemctl enable --now sub2api-release.path
 ```
 
+The installed `/opt/sub2api-custom/` copy is a separate release artifact; a Git
+checkout fast-forward does not update it. After a successful release whose
+production diff includes `deploy/ops/`, wait until `sub2api-release.service` is
+inactive, confirm `/root/sub2api` is clean at the ledger's current commit, rerun
+the install commands above, reload systemd, and compare the installed files
+with the deployed source before accepting another administrator trigger. Never
+replace the installed script set while a release operation is active.
+
 `sub2api-release.path` watches the persistent `release-trigger` created by the
 administrator action. The one-shot service calls only `sync-and-publish.sh`.
 The health-monitor schedule remains independent.
