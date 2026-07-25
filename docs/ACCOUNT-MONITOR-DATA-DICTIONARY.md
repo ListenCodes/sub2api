@@ -52,11 +52,21 @@
 |---|---|
 | `extensions_self_ro.usage_source` | 可计费用量、账号/模型、Token、成本、延迟和媒体值 |
 | `extensions_self_ro.error_source` | 脱敏错误、重试数组和新事件的实际上游模型 |
-| `extensions_self_ro.account_dimension` | 账号 ID、母账号、名称、平台和状态 |
+| `extensions_self_ro.account_dimension` | 账号 ID、母账号、名称、平台、状态和派生的 `account_identity`；新增列追加在末尾以保持升级兼容 |
 | `extensions_self_ro.account_group_dimension` | 账号与其全部分组的多对多映射，以及分组名称、平台、状态、倍率和软删除时间；新增列必须追加以保持 `CREATE OR REPLACE VIEW` 升级兼容；不含账号凭据 |
 | `extensions_self_ro.user_dimension` | 用户 ID、展示身份和状态 |
 | `extensions_self_ro.api_key_dimension` | API Key ID、名称和固定掩码前缀 |
 | `extensions_self_ro.group_dimension` | 分组 ID、名称、平台、状态和软删除时间；不含账号凭据 |
+| `extensions_self_ro.public_group_catalog` | 仅公开、有效、非专属分组的名称、平台、基础倍率、高峰倍率字段和内部排序值；不含 ID、账号、订阅或凭据 |
+
+`account_identity` 只按以下白名单顺序提取第一个非空邮箱：`extra.email_address`、
+`extra.email`、`credentials.email`、母账号 `credentials.email`。它不返回完整 `extra` 或
+`credentials` JSON，也不暴露 token。该字段只供签名管理员账号监控响应与名称/实际账号搜索使用，
+不得进入匿名首页接口。
+
+匿名首页只能通过 `/api/v1/extensions-self/homepage/api/public-groups` 读取
+`extensions_self_ro.public_group_catalog` 的白名单 JSON 字段。数据库过滤固定为
+`status='active'`、`deleted_at IS NULL`、`is_exclusive=FALSE`；浏览器不能直接访问源库角色。
 
 ## Data Quality
 

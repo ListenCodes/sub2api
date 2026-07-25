@@ -29,6 +29,8 @@ ACCOUNT_MONITOR_SOURCE_DATABASE_URL=postgres://extensions_self_monitor:<URL-enco
 ```
 
 - [ ] `deploy/ops/install-account-monitor-source.sql` 在构建前执行成功。
+- [ ] 本次安装器由主库 owner 重跑，已创建或更新 `account_dimension.account_identity` 与
+      `extensions_self_ro.public_group_catalog`；旧安装结果不能替代本次重应用。
 - [ ] 权限组探测通过：
 
 ```sql
@@ -37,6 +39,8 @@ SET ROLE extensions_self_monitor_ro;
 SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1;
 SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1;
 SELECT 1 FROM extensions_self_ro.account_group_dimension LIMIT 1;
+SELECT account_identity FROM extensions_self_ro.account_dimension LIMIT 1;
+SELECT 1 FROM extensions_self_ro.public_group_catalog LIMIT 1;
 ROLLBACK;
 ```
 
@@ -55,9 +59,11 @@ SELECT credentials FROM public.accounts LIMIT 1;
 
 - [ ] 只重建 `sub2api` 与 `extensions-self`；不重建 `risk-control-postgres`。
 - [ ] 主应用 `/health`、`extensions-self /healthz` 和首页代理正常。
+- [ ] 匿名 `GET /api/v1/extensions-self/homepage/api/public-groups` 返回 `no-store`，仅包含当前公开有效分组；首页显示后台配置的站点名称、副标题和 logo。
 - [ ] 签名 `/api/v1/admin/account-monitor/data-quality` 正常，旧静态 `/account-monitor/` 路由不存在。
 - [ ] 未认证访问 `/api/v1/admin/extensions-self/account-monitor/data-quality` 被管理员鉴权拒绝。
 - [ ] 管理员 `/admin/extensions/account-monitor` 在桌面和移动视口可加载、筛选、翻页、展开账号。
+- [ ] 账号监控按配置名称和实际账号邮箱均可搜索，大小写不敏感；搜索后回到第 1 页，列表名称下显示 `account_identity`。
 - [ ] 管理员 `/admin/extensions/group-monitor` 可筛选、分页并打开实际模型详情。
 - [ ] 账号监控选择 `page_size=1000` 后保持该值；平台、分组和文本筛选生效，零调用账号仍在全量清单中。
 - [ ] 账号与分组监控只由输入/选择或“手动刷新”按钮发起更新；用户风控输入/选择后查询；页面空闲时不产生监控轮询请求。
@@ -124,4 +130,5 @@ docker exec sub2api-postgres psql -U sub2api -d sub2api -c '\dp extensions_self_
 - [ ] 回滚目标从同一备份目录的 `release-metadata.env` 读取，不能混用不同发布点镜像和配置。
 - [ ] 只重建两个应用服务；不要删除 `risk-control-postgres`、数据卷或账号监控表。
 - [ ] 如果 schema/data 已损坏，再从同一发布点的 `risk_control_db.dump` 恢复；普通代码回滚不恢复数据库。
+- [ ] `extensions_self_ro.public_group_catalog` 和末尾追加的 `account_identity` 属于加法式安全视图变更，普通应用回滚保留它们，不删除视图或回退主库数据。
 - [ ] 重跑主应用、扩展、首页、风控和公网健康检查，记录失败 commit、回滚目标和原因。

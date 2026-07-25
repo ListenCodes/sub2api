@@ -278,8 +278,10 @@ For the first enabled release, use this order:
 2. Back up and verify the main database and `risk-control-postgres`; back up both Compose files,
    `.env`, Nginx vhost, origin certificate/key, container/image metadata and rollback tags.
 3. Run `deploy/ops/install-account-monitor-source.sql` as the main DB owner.
-4. Verify the NOLOGIN role and TCP login can read `extensions_self_ro.usage_source`
-   `extensions_self_ro.group_dimension`, and `extensions_self_ro.account_group_dimension`,
+4. Verify the NOLOGIN role and TCP login can read `extensions_self_ro.usage_source`,
+   `extensions_self_ro.group_dimension`, `extensions_self_ro.account_group_dimension`,
+   `extensions_self_ro.account_dimension.account_identity`, and
+   `extensions_self_ro.public_group_catalog`,
    while full keys and credentials are denied.
 5. Verify the paired GHCR digests and recreate only `extensions-self`, then `sub2api`.
 6. Verify `/admin/extensions/account-monitor`, `/admin/extensions/group-monitor`,
@@ -305,12 +307,16 @@ historical gaps must be reported rather than backfilled with zeros.
 
 ### Inventory And Group Reconciliation
 
-Run the allow probes with the dedicated source login. All three must succeed:
+Run `deploy/ops/install-account-monitor-source.sql` as the main database owner for every
+release that changes these views. Run the allow probes with the dedicated source login;
+all five must succeed:
 
 ```sql
 SELECT 1 FROM extensions_self_ro.usage_source LIMIT 1;
 SELECT 1 FROM extensions_self_ro.group_dimension LIMIT 1;
 SELECT 1 FROM extensions_self_ro.account_group_dimension LIMIT 1;
+SELECT account_identity FROM extensions_self_ro.account_dimension LIMIT 1;
+SELECT 1 FROM extensions_self_ro.public_group_catalog LIMIT 1;
 ```
 
 Run the following deny probes with the same login. Both must fail with
@@ -360,11 +366,18 @@ each group and that card/detail totals agree. Keep the exact UTC boundaries with
 the release evidence.
 
 Browser acceptance must select `page_size=1000`, exercise platform/group/text
-filters, and use the “手动刷新” button on account and group monitor. Exercise
+filters, search account-monitor rows by both configured name and actual account
+`account_identity`, and use the “手动刷新” button on account and group monitor. Exercise
 input/select filtering on user risk pages. When the page is idle, the network
 log must show no monitor polling request. Account detail uses five tabs, a
 fixed-height scrolling body, sticky table headers, stays open across queries,
 and closes when its backdrop is clicked.
+
+Homepage acceptance must call
+`/api/v1/extensions-self/homepage/api/public-groups`, verify `Cache-Control: no-store`,
+and reconcile every returned row with `extensions_self_ro.public_group_catalog`. Confirm
+the page uses the configured site name, subtitle and logo, and that no raw account,
+subscription or credential field appears in the response.
 
 ## Verification Checklist
 
@@ -372,9 +385,9 @@ and closes when its backdrop is clicked.
 - [ ] Intended commit and both GHCR digests are recorded.
 - [ ] `sub2api` container is healthy.
 - [ ] `extensions-self` container is healthy.
-- [ ] Public extensions homepage returns success and is the configured iframe.
+- [ ] Public extensions homepage returns success, uses configured branding, and its `/api/v1/extensions-self/homepage/api/public-groups` request returns only the live public catalog.
 - [ ] Native `/admin/extensions/account-monitor` and `/admin/extensions/group-monitor` load.
-- [ ] `extensions_self_ro.account_group_dimension` allow probe and raw key/credential deny probes passed.
+- [ ] `extensions_self_ro.account_group_dimension`, `account_dimension.account_identity`, and `extensions_self_ro.public_group_catalog` allow probes and raw key/credential deny probes passed.
 - [ ] “全量非删除账号数” equals account-monitor total; “事实活跃账号数” is recorded separately.
 - [ ] A “多分组账号样本” displays all memberships and matches every applicable group filter.
 - [ ] `page_size=1000`, `6h/24h/7d/30d` fixed 24-bucket views, and “手动刷新” browser checks passed without background polling.
@@ -414,6 +427,8 @@ or recreate the risk database during rollback.
 For an account-monitor-only rollback, set `ACCOUNT_MONITOR_ENABLED=false`,
 restore the matching application images and environment, and recreate only
 `sub2api` and `extensions-self`. Keep monitor tables and safe views for diagnosis.
+The additive `extensions_self_ro.public_group_catalog` view and appended
+`account_identity` column remain in place; do not drop or replace them with raw-table grants.
 Database restore is not automatic. Restore `risk_control_db.dump` only for
 separately confirmed schema/data corruption; a normal code rollback must not
 discard newly collected risk or monitor data.

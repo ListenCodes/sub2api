@@ -186,6 +186,34 @@ test('monitor correction documentation defines inventory, grouping, range, and r
   assert.doesNotMatch(`${checklist}\n${runbook}`, /(?:周期|定时|自动).{0,8}刷新/)
 })
 
+test('homepage catalog and account identity source boundaries are documented for release', () => {
+  const dictionary = read('docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md')
+  const checklist = read('docs/ACCOUNT-MONITOR-CHECKLIST.md')
+  const runbook = read('deploy/RELEASE-RUNBOOK.md')
+
+  for (const marker of [
+    'extensions_self_ro.public_group_catalog',
+    'account_identity',
+    'email_address',
+    'credentials.email',
+    '管理员',
+  ]) {
+    assert.match(dictionary, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+
+  for (const document of [checklist, runbook]) {
+    for (const marker of [
+      'extensions_self_ro.public_group_catalog',
+      'SELECT account_identity FROM extensions_self_ro.account_dimension',
+      'SELECT credentials FROM public.accounts',
+      '/api/v1/extensions-self/homepage/api/public-groups',
+      'install-account-monitor-source.sql',
+    ]) {
+      assert.match(document, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    }
+  }
+})
+
 test('monitor documentation defines the fixed twenty-four-bucket release contract', () => {
   const documents = `${read('docs/ACCOUNT-MONITOR-CHECKLIST.md')}\n${read('deploy/RELEASE-RUNBOOK.md')}`
   for (const marker of [
