@@ -18,6 +18,7 @@ PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://sub.ailisten.top/health}
 ADMIN_HEALTH_URL="${SUB2API_ADMIN_HEALTH_URL:-http://127.0.0.1:8081/admin}"
 EXTENSION_ROUTE_URL="${SUB2API_EXTENSION_ROUTE_URL:-http://127.0.0.1:8081/admin/extensions/account-monitor}"
 HOMEPAGE_HEALTH_URL="${SUB2API_HOMEPAGE_HEALTH_URL:-http://127.0.0.1:8081/api/v1/extensions-self/homepage/}"
+HOMEPAGE_GROUPS_HEALTH_URL="${SUB2API_HOMEPAGE_GROUPS_HEALTH_URL:-http://127.0.0.1:8081/api/v1/extensions-self/homepage/api/public-groups}"
 LOG="${SUB2API_SYNC_PUBLISH_LOG:-/var/log/sub2api-release.log}"
 HEALTH_WAIT_TIMEOUT_SECONDS="${SUB2API_HEALTH_WAIT_TIMEOUT_SECONDS:-180}"
 HEALTH_WAIT_INTERVAL_SECONDS="${SUB2API_HEALTH_WAIT_INTERVAL_SECONDS:-2}"
@@ -147,6 +148,7 @@ run_complete_health() {
     curl -fsS --max-time 15 "$INTERNAL_HEALTH_URL" >/dev/null || return 1
     docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null || return 1
     curl -fsS --max-time 15 "$HOMEPAGE_HEALTH_URL" >/dev/null || return 1
+    curl -fsS --max-time 15 "$HOMEPAGE_GROUPS_HEALTH_URL" >/dev/null || return 1
     curl -fsS --max-time 15 "$PUBLIC_HEALTH_URL" >/dev/null || return 1
     curl -fsS --max-time 15 "$ADMIN_HEALTH_URL" >/dev/null || return 1
     curl -fsS --max-time 15 "$EXTENSION_ROUTE_URL" >/dev/null || return 1

@@ -43,6 +43,7 @@ test('the example environment is disabled by default and documents every monitor
   assert.doesNotMatch(env, /EXTENSIONS_SELF_ACCOUNT_MONITOR_WEB_DIR/)
   assert.match(env, /extensions_self_monitor/)
   assert.match(env, /dedicated read-only login|专用只读登录角色/)
+  assert.match(env, /首页实时倍率/)
 })
 
 test('the source installer keeps group privileges separate from the login role', () => {

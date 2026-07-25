@@ -88,7 +88,7 @@ OAuth token 或 cookie。账号监控数据库也只保存 ID、脱敏快照、�
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `ACCOUNT_MONITOR_ENABLED` | `false` | 采集器和管理 API 总开关 |
-| `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | 空 | 启用时必填的专用只读 DSN |
+| `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` | 空 | 账号监控启用时必填；首页实时倍率启用时也必须配置的专用只读 DSN |
 | `ACCOUNT_MONITOR_POLL_SECONDS` | `60` | 采集周期 |
 | `ACCOUNT_MONITOR_LOOKBACK_SECONDS` | `300` | 晚到事件回看窗口 |
 | `ACCOUNT_MONITOR_BATCH_SIZE` | `1000` | 每页最大来源行数 |

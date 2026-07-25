@@ -267,10 +267,13 @@ been verified with real traffic.
 
 ## Account Monitor Release
 
-The account monitor is disabled unless `ACCOUNT_MONITOR_ENABLED=true`. Its
-source DSN must use the dedicated `extensions_self_monitor` login on the main
-`postgres` service; the login only inherits `extensions_self_monitor_ro` and
-must never be the main DB owner.
+The account monitor collector and admin API are disabled unless
+`ACCOUNT_MONITOR_ENABLED=true`. `ACCOUNT_MONITOR_SOURCE_DATABASE_URL` is also
+used by the public homepage live-rate reader and is therefore required even
+when collection is disabled if that homepage is enabled. The source DSN must
+use the dedicated `extensions_self_monitor` login on the main `postgres`
+service; the login only inherits `extensions_self_monitor_ro` and must never
+be the main DB owner.
 
 For the first enabled release, use this order:
 
@@ -285,7 +288,8 @@ For the first enabled release, use this order:
    while full keys and credentials are denied.
 5. Verify the paired GHCR digests and recreate only `extensions-self`, then `sub2api`.
 6. Verify `/admin/extensions/account-monitor`, `/admin/extensions/group-monitor`,
-   signed `data-quality`, risk pages, and custom homepage.
+   signed `data-quality`, risk pages, the custom homepage, and its public-groups
+   endpoint. The apply health gate must fail if the live-rate endpoint is unavailable.
 7. Reconcile sampled success, failure, retry-after-failure, model, cost, and
    media counts. Record the actual available historical range.
 

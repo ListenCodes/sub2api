@@ -42,6 +42,7 @@ describe('AccountMonitorFilters', () => {
 			await input.setValue('owner@example.com')
 			await vi.advanceTimersByTimeAsync(350)
 
+			expect(wrapper.emitted('apply')).toHaveLength(1)
 			expect(wrapper.emitted('apply')?.at(-1)?.[0]).toMatchObject({ query: 'owner@example.com' })
 		} finally {
 			vi.useRealTimers()

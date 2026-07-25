@@ -42,6 +42,6 @@ const resultOptions = [{ value: '', label: '全部结果' }, { value: 'succeeded
 const rollupOptions = [{ value: 'physical', label: '物理账号' }, { value: 'parent', label: '母账号汇总' }]
 function apply() { emit('apply', { ...draft, minRiskScore: draft.minRiskScore === undefined ? undefined : Math.max(0, Math.min(100, Number(draft.minRiskScore))), maxRiskScore: draft.maxRiskScore === undefined ? undefined : Math.max(0, Math.min(100, Number(draft.maxRiskScore))) }) }
 const { schedule, runNow: runImmediate } = useDebouncedAction(apply, 300)
-function updateQuery(value: string) { draft.query = value; schedule() }
+function updateQuery(value: string) { draft.query = value }
 function updateModel(value: string) { draft.model = value; schedule() }
 </script>

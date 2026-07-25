@@ -17,6 +17,7 @@ test('custom extensions live under the extensions-self namespace', () => {
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/account-monitor/go.mod')), true)
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/account-monitor/web/index.html')), false)
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/homepage/index.html')), true)
+  assert.equal(existsSync(resolve(repoRoot, 'extensions-self/homepage/app.js')), true)
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/Dockerfile')), true)
 })
 
@@ -30,24 +31,30 @@ test('homepage navigation escapes the iframe and returns the brand to home', () 
 
 test('homepage uses configured branding and live public group data', () => {
   const homepage = read('extensions-self/homepage/index.html')
+  const app = read('extensions-self/homepage/app.js')
   assert.doesNotMatch(homepage, /fonts\.googleapis\.com|\/logo\.png/)
-  assert.match(homepage, /fetch\(['"]\/api\/v1\/settings\/public['"]/)
-  assert.match(homepage, /fetch\(['"]api\/public-groups['"]/)
-  assert.match(homepage, /cache:\s*['"]no-store['"]/)
-  assert.match(homepage, /data:image\//)
-  assert.match(homepage, /location\.origin/)
-  assert.match(homepage, /textContent/)
-  assert.match(homepage, /createElement/)
-  assert.doesNotMatch(homepage, /innerHTML/)
-  assert.doesNotMatch(homepage, /Claude 特价|GPT PLUS 特价|0\.001x/)
+  assert.match(homepage, /<script src="app\.js" defer><\/script>/)
+  assert.doesNotMatch(homepage, /<script(?:\s[^>]*)?>\s*\(\(\)\s*=>/)
+  assert.match(app, /fetch\(['"]\/api\/v1\/settings\/public['"]/)
+  assert.match(app, /fetch\(['"]api\/public-groups['"]/)
+  assert.match(app, /settingsPayload\.data/)
+  assert.match(app, /setText\(['"]hero-lead['"]/)
+  assert.match(app, /cache:\s*['"]no-store['"]/)
+  assert.match(app, /data:image\//)
+  assert.match(app, /location\.origin/)
+  assert.match(app, /textContent/)
+  assert.match(app, /createElement/)
+  assert.doesNotMatch(`${homepage}\n${app}`, /innerHTML/)
+  assert.doesNotMatch(`${homepage}\n${app}`, /Claude 特价|GPT PLUS 特价|0\.001x/)
 })
 
 test('homepage exposes stable loading, empty, and unavailable group states', () => {
   const homepage = read('extensions-self/homepage/index.html')
+  const app = read('extensions-self/homepage/app.js')
   for (const state of ['正在读取实时倍率', '暂无公开分组', '倍率暂时不可用']) {
-    assert.match(homepage, new RegExp(state))
+    assert.match(`${homepage}\n${app}`, new RegExp(state))
   }
-  for (const id of ['site-logo', 'site-name', 'site-subtitle', 'hero-site-name', 'rate-status', 'rate-groups']) {
+  for (const id of ['site-logo', 'site-name', 'site-subtitle', 'hero-site-name', 'hero-lead', 'rate-status', 'rate-groups']) {
     assert.match(homepage, new RegExp(`id="${id}"`))
   }
 })
@@ -80,6 +87,8 @@ test('compose runs one extensions-self application container and preserves the r
 
 test('the apply phase targets extensions-self without managing the risk database lifecycle', () => {
   const publisher = read('deploy/ops/apply-release.sh')
+  assert.match(publisher, /HOMEPAGE_GROUPS_HEALTH_URL=.*homepage\/api\/public-groups/)
+  assert.match(publisher, /curl[^\n]*HOMEPAGE_GROUPS_HEALTH_URL/)
   assert.match(publisher, /--pull never/)
   assert.match(publisher, /force-recreate extensions-self/)
   assert.match(publisher, /force-recreate sub2api/)
