@@ -35,10 +35,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer monitorRuntime.Close()
-	var monitorHandlers = NewHTTPServer(cfg, NewSQLRepository(db))
+	monitorHandlers := NewHTTPServer(cfg, NewSQLRepository(db))
 	if monitorRuntime != nil {
-		monitorHandlers = NewHTTPServer(cfg, NewSQLRepository(db), monitorRuntime.handler)
-		go monitorRuntime.collector.Run(ctx)
+		monitorHandlers.publicGroups = monitorRuntime.source
+		monitorHandlers.monitor = monitorRuntime.handler
+		if monitorRuntime.collector != nil {
+			go monitorRuntime.collector.Run(ctx)
+		}
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: monitorHandlers, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {

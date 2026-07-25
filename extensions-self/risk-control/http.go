@@ -15,13 +15,14 @@ import (
 )
 
 type HTTPServer struct {
-	service   *RiskService
-	repo      RiskRepository
-	cfg       Config
-	nonces    *nonceStore
-	homepage  http.Handler
-	homeReady bool
-	monitor   *accountmonitor.Handler
+	service      *RiskService
+	repo         RiskRepository
+	cfg          Config
+	nonces       *nonceStore
+	homepage     http.Handler
+	homeReady    bool
+	monitor      *accountmonitor.Handler
+	publicGroups publicGroupReader
 }
 
 func NewHTTPServer(cfg Config, repo RiskRepository, monitors ...*accountmonitor.Handler) *HTTPServer {
@@ -58,6 +59,10 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Redirect(w, r, "/homepage/", http.StatusPermanentRedirect)
+		return
+	}
+	if r.URL.Path == "/homepage/api/public-groups" {
+		s.handlePublicGroups(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/homepage/") {

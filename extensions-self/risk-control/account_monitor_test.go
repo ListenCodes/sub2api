@@ -20,6 +20,21 @@ func TestNewAccountMonitorRuntimeDisabledDoesNotRequireDatabase(t *testing.T) {
 	}
 }
 
+func TestNewAccountMonitorRuntimeOpensHomepageSourceWhenMonitorDisabled(t *testing.T) {
+	cfg := Config{AccountMonitor: accountmonitor.Config{SourceDatabaseURL: "postgres://source"}}
+	runtime, err := newAccountMonitorRuntime(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if runtime == nil || runtime.source == nil {
+		t.Fatalf("runtime = %+v, want homepage source", runtime)
+	}
+	if runtime.handler != nil || runtime.collector != nil {
+		t.Fatalf("disabled monitor runtime = %+v, want source only", runtime)
+	}
+}
+
 type monitorBackendStub struct{ called bool }
 
 func (s *monitorBackendStub) ExecuteAdmin(context.Context, accountmonitor.AdminRequest) (any, error) {
