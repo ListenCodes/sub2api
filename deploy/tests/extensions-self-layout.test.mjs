@@ -20,11 +20,35 @@ test('custom extensions live under the extensions-self namespace', () => {
   assert.equal(existsSync(resolve(repoRoot, 'extensions-self/Dockerfile')), true)
 })
 
-test('homepage navigation escapes the iframe without changing destinations', () => {
+test('homepage navigation escapes the iframe and returns the brand to home', () => {
   const homepage = read('extensions-self/homepage/index.html')
-  for (const href of ['/', '/admin/dashboard']) {
+  for (const href of ['/home', '/admin/dashboard']) {
     const escapedHref = href.replace('/', '\\/')
     assert.match(homepage, new RegExp(`<a(?=[^>]*href="${escapedHref}")(?=[^>]*target="_top")[^>]*>`))
+  }
+})
+
+test('homepage uses configured branding and live public group data', () => {
+  const homepage = read('extensions-self/homepage/index.html')
+  assert.doesNotMatch(homepage, /fonts\.googleapis\.com|\/logo\.png/)
+  assert.match(homepage, /fetch\(['"]\/api\/v1\/settings\/public['"]/)
+  assert.match(homepage, /fetch\(['"]api\/public-groups['"]/)
+  assert.match(homepage, /cache:\s*['"]no-store['"]/)
+  assert.match(homepage, /data:image\//)
+  assert.match(homepage, /location\.origin/)
+  assert.match(homepage, /textContent/)
+  assert.match(homepage, /createElement/)
+  assert.doesNotMatch(homepage, /innerHTML/)
+  assert.doesNotMatch(homepage, /Claude 特价|GPT PLUS 特价|0\.001x/)
+})
+
+test('homepage exposes stable loading, empty, and unavailable group states', () => {
+  const homepage = read('extensions-self/homepage/index.html')
+  for (const state of ['正在读取实时倍率', '暂无公开分组', '倍率暂时不可用']) {
+    assert.match(homepage, new RegExp(state))
+  }
+  for (const id of ['site-logo', 'site-name', 'site-subtitle', 'hero-site-name', 'rate-status', 'rate-groups']) {
+    assert.match(homepage, new RegExp(`id="${id}"`))
   }
 })
 
