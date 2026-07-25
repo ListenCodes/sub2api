@@ -170,12 +170,14 @@ foreach ($marker in @(
 )) {
     Assert-Matches $imageVerifier ([regex]::Escape($marker)) "image verifier is missing $marker"
 }
-foreach ($status in @(
-    'checking_updates', 'checking_release', 'validating_tag', 'merging_release', 'waiting_actions',
-    'waiting_images', 'downloading_images', 'preparing_compose', 'promoting_release', 'backing_up',
-    'validating_backup', 'prepared', 'apply_queued', 'deploying_extensions', 'deploying_main',
-    'health_checking', 'rolling_back', 'success', 'failed', 'conflict', 'expired', 'drifted'
-)) {
+$canonicalStatuses = [regex]::Matches(
+    $updateJob,
+    '(?m)^\s*ReleaseStatus\w+\s+=\s+"([a-z][a-z0-9_]*)"'
+) | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+if ($canonicalStatuses.Count -eq 0) {
+    throw 'ASSERTION FAILED: backend canonical release status constants are missing'
+}
+foreach ($status in $canonicalStatuses) {
     Assert-Matches $state ([regex]::Escape($status)) "durable state helper is missing $status"
 }
 Assert-Matches $actionsWaiter 'EXPECTED_CHECKS' 'Actions waiter requires the complete validation suite'

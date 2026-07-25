@@ -137,6 +137,16 @@ print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).h
   jq -e '.source_connected == true and .missing_group_requests == 0 and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null
 }
 
+refresh_account_monitor_source_views() {
+  local source_sql="${SUB2API_ACCOUNT_MONITOR_SOURCE_SQL:-$REPO/extensions-self/account-monitor/sql/main_source_views.sql}"
+  [[ -r "$source_sql" ]] || return 1
+  docker exec -i sub2api-postgres sh -ec '
+    database_user="${POSTGRES_USER:-postgres}"
+    database_name="${POSTGRES_DB:-$database_user}"
+    exec psql -X -U "$database_user" -d "$database_name" --single-transaction -v ON_ERROR_STOP=1
+  ' < "$source_sql"
+}
+
 run_complete_health() {
   local rendered="$1" container
   docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" ps --status running >/dev/null \
@@ -480,6 +490,8 @@ rollback_started=true
 release_checkout_exact_commit "$TARGET_COMMIT" >> "$LOG" 2>&1 || abort_apply 'target source checkout failed' SOURCE_CHECKOUT_FAILED
 release_install_snapshot_artifacts "$TARGET_DIR" || abort_apply 'target Compose pair or environment installation failed' TARGET_ARTIFACT_INSTALL_FAILED
 target_artifact_identity_matches || abort_apply 'installed target artifacts failed exact validation' TARGET_ARTIFACT_DRIFT
+refresh_account_monitor_source_views >> "$LOG" 2>&1 \
+  || abort_apply 'account-monitor source views could not be refreshed' SOURCE_VIEWS_FAILED
 
 release_job_update "$JOB_ID" switching_extensions "Switching extensions to $EXTENSIONS_DIGEST" '{}'
 SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \

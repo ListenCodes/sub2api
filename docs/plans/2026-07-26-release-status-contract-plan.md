@@ -52,6 +52,19 @@ rejects known legacy literals.
 
 ## Task 4: Verify and publish the code change
 
+Before final verification, add the production follow-up discovered during the
+first rollout:
+
+1. Add a failing contract test that requires apply to refresh
+   `main_source_views.sql` after target checkout and before the extensions
+   switch.
+2. Reapply the view SQL through the PostgreSQL container in one transaction
+   with `ON_ERROR_STOP=1`.
+3. Fail the guarded apply with `SOURCE_VIEWS_FAILED` if the refresh cannot
+   complete.
+4. Update the PowerShell script contract to derive canonical states from the Go
+   constants instead of retaining the legacy list.
+
 1. Run `node --test deploy/tests/*.test.mjs`.
 2. Run `bash -n` over `deploy/ops/*.sh` in a Bash-capable environment.
 3. Run the focused Go service tests if the local Go toolchain is available.

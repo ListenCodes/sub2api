@@ -304,7 +304,10 @@ For the first enabled release, use this order:
 1. Record the approved commit and current image IDs.
 2. Back up and verify the main database and `risk-control-postgres`; back up both Compose files,
    `.env`, Nginx vhost, origin certificate/key, container/image metadata and rollback tags.
-3. Run `deploy/ops/install-account-monitor-source.sql` as the main DB owner.
+3. Run `deploy/ops/install-account-monitor-source.sql` as the main DB owner for
+   initial installation or manual repair. Normal release apply automatically
+   reapplies the equivalent `main_source_views.sql` in one transaction after
+   backup and before switching the extensions container.
 4. Verify the NOLOGIN role and TCP login can read `extensions_self_ro.usage_source`,
    `extensions_self_ro.group_dimension`, `extensions_self_ro.account_group_dimension`,
    `extensions_self_ro.account_dimension.account_identity`, and

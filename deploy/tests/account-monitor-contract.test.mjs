@@ -76,6 +76,19 @@ test('the preparation phase gates enabled monitoring on source privileges and re
   assert.doesNotMatch(publisher, /docker\s+build|compose[^\n]*build/)
 })
 
+test('the apply phase refreshes source views before switching extensions', () => {
+  const apply = read('deploy/ops/apply-release.sh')
+  assert.match(apply, /extensions-self\/account-monitor\/sql\/main_source_views\.sql/)
+  assert.match(apply, /psql[^\n]*--single-transaction[^\n]*ON_ERROR_STOP=1/)
+  assert.match(apply, /SOURCE_VIEWS_FAILED/)
+
+  const checkoutIndex = apply.indexOf('release_checkout_exact_commit')
+  const sourceViewsIndex = apply.lastIndexOf('refresh_account_monitor_source_views')
+  const switchIndex = apply.lastIndexOf('release_job_update "$JOB_ID" switching_extensions')
+  assert.ok(checkoutIndex >= 0 && checkoutIndex < sourceViewsIndex)
+  assert.ok(sourceViewsIndex < switchIndex)
+})
+
 test('the segmented backfill command bounds, polls, stops, and records every job', () => {
   const relative = 'deploy/ops/backfill-account-monitor.sh'
   assert.equal(existsSync(resolve(repoRoot, relative)), true)

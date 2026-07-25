@@ -63,3 +63,16 @@ state rather than every shell sub-step.
 Committing and pushing this change does not deploy it. Production installation
 continues to require the administrator update action, successful Actions and
 paired immutable images, backup, apply, and health gates.
+
+## Production Follow-up
+
+The first rollout after this design exposed a second host-script contract gap:
+the new homepage and account inventory code depended on additions to
+`extensions_self_ro`, but normal apply did not reapply the versioned source-view
+SQL. Production was restored by applying `main_source_views.sql` in one
+transaction after confirming the fresh release backup.
+
+The durable fix refreshes these additive read-only views after the target source
+checkout and backup validation, but before switching `extensions-self`. A SQL
+failure settles the release through `SOURCE_VIEWS_FAILED`; the existing homepage
+and data-quality health checks remain the post-switch verification gates.
