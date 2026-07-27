@@ -69,6 +69,7 @@ Assert-Matches $sync 'git\s+-C\s+"\$WORKTREE"\s+merge' 'sync merges in a tempora
 Assert-Matches $sync 'release_job_update\s+"\$JOB_ID"\s+conflict' 'sync persists conflicts separately from failures'
 Assert-Matches $sync 'conflict_files' 'sync persists exact conflict files'
 Assert-Matches $sync 'artifact_path' 'sync persists conflict evidence paths'
+Assert-Matches $sync 'conflict_base:\$base_commit' 'sync exposes the approved branch base in conflict metadata'
 Assert-NotMatches $sync 'upstream/main|fetch[^\r\n]*\bmain\b' 'sync never publishes upstream/main'
 Assert-NotMatches $sync 'git\s+rebase|--force' 'sync never rewrites history'
 Assert-NotMatches $sync 'docker\s+(build|compose\s+up)' 'sync never builds or deploys'

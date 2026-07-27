@@ -171,7 +171,7 @@ if ! git -C "$WORKTREE" merge --no-ff --no-edit "$RELEASE_COMMIT" >> "$LOG" 2>&1
     --arg artifact_path "$artifact_path" \
     --arg resolution_hint "$resolution_hint" \
     --argjson conflict_files "$conflict_files_json" \
-    '{job_id:$job_id,integration_branch:$integration_branch,base_commit:$base_commit,release_tag:$release_tag,release_commit:$release_commit,release_published_at:$release_published_at,conflict_release:$conflict_release,conflict_files:$conflict_files,conflict_log:$artifact_path,artifact_path:$artifact_path,resolution_hint:$resolution_hint,production_changed:false,error_code:"RELEASE_CONFLICT"}')"
+    '{job_id:$job_id,integration_branch:$integration_branch,base_commit:$base_commit,conflict_base:$base_commit,release_tag:$release_tag,release_commit:$release_commit,release_published_at:$release_published_at,conflict_release:$conflict_release,conflict_files:$conflict_files,conflict_log:$artifact_path,artifact_path:$artifact_path,resolution_hint:$resolution_hint,production_changed:false,error_code:"RELEASE_CONFLICT"}')"
   printf '%s\n' "$conflict_metadata" > "$artifact_path.tmp"
   mv -f "$artifact_path.tmp" "$artifact_path"
   git -C "$WORKTREE" merge --abort >> "$LOG" 2>&1 || true
