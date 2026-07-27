@@ -25,20 +25,32 @@ test('stable-owned release hot files match the pinned Stable commit', () => {
   assert.equal(result.status, 0, result.stdout || result.stderr)
 })
 
-test('pinned Stable identity matches the newest merged release tag', () => {
+test('pinned Stable identity matches the newest Stable Release merge', () => {
   const cwd = new URL('../..', import.meta.url)
-  const latestTag = spawnSync(
+  const latestMerge = spawnSync(
     'git',
-    ['describe', '--tags', '--match', 'v[0-9]*', '--abbrev=0', 'HEAD'],
-    { cwd, encoding: 'utf8', shell: process.platform === 'win32' }
+    [
+      'log',
+      '--first-parent',
+      '--merges',
+      '-n',
+      '1',
+      '--format=%H%x00%s',
+      '--grep=^merge: integrate stable Release v[0-9]',
+      'HEAD'
+    ],
+    { cwd, encoding: 'utf8' }
   )
-  assert.equal(latestTag.status, 0, latestTag.stdout || latestTag.stderr)
-  assert.equal(stableBaseline.tag, latestTag.stdout.trim())
+  assert.equal(latestMerge.status, 0, latestMerge.stdout || latestMerge.stderr)
+
+  const [mergeCommit, mergeSubject] = latestMerge.stdout.trim().split('\0')
+  const releaseTag = mergeSubject?.match(/^merge: integrate stable Release (v\d+\.\d+\.\d+)$/)?.[1]
+  assert.equal(stableBaseline.tag, releaseTag)
 
   const releaseCommit = spawnSync(
     'git',
-    ['rev-list', '-n', '1', stableBaseline.tag],
-    { cwd, encoding: 'utf8', shell: process.platform === 'win32' }
+    ['rev-parse', `${mergeCommit}^2`],
+    { cwd, encoding: 'utf8' }
   )
   assert.equal(releaseCommit.status, 0, releaseCommit.stdout || releaseCommit.stderr)
   assert.equal(stableBaseline.commit_sha, releaseCommit.stdout.trim())
