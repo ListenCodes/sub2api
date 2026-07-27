@@ -25,6 +25,25 @@ test('stable-owned release hot files match the pinned Stable commit', () => {
   assert.equal(result.status, 0, result.stdout || result.stderr)
 })
 
+test('pinned Stable identity matches the newest merged release tag', () => {
+  const cwd = new URL('../..', import.meta.url)
+  const latestTag = spawnSync(
+    'git',
+    ['describe', '--tags', '--match', 'v[0-9]*', '--abbrev=0', 'HEAD'],
+    { cwd, encoding: 'utf8', shell: process.platform === 'win32' }
+  )
+  assert.equal(latestTag.status, 0, latestTag.stdout || latestTag.stderr)
+  assert.equal(stableBaseline.tag, latestTag.stdout.trim())
+
+  const releaseCommit = spawnSync(
+    'git',
+    ['rev-list', '-n', '1', stableBaseline.tag],
+    { cwd, encoding: 'utf8', shell: process.platform === 'win32' }
+  )
+  assert.equal(releaseCommit.status, 0, releaseCommit.stdout || releaseCommit.stderr)
+  assert.equal(stableBaseline.commit_sha, releaseCommit.stdout.trim())
+})
+
 test('official admin routes fail closed or delegate to custom prepare', () => {
   const source = readFileSync(new URL('../../backend/internal/server/routes/admin.go', import.meta.url), 'utf8')
   const registerSystemRoutes = source.match(/func registerSystemRoutes[\s\S]*?\n}/)?.[0] ?? ''
