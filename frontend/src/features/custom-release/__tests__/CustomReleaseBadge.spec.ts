@@ -96,7 +96,7 @@ describe('VersionBadge conflict reporting', () => {
       need_restart: false,
       published: false,
       conflict_files: ['backend/internal/server/routes/gateway.go', 'deploy/README.md'],
-      conflict_base: 'custom123',
+      base_commit: '4920db770b7a8d17287e2d43ad5ecf7eb00815d1',
       conflict_upstream: 'upstream456',
       release_tag: 'v0.1.158',
       release_commit: '26abd19a2812edba02bbef93c3e2a620141cc257',
@@ -127,6 +127,7 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).toContain('backend/internal/server/routes/gateway.go')
     expect(wrapper.text()).toContain('deploy/README.md')
     expect(wrapper.text()).toContain('version.updateConflictNoProductionChange')
+    expect(wrapper.text()).toContain('4920db770b7a')
     expect(wrapper.text()).toContain('v0.1.158@26abd19a2812')
     expect(wrapper.text()).not.toContain('version.updatePublished')
 

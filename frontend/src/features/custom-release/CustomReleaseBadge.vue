@@ -989,6 +989,7 @@ function finishUpdateFailure(
   status: Pick<
     UpdateJob,
     | 'message'
+    | 'base_commit'
     | 'conflict_files'
     | 'conflict_base'
     | 'conflict_upstream'
@@ -1008,7 +1009,7 @@ function finishUpdateFailure(
   localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   updateError.value = status.message || t('version.updateFailed')
   conflictFiles.value = status.conflict_files || []
-  conflictBase.value = status.conflict_base || ''
+  conflictBase.value = status.conflict_base || status.base_commit || ''
   conflictUpstream.value = status.conflict_upstream || ''
   releaseTag.value = status.release_tag || ''
   releaseCommit.value = status.release_commit || ''
