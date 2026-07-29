@@ -32,6 +32,8 @@ func TestProvideHandlersWiresRiskBanHandler(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	require.Same(t, authHandler, handlers.Auth)
