@@ -81,6 +81,25 @@ git -C E:\Code\sub2api worktree add `
 开始前检查目标 worktree 的 `git status --short --branch`，并完整阅读仓库 `AGENTS.md` 和
 `deploy/RELEASE-RUNBOOK.md`。
 
+### 稳定扩展入口与冲突预算
+
+自定义功能不能继续接入官方高频文件。日常开发使用以下稳定入口：
+
+| 范围 | 稳定入口 | 禁止做法 |
+|---|---|---|
+| 后端启动和路由 | `SetupCustomRouter`、`RegisterCustomExtensionRoutes` | 在官方 `router.go` 或 gateway 路由组装中注册自定义逻辑 |
+| 后端管理功能 | `CustomExtensions`、`CustomUserHandler` | 扩展官方 `UserHandler` 或 Wire provider 图 |
+| 首页响应头 | `ExtensionsHomepageFrameHeaders`，只挂到对应 GET/HEAD 路由 | 为扩展修改全局安全中间件 |
+| 前端路由 | `installExtensionRoutes` 和 `features/extensions/routes.ts` | 向中央 `router/index.ts` 导入或展开扩展路由 |
+| 前端侧栏 | `features/extensions/navigation.ts` 的 provider | 在 `AppSidebar.vue` 写扩展路径或业务状态机 |
+| 本地 Compose | `docker-compose.custom.local.yml`、`bootstrap-custom-local.sh` | 向官方 `docker-compose.local.yml` 添加自定义服务 |
+
+根 `AGENTS.md` 列出 10 个必须与当前 Stable 基线字节一致的零重叠文件，以及认证生命周期、
+三条旧更新/回退路由和“不输出秘密值”补丁的剩余预算。`deploy/tests/custom-overlap-budget.test.mjs`
+在 CI 中执行这些约束。测试失败时应把行为迁移到上表的加法式入口，不能通过放宽预算、删除断言
+或对冲突文件整份选择 `ours`/`theirs` 来绕过。完整背景和验收证据见
+`docs/superpowers/plans/2026-07-29-stable-custom-extension-seams.md`。
+
 ## 4. 自动化边界
 
 当前发布不是完全无人值守自动发布：
@@ -321,6 +340,7 @@ Custom Release Actions：
 - `extensions-self/account-monitor/README.md`：账号监控服务和数据采集。
 - `docs/ACCOUNT-MONITOR-DATA-DICTIONARY.md`：账号监控数据口径。
 - `docs/RISK-CONTROL-ADMIN-SPEC.md`：风控管理功能契约。
+- `docs/superpowers/plans/2026-07-29-stable-custom-extension-seams.md`：稳定扩展入口、热点审计和剩余接线预算。
 
 ## 13. 两阶段更新与检测
 

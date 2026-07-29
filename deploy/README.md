@@ -17,7 +17,9 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | `docker-compose.yml` | Official Stable Docker Compose configuration (named volumes) |
 | `docker-compose.custom.yml` | Custom production overlay; always load explicitly after `docker-compose.yml` |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
+| `docker-compose.custom.local.yml` | Custom local overlay for `extensions-self`, risk control, and local custom environment |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
+| `ops/bootstrap-custom-local.sh` | Secret-safe custom local bootstrap using the explicit local Compose pair |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
 | `.env.example` | Container environment variables template |
@@ -29,6 +31,41 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | `DATAMANAGEMENTD_CN.md` | datamanagementd 部署与联动说明（中文） |
 | `config.example.yaml` | Example configuration file |
 | `EDGE_SECURITY.md` | Reverse proxy, CDN/WAF, trusted proxy, and ingress hardening guide |
+
+---
+
+## Custom Fork Local Development
+
+The official `docker-compose.local.yml` remains aligned with the recorded
+Stable Release. Custom local services and environment additions belong only in
+`docker-compose.custom.local.yml`; do not add them to the official base file.
+
+From a clean repository checkout, create the private local environment and
+start the complete custom stack with:
+
+```bash
+deploy/ops/bootstrap-custom-local.sh
+```
+
+The script refuses to overwrite an existing `deploy/.env.local`, writes new
+secret values with mode `0600`, does not print them, and explicitly loads the
+base file before the custom overlay. Subsequent local commands must keep the
+same order and environment file:
+
+```bash
+docker compose \
+  -f deploy/docker-compose.local.yml \
+  -f deploy/docker-compose.custom.local.yml \
+  --env-file deploy/.env.local config --quiet
+
+docker compose \
+  -f deploy/docker-compose.local.yml \
+  -f deploy/docker-compose.custom.local.yml \
+  --env-file deploy/.env.local up -d
+```
+
+This local pair is separate from the production pair
+`docker-compose.yml` + `docker-compose.custom.yml`.
 
 ---
 
@@ -53,7 +90,9 @@ See [APPLE_CONTAINER.md](./APPLE_CONTAINER.md) for configuration, upgrades, pers
 
 ### Method 1: One-Click Deployment (Recommended)
 
-Use the automated preparation script for the easiest setup:
+Use the automated preparation script for the easiest official/base setup. For
+the complete custom-fork stack, use `ops/bootstrap-custom-local.sh` as described
+above instead.
 
 ```bash
 # Download and run the preparation script
@@ -67,10 +106,10 @@ chmod +x docker-deploy.sh
 
 **What the script does:**
 - Downloads `docker-compose.local.yml` and `.env.example`
-- Automatically generates secure secrets for Sub2API and the independent risk-control service
+- Automatically generates the official Sub2API secrets
 - Creates `.env` file with generated secrets
-- Creates necessary data directories (data/, postgres_data/, redis_data/, risk_control_postgres_data/)
-- **Displays generated credentials** (POSTGRES_PASSWORD, JWT_SECRET, etc.)
+- Creates necessary data directories (data/, postgres_data/, redis_data/)
+- Saves generated credentials to `.env` without printing their values
 
 **After running the script:**
 ```bash
@@ -104,17 +143,15 @@ chmod 600 .env
 # Generate secure secrets (recommended)
 JWT_SECRET=$(openssl rand -hex 32)
 TOTP_ENCRYPTION_KEY=$(openssl rand -hex 32)
-RISK_CONTROL_INTERNAL_SECRET=$(openssl rand -hex 32)
-RISK_CONTROL_POSTGRES_PASSWORD=$(openssl rand -hex 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
 echo "JWT_SECRET=${JWT_SECRET}" >> .env
 echo "TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}" >> .env
-echo "RISK_CONTROL_INTERNAL_SECRET=${RISK_CONTROL_INTERNAL_SECRET}" >> .env
-echo "RISK_CONTROL_POSTGRES_PASSWORD=${RISK_CONTROL_POSTGRES_PASSWORD}" >> .env
+echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" >> .env
 
 # Create data directories
-mkdir -p data postgres_data redis_data risk_control_postgres_data
+mkdir -p data postgres_data redis_data
 
-# Start all services using local directory version
+# Start the official/base services using local directories
 docker compose -f docker-compose.local.yml up -d
 
 # View logs (check for auto-generated admin password)
@@ -128,10 +165,13 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 | Version | Data Storage | Migration | Best For |
 |---------|-------------|-----------|----------|
-| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data, ./risk_control_postgres_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
+| **docker-compose.local.yml** | Official local directories (./data, ./postgres_data, ./redis_data) | ✅ Easy (tar entire directory) | Official/base local stack |
+| **docker-compose.local.yml + docker-compose.custom.local.yml** | Base directories plus ./risk_control_postgres_data | ✅ Easy (tar the local data directories) | Complete custom-fork local stack |
 | **docker-compose.yml** | Official named-volume stack under `/var/lib/docker/volumes/` | ⚠️ Requires docker commands | Simple setup, don't need migration |
 
-**Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
+**Recommendation:** Use the explicit local pair through
+`ops/bootstrap-custom-local.sh` for custom-fork development. Use
+`docker-compose.local.yml` alone only for the official/base stack.
 
 ### How Auto-Setup Works
 
@@ -158,8 +198,12 @@ The risk-control service is internal-only. It has no host `ports` mapping; Sub2A
 Before an upgrade, back up its dedicated database:
 
 ```bash
-docker compose -f docker-compose.local.yml exec -T risk-control-postgres \
-  pg_dump -U "$RISK_CONTROL_POSTGRES_USER" -d "$RISK_CONTROL_POSTGRES_DB" -Fc \
+docker compose \
+  -f docker-compose.local.yml \
+  -f docker-compose.custom.local.yml \
+  --env-file .env.local \
+  exec -T risk-control-postgres sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
   > risk-control-$(date +%Y%m%d-%H%M%S).dump
 ```
 

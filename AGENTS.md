@@ -95,6 +95,73 @@ records have been verified.
    `cherry-pick -x` into `custom` for `upstream/main` compatibility testing. The
    entire `custom` branch is never merged back into `custom-release`.
 
+## Stable Custom Extension Boundaries
+
+Custom behavior must enter through additive, custom-owned files instead of
+turning frequently changed official files into permanent merge points. Read
+`docs/superpowers/plans/2026-07-29-stable-custom-extension-seams.md` before
+changing these boundaries.
+
+Use the established extension seams:
+
+- Backend bootstrap: `backend/internal/server/custom_router.go` owns
+  `SetupCustomRouter`, the filtered gateway risk observer, and post-official
+  custom route registration. Keep the custom-owned difference in
+  `backend/internal/server/http.go` limited to the single bootstrap call.
+- Backend handlers: build custom dependencies through
+  `backend/internal/handler/custom_extensions.go` and keep custom admin behavior
+  on `admin.CustomUserHandler`. Do not extend the official `UserHandler` or Wire
+  graph for custom features.
+- Route policy: attach custom headers and other policy to the exact custom route
+  group, such as `ExtensionsHomepageFrameHeaders`; do not weaken global
+  middleware for an extension.
+- Frontend routes: define routes under `frontend/src/features/extensions/` and
+  register them through `installExtensionRoutes` before `app.use(router)`. Do
+  not import or spread extension routes into the central router.
+- Frontend navigation: keep extension labels and paths in
+  `frontend/src/features/extensions/navigation.ts`; `AppSidebar.vue` exposes
+  only the generic `createExtensionAdminNavItems` provider seam.
+- Local deployment: keep the official local Compose file unchanged and place
+  custom services in `deploy/docker-compose.custom.local.yml`. Start the pair
+  through `deploy/ops/bootstrap-custom-local.sh`, which must not print secrets.
+
+The following official Stable-owned hotspots have a zero custom-overlap budget
+and must remain byte-equivalent to the commit recorded in
+`deploy/stable-release-baseline.json`:
+
+- `backend/cmd/server/wire_gen.go`
+- `backend/internal/handler/wire.go`
+- `backend/internal/handler/gateway_handler.go`
+- `backend/internal/handler/openai_gateway_handler.go`
+- `backend/internal/server/router.go`
+- `backend/internal/server/routes/gateway.go`
+- `backend/internal/handler/admin/user_handler.go`
+- `backend/internal/server/middleware/security_headers.go`
+- `frontend/src/router/index.ts`
+- `deploy/docker-compose.local.yml`
+
+The remaining shared seams are exceptions, not examples to copy:
+
+- `backend/internal/handler/auth_handler.go`,
+  `backend/internal/handler/auth_email_oauth.go`,
+  `backend/internal/handler/auth_oauth_pending_flow.go`,
+  `backend/internal/handler/auth_oidc_oauth.go`, and
+  `backend/internal/handler/content_moderation_helper.go` have reviewed
+  added-line and custom-symbol budgets for auth lifecycle and content-risk
+  hooks;
+- `backend/internal/server/routes/admin.go` has exactly three reviewed legacy
+  update/rollback safety lines;
+- `deploy/docker-deploy.sh` retains only the reviewed patch that prevents
+  generated secrets from being printed.
+
+`deploy/tests/custom-overlap-budget.test.mjs` enforces these zero-overlap and
+residual budgets in Custom Release CI. Never bypass or loosen the test to make a
+feature pass. If an official Stable update changes a protected file, integrate
+the official file first, update the recorded Stable baseline through the release
+workflow, and then reapply custom behavior only through the additive seams. Any
+genuine need to expand a residual budget requires explicit review, matching
+behavior tests, and documentation in the same commit.
+
 ## Normal Change Workflow
 
 1. Inspect `git status`, branch, remotes, and the current production commit.
