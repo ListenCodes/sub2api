@@ -396,9 +396,11 @@ SELECT
 - Docker 场景下需把宿主机 Socket 挂载到容器内同路径
 - 详细步骤见：`deploy/DATAMANAGEMENTD_CN.md`
 
-### Commands
+### Commands (Official/Base Stack)
 
-For **local directory version** (docker-compose.local.yml):
+The commands below are for the official/base local directory version
+(`docker-compose.local.yml`). The custom fork must use the explicit Compose
+pair and environment file shown in [Custom Fork Local Development](#custom-fork-local-development).
 
 ```bash
 # Start services
@@ -472,9 +474,13 @@ See `.env.example` for all available options.
 
 > **Note:** The `docker-deploy.sh` script automatically generates `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, and `POSTGRES_PASSWORD` for you.
 
-### Easy Migration (Local Directory Version)
+### Easy Migration (Official/Base Local Directory Version)
 
-When using `docker-compose.local.yml`, all data is stored in local directories, making migration simple:
+This procedure applies only to the official/base `docker-compose.local.yml`
+stack. Production custom-fork migration uses the versioned export/bootstrap
+workflow in [RELEASE-RUNBOOK.md](./RELEASE-RUNBOOK.md).
+
+When using the official/base stack, all data is stored in local directories, making migration simple:
 
 ```bash
 # On source server: Stop services and create archive
@@ -735,7 +741,9 @@ The main config file is at `/etc/sub2api/config.yaml` (created by Setup Wizard).
 
 ### Docker
 
-For **local directory version**:
+For the **official/base local directory version**. For a custom-fork local
+stack, use the explicit Compose pair from
+[Custom Fork Local Development](#custom-fork-local-development):
 
 ```bash
 # Check container status

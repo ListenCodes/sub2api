@@ -7,7 +7,6 @@ import 'vue-router'
 
 declare module 'vue-router' {
   interface RouteMeta {
-    riskListKind?: 'events' | 'cases' | 'scenarios' | 'subjects' | 'lists' | 'audit'
     /**
      * Whether this route requires authentication
      * @default true

@@ -356,5 +356,5 @@ Potential improvements:
 - [Auth Store Documentation](/src/stores/README.md#auth-store)
 - [AuthLayout Component](/src/components/layout/README.md#authlayout)
 - [Router Configuration](/src/router/index.ts)
-- [API Documentation](/src/api/README.md#authentication)
+- [Admin API Entry](/src/api/admin/index.ts)
 - [Type Definitions](/src/types/index.ts)

@@ -65,7 +65,10 @@ services:
       - /tmp/sub2api-datamanagement.sock:/tmp/sub2api-datamanagement.sock
 ```
 
-建议在 `docker-compose.override.yml` 中维护该挂载，避免覆盖主 compose 文件。
+生产 custom 部署应在显式加载的 `deploy/docker-compose.custom.yml` 中维护该挂载；
+本地 custom 部署应放在显式加载的 `deploy/docker-compose.custom.local.yml` 中。
+独立部署可以使用单独命名的 overlay，但每条 Compose 命令都必须通过 `-f` 显式加载；
+不得依赖隐式的 `docker-compose.override.yml`。
 
 ## 5. 依赖检查
 

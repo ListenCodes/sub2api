@@ -250,12 +250,10 @@ data directory. The admin update panel must expose these details and state
 that production was not changed. Never hide a conflict behind a generic
 failure message or resolve it with a blanket `ours`/`theirs` strategy.
 
-`publish-custom.sh` is the internal digest deployment entrypoint. It accepts
-only the exact approved `origin/custom-release` commit and verified digests,
-backs up before the local source fast-forward, deploys extensions before main,
-and automatically restores the previous pair after a failed health gate. It
-must not build images, fetch or merge `upstream/main`, recreate
-`risk-control-postgres`, or automatically restore either database.
+Production apply occurs only from a prepared release manifest through
+`apply-release.sh`. `publish-custom.sh` is a deprecated fail-closed
+compatibility shim, not a release entrypoint, and must continue to reject
+direct use.
 
 Implementation, local tests, branch push, Actions/GHCR results, production
 backup, deployment, health, scheduled-update removal, and rollback evidence are

@@ -69,7 +69,9 @@ sync-upstream.sh   verifies a stable Release and prepares origin/integration/rel
 wait-for-actions.sh / verify-release-images.sh  Actions and image gates
 promote-release.sh guarded remote-only branch promotion
 sync-and-publish.sh durable host orchestrator
-publish-custom.sh  internal backup/digest deploy/rollback component
+prepare-release.sh creates the immutable manifest, backup, and rollback evidence
+apply-release.sh   validates and applies an approved prepared manifest
+publish-custom.sh  deprecated fail-closed compatibility shim; never an entrypoint
 sub2api-release.path / .service  administrator trigger consumer
 ```
 
@@ -152,8 +154,9 @@ target commit must contain the tracked custom overlay before backup or mutation
 can proceed. This also supports a pre-overlay deployment that already has a
 valid `release-state.json`.
 
-Do not call `publish-custom.sh` directly for final acceptance. Trigger the same
-durable job used by the administrator UI and monitor its persisted states.
+`publish-custom.sh` always rejects direct use. For final acceptance, trigger
+the same durable job used by the administrator UI and monitor its persisted
+states.
 
 ## New Site And Full-Site Migration
 

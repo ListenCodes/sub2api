@@ -206,9 +206,17 @@ test('release documentation defines only the administrator-triggered digest path
   assert.match(agents, /cherry-pick\s+-x[^\n]*custom/i)
   assert.match(agents, /entire[^\n]*custom[^\n]*never merged|never merge[^\n]*entire[^\n]*custom/i)
   assert.doesNotMatch(agents, /main Compose file must build|build and deploy the same tag/i)
+  assert.match(agents, /publish-custom\.sh[^\n]*deprecated fail-closed/i)
+  assert.doesNotMatch(agents, /publish-custom\.sh[^\n]*internal digest deployment entrypoint/i)
 
   const runbook = read('deploy/RELEASE-RUNBOOK.md')
   assert.match(runbook, /feature[^\n]*custom-release[^\n]*Actions/i)
   assert.match(runbook, /database restore[^\n]*not automatic|does not automatically restore[^\n]*database/i)
   assert.match(runbook, /implementation[\s\S]{0,160}push[\s\S]{0,160}deployment/i)
+  assert.doesNotMatch(runbook, /publish-custom\.sh\s+internal backup\/digest deploy\/rollback component/i)
+
+  const dataManagement = read('deploy/DATAMANAGEMENTD_CN.md')
+  assert.doesNotMatch(dataManagement, /建议[^\n]*docker-compose\.override\.yml/)
+  assert.match(dataManagement, /不得依赖[^\n]*docker-compose\.override\.yml/)
+  assert.match(dataManagement, /docker-compose\.custom(?:\.local)?\.yml/)
 })

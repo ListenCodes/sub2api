@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import router from '@/router'
@@ -16,6 +16,24 @@ describe('user risk control routes', () => {
     expect(routerSource).not.toContain("path: '/admin/extensions'")
     expect(routerSource).not.toContain('extensionRoutes')
     expect(mainSource).toContain('installExtensionRoutes(router)')
+  })
+
+  it('does not retain the superseded direct risk-control UI and client stack', () => {
+    for (const relativePath of [
+      '../../views/admin/UserRiskControlOverviewView.vue',
+      '../../views/admin/UserRiskControlListView.vue',
+      '../../api/admin/userRiskControl.ts',
+      '../../api/riskControlClient.ts',
+      '../../utils/riskControlTable.ts',
+      '../../utils/__tests__/riskControlTable.spec.ts',
+    ]) {
+      expect(existsSync(resolve(__dirname, relativePath)), relativePath).toBe(false)
+    }
+
+    const adminIndex = readFileSync(resolve(__dirname, '../../api/admin/index.ts'), 'utf8')
+    const routeMeta = readFileSync(resolve(__dirname, '../meta.d.ts'), 'utf8')
+    expect(adminIndex).not.toContain("from './userRiskControl'")
+    expect(routeMeta).not.toContain('riskListKind')
   })
 
   it.each([
