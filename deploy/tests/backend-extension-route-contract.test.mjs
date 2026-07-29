@@ -45,3 +45,11 @@ test('gateway keeps the custom middleware as an injected hook', () => {
   assert.doesNotMatch(gateway, /extensionMiddleware \.\.\./)
   assert.match(gateway, /riskEvents/)
 })
+
+test('stable model plaza and custom extension routes coexist', () => {
+  const router = read('backend/internal/server/router.go')
+  assert.match(router, /optionalJWTAuth middleware2\.OptionalJWTAuthMiddleware/)
+  assert.match(router, /RegisterModelPlazaRoutes\(v1, h, optionalJWTAuth/)
+  assert.match(router, /RegisterCustomExtensionRoutes\(v1, h, adminAuth/)
+  assert.match(router, /RegisterGatewayRoutes[\s\S]*customExtensions\.GatewayRiskEvents/)
+})
