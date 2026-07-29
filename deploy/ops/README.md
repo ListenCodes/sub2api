@@ -59,6 +59,23 @@ docker compose --project-name deploy \
 The packages are public and the VPS pulls anonymously. GitHub credentials are
 not production image credentials.
 
+## Local Development Overlay
+
+Local custom development uses a separate explicit Compose pair:
+
+```text
+deploy/docker-compose.local.yml          official Stable-owned base
+deploy/docker-compose.custom.local.yml   custom services and environment overlay
+deploy/.env.local                        untracked mode-0600 secrets
+```
+
+Run `deploy/ops/bootstrap-custom-local.sh` from the repository checkout to
+create the environment and start the pair. The script refuses to overwrite an
+existing environment file and must never print generated secret values. Every
+later local `config`, `up`, `logs`, or lifecycle command must pass the base file
+first, the custom overlay second, and `--env-file deploy/.env.local` explicitly.
+Do not move custom services back into `docker-compose.local.yml`.
+
 ## Script Ownership
 
 - `sync-trigger.sh` atomically writes the action and durable job ID to `release-trigger`
@@ -86,6 +103,8 @@ not production image credentials.
   recheck. It does not move the local production source.
 - `publish-custom.sh` is a deprecated fail-closed compatibility shim and is
   never a final release entry point.
+- `bootstrap-custom-local.sh` owns secret-safe local custom setup and the
+  explicit local Compose pair; it is not a production publisher.
 
 ## New Site And Migration
 

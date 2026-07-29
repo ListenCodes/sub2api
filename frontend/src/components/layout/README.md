@@ -55,10 +55,20 @@ Navigation sidebar with user and admin sections.
   - Redeem Codes
 - Collapsible sidebar with toggle button
 - Active route highlighting
+- Custom extension navigation through a single provider seam
 - Icons using HTML entities
 - Responsive (mobile-friendly)
 
 **Used automatically by AppLayout** - no need to import separately.
+
+#### Custom Extension Navigation
+
+Custom-fork navigation labels, paths, children, and `activePrefix` values belong
+in `src/features/extensions/navigation.ts`. `AppSidebar.vue` consumes them only
+through `createExtensionAdminNavItems(...)`; do not add extension-specific paths
+or release workflow logic directly to the sidebar. The generic `NavItem`
+properties remain available so future extension children do not require new
+sidebar conditions.
 
 ---
 

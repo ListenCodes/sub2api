@@ -2,12 +2,17 @@
 
 ## Overview
 
-This directory contains the Vue Router configuration for the Sub2API frontend application. The router implements a comprehensive navigation system with authentication guards, role-based access control, and lazy loading.
+This directory contains the official Vue Router configuration for the Sub2API frontend application. The router implements authentication guards, role-based access control, and lazy loading. Custom-fork routes are installed additively from `../features/extensions` so the central router can stay aligned with the official Stable Release.
 
 ## Files
 
-- **index.ts**: Main router configuration with route definitions and navigation guards
+- **index.ts**: Official/core router configuration with route definitions and navigation guards
 - **meta.d.ts**: TypeScript type definitions for route meta fields
+
+Custom extension routes live in `../features/extensions/routes.ts` and are
+registered by `installExtensionRoutes` from `../features/extensions/install.ts`
+before `app.use(router)` performs the initial navigation. Do not import or spread
+custom extension routes into `index.ts`.
 
 ## Route Structure
 
@@ -217,11 +222,21 @@ To test navigation guards and route access:
 
 ### Adding New Routes
 
-1. Add route definition in `routes` array
-2. Create corresponding view component
-3. Set appropriate meta fields (`requiresAuth`, `requiresAdmin`)
-4. Use lazy loading with `() => import()`
-5. Update this README with route documentation
+For an official/core route:
+
+1. Add the route definition to the `routes` array in `index.ts`.
+2. Create the corresponding view component.
+3. Set appropriate meta fields (`requiresAuth`, `requiresAdmin`).
+4. Use lazy loading with `() => import()`.
+5. Update this README with route documentation.
+
+For a custom-fork extension route:
+
+1. Add the route under `src/features/extensions/routes.ts`.
+2. Keep the installer generic; `installExtensionRoutes(router)` registers the
+   extension route collection before initial navigation.
+3. Keep extension paths out of `src/router/index.ts`.
+4. Update the extension route tests and navigation provider when applicable.
 
 ### Debugging Navigation
 

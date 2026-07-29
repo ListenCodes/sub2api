@@ -51,8 +51,12 @@ The service owns the extensions database, including risk-control and account-mon
 tables. Back it up separately from Sub2API:
 
 ```bash
-docker compose -f deploy/docker-compose.local.yml exec -T risk-control-postgres \
-  pg_dump -U "$RISK_CONTROL_POSTGRES_USER" -d "$RISK_CONTROL_POSTGRES_DB" -Fc \
+docker compose \
+  -f deploy/docker-compose.local.yml \
+  -f deploy/docker-compose.custom.local.yml \
+  --env-file deploy/.env.local \
+  exec -T risk-control-postgres sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
   > risk-control-$(date +%Y%m%d-%H%M%S).dump
 ```
 
