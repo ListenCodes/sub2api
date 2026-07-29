@@ -88,118 +88,131 @@ func SetRiskEventContext(c *gin.Context, eventType, errorCode, message string) {
 	}
 }
 
+type RiskEventPredicate func(*gin.Context) bool
+
 func RiskEventMiddleware(client *service.RiskControlClient, banHandlers ...RiskBanHandler) gin.HandlerFunc {
+	return RiskEventMiddlewareWhen(client, nil, banHandlers...)
+}
+
+func RiskEventMiddlewareWhen(client *service.RiskControlClient, shouldReport RiskEventPredicate, banHandlers ...RiskBanHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
-		if client == nil || c == nil || c.Request == nil || !shouldReportRiskMethod(c.Request.Method) {
+		if shouldReport != nil && !shouldReport(c) {
 			return
 		}
-		subject, ok := middleware2.GetAuthSubjectFromContext(c)
-		if !ok || subject.UserID <= 0 {
-			return
+		reportRiskEventFromContext(c, client, banHandlers...)
+	}
+}
+
+func reportRiskEventFromContext(c *gin.Context, client *service.RiskControlClient, banHandlers ...RiskBanHandler) {
+	if client == nil || c == nil || c.Request == nil || !shouldReportRiskMethod(c.Request.Method) {
+		return
+	}
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		return
+	}
+	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	model, _ := c.Get(opsModelKey)
+	modelName, _ := model.(string)
+	errorCode, _ := c.Get(riskErrorCodeKey)
+	errorCodeValue, _ := errorCode.(string)
+	errorMessage, _ := c.Get(riskErrorMessageKey)
+	errorMessageValue, _ := errorMessage.(string)
+	eventTypeValue, _ := c.Get(riskEventTypeKey)
+	eventType, _ := eventTypeValue.(string)
+	upstreamStatus := riskUpstreamStatus(c)
+	if streamError, ok := service.GetOpsStreamError(c); ok {
+		if eventType == "" || eventType == "api_request" {
+			switch strings.ToLower(streamError.ErrType) {
+			case "upstream_error":
+				eventType = "upstream_error"
+			case "rate_limit_error", "billing_error":
+				eventType = "quota_exceeded"
+			default:
+				eventType = "api_error"
+			}
 		}
-		apiKey, _ := middleware2.GetAPIKeyFromContext(c)
-		model, _ := c.Get(opsModelKey)
-		modelName, _ := model.(string)
-		errorCode, _ := c.Get(riskErrorCodeKey)
-		errorCodeValue, _ := errorCode.(string)
-		errorMessage, _ := c.Get(riskErrorMessageKey)
-		errorMessageValue, _ := errorMessage.(string)
-		eventTypeValue, _ := c.Get(riskEventTypeKey)
-		eventType, _ := eventTypeValue.(string)
-		upstreamStatus := riskUpstreamStatus(c)
-		if streamError, ok := service.GetOpsStreamError(c); ok {
-			if eventType == "" || eventType == "api_request" {
-				switch strings.ToLower(streamError.ErrType) {
-				case "upstream_error":
-					eventType = "upstream_error"
-				case "rate_limit_error", "billing_error":
-					eventType = "quota_exceeded"
-				default:
-					eventType = "api_error"
-				}
-			}
-			if errorCodeValue == "" {
-				errorCodeValue = streamError.ErrType
-			}
-			if errorMessageValue == "" {
-				errorMessageValue = streamError.Message
-			}
+		if errorCodeValue == "" {
+			errorCodeValue = streamError.ErrType
 		}
 		if errorMessageValue == "" {
-			if value, ok := c.Get(service.OpsUpstreamErrorMessageKey); ok {
-				errorMessageValue, _ = value.(string)
-			}
+			errorMessageValue = streamError.Message
 		}
-		if errorCodeValue == "" && upstreamStatus > 0 {
-			errorCodeValue = "upstream_error"
+	}
+	if errorMessageValue == "" {
+		if value, ok := c.Get(service.OpsUpstreamErrorMessageKey); ok {
+			errorMessageValue, _ = value.(string)
 		}
-		if errorMessageValue == "" {
-			if c.Writer.Status() >= 400 {
-				errorMessageValue = "gateway request failed with HTTP " + strconv.Itoa(c.Writer.Status())
-			} else if eventType == "api_request" {
-				errorMessageValue = "gateway request completed"
-			}
+	}
+	if errorCodeValue == "" && upstreamStatus > 0 {
+		errorCodeValue = "upstream_error"
+	}
+	if errorMessageValue == "" {
+		if c.Writer.Status() >= 400 {
+			errorMessageValue = "gateway request failed with HTTP " + strconv.Itoa(c.Writer.Status())
+		} else if eventType == "api_request" {
+			errorMessageValue = "gateway request completed"
 		}
-		classifiedEventType, _ := classifyRiskEvent(RiskEventObservation{HTTPStatus: c.Writer.Status(), ErrorCode: errorCodeValue, UpstreamStatus: upstreamStatus})
-		if eventType == "" || (eventType == "api_error" && classifiedEventType != "api_request") {
-			eventType = classifiedEventType
+	}
+	classifiedEventType, _ := classifyRiskEvent(RiskEventObservation{HTTPStatus: c.Writer.Status(), ErrorCode: errorCodeValue, UpstreamStatus: upstreamStatus})
+	if eventType == "" || (eventType == "api_error" && classifiedEventType != "api_request") {
+		eventType = classifiedEventType
+	}
+	status := c.Writer.Status()
+	evidence := map[string]any{"http_status": status}
+	if upstreamStatus > 0 {
+		evidence["upstream_status"] = upstreamStatus
+	}
+	if errorMessageValue != "" {
+		evidence["error_present"] = true
+	}
+	username, accountStatus, emailHash := "", "", ""
+	if apiKey != nil && apiKey.User != nil {
+		username = apiKey.User.Username
+		accountStatus = apiKey.User.Status
+		emailHash = service.HashRiskValue(apiKey.User.Email)
+	}
+	endpoint := GetInboundEndpoint(c)
+	if endpoint == "" {
+		endpoint = c.Request.URL.Path
+	}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+	if requestID == "" {
+		if value, ok := c.Request.Context().Value(ctxkey.RequestID).(string); ok {
+			requestID = strings.TrimSpace(value)
 		}
-		status := c.Writer.Status()
-		evidence := map[string]any{"http_status": status}
-		if upstreamStatus > 0 {
-			evidence["upstream_status"] = upstreamStatus
-		}
-		if errorMessageValue != "" {
-			evidence["error_present"] = true
-		}
-		username, accountStatus, emailHash := "", "", ""
-		if apiKey != nil && apiKey.User != nil {
-			username = apiKey.User.Username
-			accountStatus = apiKey.User.Status
-			emailHash = service.HashRiskValue(apiKey.User.Email)
-		}
-		endpoint := GetInboundEndpoint(c)
-		if endpoint == "" {
-			endpoint = c.Request.URL.Path
-		}
-		requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
-		if requestID == "" {
-			if value, ok := c.Request.Context().Value(ctxkey.RequestID).(string); ok {
-				requestID = strings.TrimSpace(value)
-			}
-		}
-		if requestID == "" {
-			requestID = randomRiskEventID()
-		}
-		fallbackDevice := ""
-		if apiKey != nil && apiKey.ID > 0 {
-			fallbackDevice = "api-key:" + strconv.FormatInt(apiKey.ID, 10)
-		}
-		ipHash, deviceHash := riskAssociationHashes(c, fallbackDevice)
-		input := service.RiskEventReport{
-			EventKey:  requestID + ":risk:" + endpoint,
-			EventType: eventType, RiskType: eventType, UserID: subject.UserID,
-			UsernameSnapshot: username, AccountStatusSnapshot: accountStatus,
-			EmailHash: emailHash, IPHash: ipHash, DeviceHash: deviceHash, ErrorCode: errorCodeValue, Reason: errorMessageValue,
-			Endpoint: endpoint, Model: strings.TrimSpace(modelName), HTTPStatus: status,
-			Evidence: evidence, OccurredAt: time.Now().UTC(),
-		}
-		if len(banHandlers) == 0 || banHandlers[0] == nil {
-			go reportRiskEvent(client, input)
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
-		decision, err := client.EvaluateEvent(ctx, input)
-		cancel()
-		if err != nil {
-			slog.Warn("risk control decision failed", "error", err, "user_id", subject.UserID)
-			return
-		}
-		if shouldApplyRiskBan(decision) {
-			if err := banHandlers[0](context.Background(), subject.UserID, decision.Reason); err != nil {
-				slog.Warn("risk control auto-ban failed", "error", err, "user_id", subject.UserID)
-			}
+	}
+	if requestID == "" {
+		requestID = randomRiskEventID()
+	}
+	fallbackDevice := ""
+	if apiKey != nil && apiKey.ID > 0 {
+		fallbackDevice = "api-key:" + strconv.FormatInt(apiKey.ID, 10)
+	}
+	ipHash, deviceHash := riskAssociationHashes(c, fallbackDevice)
+	input := service.RiskEventReport{
+		EventKey:  requestID + ":risk:" + endpoint,
+		EventType: eventType, RiskType: eventType, UserID: subject.UserID,
+		UsernameSnapshot: username, AccountStatusSnapshot: accountStatus,
+		EmailHash: emailHash, IPHash: ipHash, DeviceHash: deviceHash, ErrorCode: errorCodeValue, Reason: errorMessageValue,
+		Endpoint: endpoint, Model: strings.TrimSpace(modelName), HTTPStatus: status,
+		Evidence: evidence, OccurredAt: time.Now().UTC(),
+	}
+	if len(banHandlers) == 0 || banHandlers[0] == nil {
+		go reportRiskEvent(client, input)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	decision, err := client.EvaluateEvent(ctx, input)
+	cancel()
+	if err != nil {
+		slog.Warn("risk control decision failed", "error", err, "user_id", subject.UserID)
+		return
+	}
+	if shouldApplyRiskBan(decision) {
+		if err := banHandlers[0](context.Background(), subject.UserID, decision.Reason); err != nil {
+			slog.Warn("risk control auto-ban failed", "error", err, "user_id", subject.UserID)
 		}
 	}
 }

@@ -7,43 +7,32 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CustomExtensionRoutes owns production-only proxies while keeping the
-// official route assemblers independent of custom path details.
-type CustomExtensionRoutes struct {
-	GatewayRiskEvents gin.HandlerFunc
-}
-
-// RegisterCustomExtensionRoutes registers all custom public/admin routes once
-// and returns the middleware hook consumed by the official gateway assembler.
+// RegisterCustomExtensionRoutes registers all custom public/admin routes once.
 func RegisterCustomExtensionRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
+	custom *handler.CustomExtensions,
 	adminAuth middleware.AdminAuthMiddleware,
 	auditLog middleware.AuditLogMiddleware,
 	settingService *service.SettingService,
-) *CustomExtensionRoutes {
+) {
 	admin := v1.Group("/admin")
 	admin.Use(gin.HandlerFunc(adminAuth))
 	admin.Use(gin.HandlerFunc(auditLog))
 	admin.Use(middleware.AdminComplianceGuard(settingService))
-	registerCustomAdminRoutes(admin, h)
+	registerCustomAdminRoutes(admin, h, custom)
 
 	public := v1.Group("/extensions-self")
-	public.GET("/homepage/*path", h.Auth.ProxyExtensionsHomepage)
-	public.HEAD("/homepage/*path", h.Auth.ProxyExtensionsHomepage)
+	homepageFrameHeaders := middleware.ExtensionsHomepageFrameHeaders()
+	public.GET("/homepage/*path", homepageFrameHeaders, h.Auth.ProxyExtensionsHomepage)
+	public.HEAD("/homepage/*path", homepageFrameHeaders, h.Auth.ProxyExtensionsHomepage)
 
-	return &CustomExtensionRoutes{
-		GatewayRiskEvents: handler.RiskEventMiddleware(
-			service.NewRiskControlClientFromEnv(),
-			h.Admin.User.ApplyRiskBan,
-		),
-	}
 }
 
-func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	admin.Group("/user-risk-control").Any("/*path", h.Admin.User.ProxyRiskControl)
-	admin.Group("/extensions-self/account-monitor").Any("/*path", h.Admin.User.ProxyAccountMonitor)
-	admin.POST("/users/:id/risk-status", h.Admin.User.SetRiskStatus)
+func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, custom *handler.CustomExtensions) {
+	admin.Group("/user-risk-control").Any("/*path", custom.AdminUser.ProxyRiskControl)
+	admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)
+	admin.POST("/users/:id/risk-status", custom.AdminUser.SetRiskStatus)
 	admin.GET("/system/custom-release/check", h.Admin.System.CheckCustomRelease)
 	admin.GET("/system/release", h.Admin.System.CurrentRelease)
 	admin.GET("/system/releases/rollback", h.Admin.System.ListRollbackReleases)

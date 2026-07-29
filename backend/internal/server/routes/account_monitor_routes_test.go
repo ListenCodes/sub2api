@@ -13,7 +13,7 @@ func TestAccountMonitorRoutesUseAdminAuthentication(t *testing.T) {
 	}
 	content := string(raw)
 	for _, required := range []string{
-		`admin.Group("/extensions-self/account-monitor").Any("/*path", h.Admin.User.ProxyAccountMonitor)`,
+		`admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)`,
 		`admin.Use(gin.HandlerFunc(adminAuth))`,
 		`admin.Use(gin.HandlerFunc(auditLog))`,
 		`admin.Use(middleware.AdminComplianceGuard(settingService))`,

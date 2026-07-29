@@ -189,9 +189,6 @@ func ProvideHandlers(
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
-	if authHandler != nil && adminHandlers != nil && adminHandlers.User != nil {
-		authHandler.SetRiskBanHandler(adminHandlers.User.ApplyRiskBan)
-	}
 	return &Handlers{
 		Auth:             authHandler,
 		User:             userHandler,
@@ -241,7 +238,7 @@ var ProviderSet = wire.NewSet(
 
 	// Admin handlers
 	admin.NewDashboardHandler,
-	admin.ProvideUserHandler,
+	admin.NewUserHandler,
 	admin.NewGroupHandler,
 	admin.ProvideAccountHandler,
 	admin.NewAnnouncementHandler,

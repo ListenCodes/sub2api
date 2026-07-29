@@ -12,7 +12,7 @@ function read(relativePath) {
 }
 
 test('compose wires the account monitor into the existing extensions-self service', () => {
-  for (const composeFile of ['deploy/docker-compose.custom.yml', 'deploy/docker-compose.local.yml']) {
+  for (const composeFile of ['deploy/docker-compose.custom.yml', 'deploy/docker-compose.custom.local.yml']) {
     const compose = read(composeFile)
     assert.equal((compose.match(/^  extensions-self:\s*$/gm) ?? []).length, 1)
     assert.doesNotMatch(compose, /^  account-monitor:\s*$/m)

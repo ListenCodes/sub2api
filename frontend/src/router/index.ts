@@ -11,7 +11,6 @@ import { useAdminComplianceStore } from '@/stores/adminCompliance'
 import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
-import { extensionRoutes } from '@/features/extensions/routes'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { resolveRouteDocumentTitle } from './title'
 
@@ -598,7 +597,6 @@ const routes: RouteRecordRaw[] = [
       requiresRiskControl: true
     }
   },
-  ...extensionRoutes,
   {
     path: '/admin/prompt-audit',
     name: 'AdminPromptAudit',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,7 @@ const repoRoot = resolve(deployRoot, '..')
 const basePath = resolve(deployRoot, 'docker-compose.yml')
 const overlayPath = resolve(deployRoot, 'docker-compose.custom.yml')
 const envPath = resolve(deployRoot, 'tests/fixtures/compose.env')
+const localOverlayPath = resolve(deployRoot, 'docker-compose.custom.local.yml')
 const stableBaseline = JSON.parse(
   readFileSync(resolve(deployRoot, 'stable-release-baseline.json'), 'utf8')
 )
@@ -64,6 +65,84 @@ test('custom production differences live only in the explicit overlay', () => {
   ]) {
     assert.match(overlay, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `overlay is missing ${marker}`)
   }
+})
+
+test('custom local differences live only in the explicit local overlay', () => {
+  const base = read('deploy/docker-compose.local.yml')
+  const overlay = read('deploy/docker-compose.custom.local.yml')
+
+  assert.equal(existsSync(localOverlayPath), true, 'custom local Compose overlay is missing')
+  assert.doesNotMatch(base, /RISK_CONTROL_|risk-control-postgres|extensions-self/)
+  for (const marker of [
+    'services:',
+    'sub2api:',
+    'RISK_CONTROL_URL:',
+    'RISK_CONTROL_INTERNAL_SECRET:',
+    'RISK_CONTROL_DECISION_FAIL_MODE:',
+    'risk-control-postgres:',
+    'extensions-self:',
+    'image: deploy-extensions-self',
+    'context: ../extensions-self',
+    './risk_control_postgres_data:/var/lib/postgresql/data:Z'
+  ]) {
+    assert.match(overlay, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `local overlay is missing ${marker}`)
+  }
+})
+
+test('custom local bootstrap writes private secrets without printing them', (t) => {
+  const scriptPath = resolve(deployRoot, 'ops/bootstrap-custom-local.sh')
+  assert.equal(existsSync(scriptPath), true, 'custom local bootstrap is missing')
+  const suffix = `${process.pid}-${Date.now()}`
+  const relativeEnvPath = `deploy/tests/.tmp-custom-local-${suffix}.env`
+  const absoluteEnvPath = resolve(repoRoot, relativeEnvPath)
+  const secrets = [
+    'fixture-postgres-secret',
+    'fixture-jwt-secret',
+    'fixture-totp-secret',
+    'fixture-risk-internal-secret',
+    'fixture-risk-postgres-secret'
+  ]
+
+  t.after(() => rmSync(absoluteEnvPath, { force: true }))
+  const result = spawnSync(process.env.BASH_BIN || 'bash', ['deploy/ops/bootstrap-custom-local.sh'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CUSTOM_LOCAL_ENV_FILE: relativeEnvPath,
+      CUSTOM_LOCAL_DOCKER_BIN: 'true',
+      CUSTOM_LOCAL_POSTGRES_PASSWORD: secrets[0],
+      CUSTOM_LOCAL_JWT_SECRET: secrets[1],
+      CUSTOM_LOCAL_TOTP_ENCRYPTION_KEY: secrets[2],
+      CUSTOM_LOCAL_RISK_CONTROL_INTERNAL_SECRET: secrets[3],
+      CUSTOM_LOCAL_RISK_CONTROL_POSTGRES_PASSWORD: secrets[4]
+    }
+  })
+  if (result.error?.code === 'ENOENT') {
+    t.skip('bash is unavailable')
+    return
+  }
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
+    `Custom local environment created at ${relativeEnvPath}`,
+    'Generated 5 secret values; values were not printed'
+  ])
+  const combinedOutput = `${result.stdout}\n${result.stderr}`
+  for (const secret of secrets) {
+    assert.doesNotMatch(combinedOutput, new RegExp(secret))
+    assert.match(readFileSync(absoluteEnvPath, 'utf8'), new RegExp(secret))
+  }
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(absoluteEnvPath).mode & 0o077, 0)
+  }
+
+  const script = read('deploy/ops/bootstrap-custom-local.sh')
+  assert.match(script, /chmod 600/)
+  assert.match(script, /docker-compose\.local\.yml/)
+  assert.match(script, /docker-compose\.custom\.local\.yml/)
+  assert.match(script, /--env-file/)
+  assert.match(script, /up -d/)
 })
 
 test('rendered Compose keeps the production service and identity contract', (t) => {

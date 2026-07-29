@@ -14,7 +14,11 @@ describe('AppSidebar custom SVG styles', () => {
     const navigation = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../features/extensions/navigation.ts'), 'utf8')
     expect(navigation).toContain('createExtensionAdminNavItems')
     expect(componentSource).not.toContain("label: '扩展中心'")
-    expect(componentSource).toContain('createExtensionAdminNavItems')
+    expect(componentSource.match(/createExtensionAdminNavItems/g)).toHaveLength(2)
+    expect(componentSource).toContain('...createExtensionAdminNavItems({ ShieldIcon, ChartIcon, FolderIcon })')
+    expect(componentSource).not.toContain('/admin/extensions/user-risk')
+    expect(componentSource).not.toContain('/admin/extensions/account-monitor')
+    expect(componentSource).not.toContain('/admin/extensions/group-monitor')
   })
 
   it('does not override uploaded SVG fill or stroke colors', () => {
@@ -51,7 +55,7 @@ describe('AppSidebar scroll position persistence', () => {
 
 describe('AppSidebar header styles', () => {
   it('combines the custom logo with the role-independent home navigation', () => {
-    expect(componentSource).toContain("const homePath = '/home'")
+    expect(componentSource).toContain("const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))")
     expect(componentSource).toContain(":src=\"siteLogo || '/logo.svg'\"")
     expect(componentSource.match(/:to=\"homePath\"/g)).toHaveLength(2)
     expect(componentSource.match(/@click=\"handleMenuItemClick\(homePath\)\"/g)).toHaveLength(2)

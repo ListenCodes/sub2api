@@ -29,8 +29,7 @@ func TestProxyRiskControlForwardsAuthenticatedAdminAndAllowlistedPath(t *testing
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "proxy-test-secret")
 
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.SetRiskControlClient(serviceClientFromEnvForTest())
+	h := NewCustomUserHandler(nil, nil, serviceClientFromEnvForTest())
 	engine := gin.New()
 	engine.GET("/admin/user-risk-control/*path", func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
@@ -49,8 +48,7 @@ func serviceClientFromEnvForTest() *service.RiskControlClient {
 }
 
 func TestProxyRiskControlRejectsUnallowlistedPath(t *testing.T) {
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.SetRiskControlClient(serviceClientFromEnvForTest())
+	h := NewCustomUserHandler(nil, nil, serviceClientFromEnvForTest())
 	engine := gin.New()
 	engine.GET("/admin/user-risk-control/*path", func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
@@ -106,8 +104,7 @@ func TestProxyRiskControlRejectsOversizedBodyWithoutCallingUpstream(t *testing.T
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "proxy-test-secret")
 
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.SetRiskControlClient(serviceClientFromEnvForTest())
+	h := NewCustomUserHandler(nil, nil, serviceClientFromEnvForTest())
 	engine := gin.New()
 	engine.POST("/admin/user-risk-control/*path", h.ProxyRiskControl)
 	request := httptest.NewRequest(http.MethodPost, "/admin/user-risk-control/rules", bytes.NewReader(make([]byte, maxRiskControlProxyBody+1)))
@@ -132,8 +129,7 @@ func TestProxyRiskControlPreservesUpstreamErrorBody(t *testing.T) {
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "proxy-test-secret")
 
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.SetRiskControlClient(serviceClientFromEnvForTest())
+	h := NewCustomUserHandler(nil, nil, serviceClientFromEnvForTest())
 	engine := gin.New()
 	engine.PUT("/admin/user-risk-control/*path", func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})

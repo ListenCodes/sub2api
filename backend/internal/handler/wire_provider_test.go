@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProvideHandlersWiresRiskBanHandler(t *testing.T) {
+func TestProvideHandlersLeavesCustomRiskWiringToBootstrap(t *testing.T) {
 	authHandler := &AuthHandler{}
 	adminHandlers := &AdminHandlers{User: &admin.UserHandler{}}
 
@@ -37,5 +37,9 @@ func TestProvideHandlersWiresRiskBanHandler(t *testing.T) {
 	)
 
 	require.Same(t, authHandler, handlers.Auth)
+	require.Nil(t, authHandler.riskBanHandler)
+
+	custom := NewCustomExtensions(handlers)
+	authHandler.SetRiskBanHandler(custom.AdminUser.ApplyRiskBan)
 	require.NotNil(t, authHandler.riskBanHandler)
 }

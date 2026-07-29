@@ -90,17 +90,9 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 				}
 			}
 		}
-		allowSameOriginFraming := isExtensionsHomepageRoute(c)
-		if allowSameOriginFraming {
-			finalPolicy = replaceDirectiveValues(finalPolicy, "frame-ancestors", "'self'")
-		}
 
 		c.Header("X-Content-Type-Options", "nosniff")
-		if allowSameOriginFraming {
-			c.Header("X-Frame-Options", "SAMEORIGIN")
-		} else {
-			c.Header("X-Frame-Options", "DENY")
-		}
+		c.Header("X-Frame-Options", "DENY")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		if isAPIRoutePath(c) {
 			c.Next()
@@ -121,18 +113,6 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 		}
 		c.Next()
 	}
-}
-
-func isExtensionsHomepageRoute(c *gin.Context) bool {
-	if c == nil || c.Request == nil || c.Request.URL == nil {
-		return false
-	}
-	if c.Request.Method != "GET" && c.Request.Method != "HEAD" {
-		return false
-	}
-	const homepagePath = "/api/v1/extensions-self/homepage"
-	path := c.Request.URL.Path
-	return path == homepagePath || strings.HasPrefix(path, homepagePath+"/")
 }
 
 func isAPIRoutePath(c *gin.Context) bool {
@@ -214,31 +194,4 @@ func addToDirective(policy, directive, value string) string {
 	// Insert value before the semicolon
 	insertPos := idx + endIdx
 	return policy[:insertPos] + " " + value + policy[insertPos:]
-}
-
-func replaceDirectiveValues(policy, directive string, values ...string) string {
-	directives := strings.Split(policy, ";")
-	replacement := strings.TrimSpace(directive + " " + strings.Join(values, " "))
-	replaced := false
-	result := make([]string, 0, len(directives)+1)
-
-	for _, rawDirective := range directives {
-		trimmed := strings.TrimSpace(rawDirective)
-		if trimmed == "" {
-			continue
-		}
-		fields := strings.Fields(trimmed)
-		if len(fields) > 0 && fields[0] == directive {
-			if !replaced {
-				result = append(result, replacement)
-				replaced = true
-			}
-			continue
-		}
-		result = append(result, trimmed)
-	}
-	if !replaced {
-		result = append(result, replacement)
-	}
-	return strings.Join(result, "; ")
 }

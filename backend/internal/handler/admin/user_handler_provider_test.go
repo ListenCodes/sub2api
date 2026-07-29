@@ -7,15 +7,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProvideUserHandlerWiresRuntimeDependencies(t *testing.T) {
+func TestCustomUserHandlerKeepsRuntimeDependenciesOutOfUserHandler(t *testing.T) {
 	t.Setenv("RISK_CONTROL_URL", "http://extensions-self:8090")
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "test-internal-secret")
 	authService := &service.AuthService{}
 	settingService := &service.SettingService{}
 
-	handler := ProvideUserHandler(nil, nil, nil, nil, nil, nil, settingService, authService)
+	base := NewUserHandler(nil, nil, nil, nil, nil, nil, settingService)
+	client := service.NewRiskControlClientFromEnv()
+	handler := NewCustomUserHandler(base, authService, client)
 
 	require.Same(t, authService, handler.authService)
-	require.Same(t, settingService, handler.settingService)
-	require.NotNil(t, handler.riskControlClient)
+	require.Same(t, settingService, base.settingService)
+	require.Same(t, client, handler.riskControlClient)
 }

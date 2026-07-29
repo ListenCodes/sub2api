@@ -102,7 +102,6 @@ func newKeyBillingRouteTestRouter(runMode string) (*gin.Engine, *keyBillingRoute
 		nil,
 		nil,
 		cfg,
-		func(c *gin.Context) { c.Next() },
 	)
 	return router, rateRepo, apiKey.Key
 }

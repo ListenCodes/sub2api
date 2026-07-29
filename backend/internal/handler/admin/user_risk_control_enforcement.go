@@ -12,7 +12,7 @@ import (
 // ApplyRiskBan is the only gateway-to-account enforcement callback. The main
 // service owns the user row and token revocation; the risk service never edits
 // the main database directly.
-func (h *UserHandler) ApplyRiskBan(ctx context.Context, userID int64, reason string) error {
+func (h *CustomUserHandler) ApplyRiskBan(ctx context.Context, userID int64, reason string) error {
 	if h == nil || h.adminService == nil || userID <= 0 {
 		return errors.New("risk ban handler is not configured")
 	}
