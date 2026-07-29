@@ -6,6 +6,7 @@ import i18n, { initI18n } from './i18n'
 import { useAppStore } from '@/stores/app'
 import { updateFavicon } from '@/utils/branding'
 import { isIOSDevice } from '@/utils/device'
+import { installExtensionRoutes } from '@/features/extensions/install'
 import './style.css'
 
 function initIOSViewportZoomFix() {
@@ -52,6 +53,7 @@ async function bootstrap() {
 
   await initI18n()
 
+  installExtensionRoutes(router)
   app.use(router)
   app.use(i18n)
 

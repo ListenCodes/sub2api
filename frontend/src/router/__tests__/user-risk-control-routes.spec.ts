@@ -2,15 +2,20 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import router from '@/router'
+import { installExtensionRoutes } from '@/features/extensions/install'
+
+installExtensionRoutes(router)
 
 describe('user risk control routes', () => {
   it('keeps extension routes and redirects in the dedicated module', () => {
     const source = readFileSync(resolve(__dirname, '../../features/extensions/routes.ts'), 'utf8')
     const routerSource = readFileSync(resolve(__dirname, '../index.ts'), 'utf8')
+    const mainSource = readFileSync(resolve(__dirname, '../../main.ts'), 'utf8')
     expect(source).toContain('extensionRoutes')
     expect(source).toContain('/admin/extensions')
     expect(routerSource).not.toContain("path: '/admin/extensions'")
-    expect(routerSource).toContain('extensionRoutes')
+    expect(routerSource).not.toContain('extensionRoutes')
+    expect(mainSource).toContain('installExtensionRoutes(router)')
   })
 
   it.each([

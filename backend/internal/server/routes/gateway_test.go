@@ -53,7 +53,6 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 		nil,
 		nil,
 		cfg,
-		func(c *gin.Context) { c.Next() },
 	)
 
 	return router

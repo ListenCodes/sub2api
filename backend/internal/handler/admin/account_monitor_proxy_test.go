@@ -58,8 +58,7 @@ func TestProxyAccountMonitorForwardsSignedAdminRequest(t *testing.T) {
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "01234567890123456789012345678901")
 
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.SetRiskControlClient(service.NewRiskControlClientFromEnv())
+	h := NewCustomUserHandler(nil, nil, service.NewRiskControlClientFromEnv())
 	engine := gin.New()
 	engine.GET("/api/v1/admin/extensions-self/account-monitor/*path", func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
@@ -82,8 +81,7 @@ func TestProxyAccountMonitorRejectsOversizedBodyWithoutCallingUpstream(t *testin
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
 	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "01234567890123456789012345678901")
 
-	h := NewUserHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.SetRiskControlClient(service.NewRiskControlClientFromEnv())
+	h := NewCustomUserHandler(nil, nil, service.NewRiskControlClientFromEnv())
 	engine := gin.New()
 	engine.PUT("/api/v1/admin/extensions-self/account-monitor/*path", h.ProxyAccountMonitor)
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/admin/extensions-self/account-monitor/thresholds", bytes.NewReader(make([]byte, maxRiskControlProxyBody+1)))

@@ -65,7 +65,7 @@ test('homepage clips decorative overflow at the document boundary', () => {
 })
 
 test('compose runs one extensions-self application container and preserves the risk database', () => {
-  for (const composeFile of ['deploy/docker-compose.custom.yml', 'deploy/docker-compose.local.yml']) {
+  for (const composeFile of ['deploy/docker-compose.custom.yml', 'deploy/docker-compose.custom.local.yml']) {
     const compose = read(composeFile)
     assert.match(compose, /^  extensions-self:\s*$/m)
     assert.match(compose, /container_name: extensions-self/)

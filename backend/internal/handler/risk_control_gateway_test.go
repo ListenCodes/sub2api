@@ -102,3 +102,60 @@ func TestRiskEventMiddlewareReportsAuthenticatedReadRequests(t *testing.T) {
 		t.Fatal("timed out waiting for risk event report")
 	}
 }
+
+func TestRiskEventMiddlewareWhenFiltersAfterDownstreamContext(t *testing.T) {
+	reports := make(chan service.RiskEventReport, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report service.RiskEventReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode risk event: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		reports <- report
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	t.Setenv("RISK_CONTROL_URL", server.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "test-risk-secret")
+
+	client := service.NewRiskControlClientFromEnv()
+	filter := func(c *gin.Context) bool {
+		apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+		return ok && apiKey != nil && apiKey.Group != nil
+	}
+
+	grouped := gin.New()
+	grouped.Use(RiskEventMiddlewareWhen(client, filter))
+	grouped.GET("/v1/models", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 99, Group: &service.Group{ID: 7}})
+		c.Status(http.StatusOK)
+	})
+	grouped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+
+	select {
+	case report := <-reports:
+		if report.UserID != 42 {
+			t.Fatalf("reported user_id = %d, want 42", report.UserID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for grouped risk event report")
+	}
+
+	ungrouped := gin.New()
+	ungrouped.Use(RiskEventMiddlewareWhen(client, filter))
+	ungrouped.GET("/v1/models", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 99})
+		c.Status(http.StatusOK)
+	})
+	ungrouped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+
+	select {
+	case report := <-reports:
+		t.Fatalf("unexpected ungrouped risk event report: %+v", report)
+	case <-time.After(150 * time.Millisecond):
+	}
+}

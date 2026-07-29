@@ -109,6 +109,13 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
+      - name: Fetch recorded Stable baseline
+        shell: bash
+        run: |
+          stable_tag="$(node -p "JSON.parse(require('fs').readFileSync('deploy/stable-release-baseline.json', 'utf8')).tag")"
+          stable_commit="$(node -p "JSON.parse(require('fs').readFileSync('deploy/stable-release-baseline.json', 'utf8')).commit_sha")"
+          git fetch --force --no-tags https://github.com/Wei-Shaw/sub2api.git "refs/tags/${stable_tag}:refs/tags/${stable_tag}"
+          test "$(git rev-parse "refs/tags/${stable_tag}^{commit}")" = "$stable_commit"
       - name: Deployment contracts
         run: node --test deploy/tests/*.test.mjs
       - name: Site bootstrap fixtures

@@ -16,7 +16,7 @@ const maxRiskControlProxyBody = 256 * 1024
 
 // ProxyRiskControl forwards only the allowlisted risk-control admin API after
 // the normal main-site admin middleware has authenticated the request.
-func (h *UserHandler) ProxyRiskControl(c *gin.Context) {
+func (h *CustomUserHandler) ProxyRiskControl(c *gin.Context) {
 	path := strings.TrimSuffix(c.Param("path"), "/")
 	if !allowedRiskControlPath(c.Request.Method, path) {
 		response.NotFound(c, "Risk control endpoint not found")
@@ -44,7 +44,7 @@ func (h *UserHandler) ProxyRiskControl(c *gin.Context) {
 
 // ProxyAccountMonitor forwards only the account-monitor admin API after the
 // main-site admin middleware has authenticated the request.
-func (h *UserHandler) ProxyAccountMonitor(c *gin.Context) {
+func (h *CustomUserHandler) ProxyAccountMonitor(c *gin.Context) {
 	path := strings.TrimSuffix(c.Param("path"), "/")
 	if !allowedAccountMonitorPath(c.Request.Method, path) {
 		response.NotFound(c, "Account monitor endpoint not found")
