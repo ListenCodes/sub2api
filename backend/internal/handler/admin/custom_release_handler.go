@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type customReleaseService interface {
 	CheckCustomRelease(context.Context, bool) (*service.CustomReleaseInfo, error)
+	CustomReleaseNoticeUnread(context.Context, int64, string) (bool, error)
+	MarkCustomReleaseNoticeRead(context.Context, int64, string) error
 	CurrentRelease(context.Context) (*service.ReleaseRecord, error)
 	ListRollbackReleases(context.Context) ([]service.ReleaseRecord, error)
 	PrepareUpdate(context.Context) (*service.UpdateJob, error)
@@ -21,6 +25,8 @@ type customReleaseService interface {
 	ApplyRollback(context.Context, string) (*service.UpdateJob, error)
 	GetUpdateStatus(context.Context, string) (*service.UpdateJob, error)
 }
+
+var customReleaseFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (h *SystemHandler) customReleaseService() (customReleaseService, error) {
 	custom, ok := h.updateSvc.(customReleaseService)
@@ -31,6 +37,11 @@ func (h *SystemHandler) customReleaseService() (customReleaseService, error) {
 }
 
 func (h *SystemHandler) CheckCustomRelease(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
 	custom, err := h.customReleaseService()
 	if err != nil {
 		response.Error(c, http.StatusServiceUnavailable, err.Error())
@@ -41,7 +52,45 @@ func (h *SystemHandler) CheckCustomRelease(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Success(c, info)
+	decorated := *info
+	if decorated.UpdateFingerprint != "" {
+		decorated.NoticeUnread, err = custom.CustomReleaseNoticeUnread(c.Request.Context(), subject.UserID, decorated.UpdateFingerprint)
+		if err != nil {
+			decorated.NoticeUnread = true
+			decorated.NoticeWarning = "update notice read state is unavailable"
+		}
+	}
+	response.Success(c, &decorated)
+}
+
+func (h *SystemHandler) MarkCustomReleaseRead(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+	custom, err := h.customReleaseService()
+	if err != nil {
+		response.Error(c, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	var request struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	fingerprint := strings.TrimSpace(request.Fingerprint)
+	if !customReleaseFingerprintPattern.MatchString(fingerprint) {
+		response.Error(c, http.StatusBadRequest, "invalid update fingerprint")
+		return
+	}
+	err = custom.MarkCustomReleaseNoticeRead(c.Request.Context(), subject.UserID, fingerprint)
+	response.Success(c, gin.H{
+		"fingerprint": fingerprint,
+		"persisted":   err == nil,
+	})
 }
 
 func (h *SystemHandler) CurrentRelease(c *gin.Context) {

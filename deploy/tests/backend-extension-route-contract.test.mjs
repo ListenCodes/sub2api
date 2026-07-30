@@ -26,6 +26,7 @@ test('custom backend routes have one dedicated registration boundary', () => {
   assert.match(registrar, /public\.GET\("\/homepage\/\*path"/)
   assert.match(registrar, /public\.HEAD\("\/homepage\/\*path"/)
   assert.match(registrar, /ExtensionsHomepageFrameHeaders/)
+  assert.match(registrar, /admin\.POST\("\/system\/custom-release\/read", h\.Admin\.System\.MarkCustomReleaseRead\)/)
 
   for (const file of [
     'backend/internal/server/routes/admin.go',
@@ -33,6 +34,7 @@ test('custom backend routes have one dedicated registration boundary', () => {
   ]) {
     const source = read(file)
     assert.doesNotMatch(source, /ProxyRiskControl|ProxyAccountMonitor|ProxyExtensionsHomepage/)
+    assert.doesNotMatch(source, /system\/custom-release\/read|MarkCustomReleaseRead/)
   }
 })
 

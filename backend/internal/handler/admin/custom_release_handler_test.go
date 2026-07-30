@@ -5,12 +5,16 @@ package admin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -18,19 +22,38 @@ import (
 
 type customReleaseHandlerServiceStub struct {
 	*systemHandlerUpdateServiceStub
-	customInfo          *service.CustomReleaseInfo
-	job                 *service.UpdateJob
-	prepareCall         int
-	applyCall           int
-	statusCall          int
-	current             *service.ReleaseRecord
-	releases            []service.ReleaseRecord
-	rollbackPrepareCall int
-	rollbackApplyCall   int
+	customInfo           *service.CustomReleaseInfo
+	job                  *service.UpdateJob
+	prepareCall          int
+	applyCall            int
+	statusCall           int
+	current              *service.ReleaseRecord
+	releases             []service.ReleaseRecord
+	rollbackPrepareCall  int
+	rollbackApplyCall    int
+	noticeUnread         bool
+	noticeReadErr        error
+	markNoticeReadErr    error
+	noticeUserIDs        []int64
+	noticeFingerprints   []string
+	markReadUserIDs      []int64
+	markReadFingerprints []string
 }
 
 func (s *customReleaseHandlerServiceStub) CheckCustomRelease(context.Context, bool) (*service.CustomReleaseInfo, error) {
 	return s.customInfo, nil
+}
+
+func (s *customReleaseHandlerServiceStub) CustomReleaseNoticeUnread(_ context.Context, userID int64, fingerprint string) (bool, error) {
+	s.noticeUserIDs = append(s.noticeUserIDs, userID)
+	s.noticeFingerprints = append(s.noticeFingerprints, fingerprint)
+	return s.noticeUnread, s.noticeReadErr
+}
+
+func (s *customReleaseHandlerServiceStub) MarkCustomReleaseNoticeRead(_ context.Context, userID int64, fingerprint string) error {
+	s.markReadUserIDs = append(s.markReadUserIDs, userID)
+	s.markReadFingerprints = append(s.markReadFingerprints, fingerprint)
+	return s.markNoticeReadErr
 }
 
 func (s *customReleaseHandlerServiceStub) PrepareUpdate(context.Context) (*service.UpdateJob, error) {
@@ -147,12 +170,132 @@ func TestCustomReleaseHandlerServesReleaseIdentityAndRollbackList(t *testing.T) 
 	}
 }
 
+func TestCustomReleaseCheckDecoratesPerAdminNotice(t *testing.T) {
+	fingerprint := strings.Repeat("a", 64)
+	stub := &customReleaseHandlerServiceStub{
+		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
+		customInfo: &service.CustomReleaseInfo{
+			HasUpdate:         true,
+			UpdateFingerprint: fingerprint,
+		},
+		noticeUnread: true,
+	}
+	router := newCustomReleaseHandlerTestRouter(stub, newMemoryIdempotencyRepoStub())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/custom-release/check", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []int64{41}, stub.noticeUserIDs)
+	require.Equal(t, []string{fingerprint}, stub.noticeFingerprints)
+	var envelope struct {
+		Data service.CustomReleaseInfo `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.True(t, envelope.Data.HasUpdate)
+	require.True(t, envelope.Data.NoticeUnread)
+	require.Empty(t, envelope.Data.NoticeWarning)
+}
+
+func TestCustomReleaseCheckNoticeFailureIsAdvisory(t *testing.T) {
+	fingerprint := strings.Repeat("b", 64)
+	stub := &customReleaseHandlerServiceStub{
+		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
+		customInfo: &service.CustomReleaseInfo{
+			HasUpdate:         true,
+			UpdateFingerprint: fingerprint,
+		},
+		noticeReadErr: errors.New("fixture state unavailable"),
+	}
+	router := newCustomReleaseHandlerTestRouter(stub, newMemoryIdempotencyRepoStub())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/custom-release/check", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Data service.CustomReleaseInfo `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.True(t, envelope.Data.HasUpdate)
+	require.True(t, envelope.Data.NoticeUnread)
+	require.NotEmpty(t, envelope.Data.NoticeWarning)
+}
+
+func TestCustomReleaseMarkReadValidatesAndIsolatesAdmins(t *testing.T) {
+	fingerprint := strings.Repeat("c", 64)
+	stub := &customReleaseHandlerServiceStub{systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{}}
+	router := newCustomReleaseHandlerTestRouter(stub, newMemoryIdempotencyRepoStub())
+
+	for _, test := range []struct {
+		name       string
+		body       string
+		userID     int64
+		noAuth     bool
+		wantStatus int
+	}{
+		{name: "invalid JSON", body: "{", userID: 41, wantStatus: http.StatusBadRequest},
+		{name: "invalid fingerprint", body: `{"fingerprint":"bad"}`, userID: 41, wantStatus: http.StatusBadRequest},
+		{name: "missing auth", body: `{"fingerprint":"` + fingerprint + `"}`, noAuth: true, wantStatus: http.StatusUnauthorized},
+		{name: "admin 41", body: `{"fingerprint":"` + fingerprint + `"}`, userID: 41, wantStatus: http.StatusOK},
+		{name: "admin 42", body: `{"fingerprint":"` + fingerprint + `"}`, userID: 42, wantStatus: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/custom-release/read", bytes.NewBufferString(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			if test.noAuth {
+				request.Header.Set("X-Test-No-Auth", "true")
+			} else if test.userID > 0 {
+				request.Header.Set("X-Test-User", strconv.FormatInt(test.userID, 10))
+			}
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			require.Equal(t, test.wantStatus, recorder.Code, recorder.Body.String())
+		})
+	}
+	require.Equal(t, []int64{41, 42}, stub.markReadUserIDs)
+	require.Equal(t, []string{fingerprint, fingerprint}, stub.markReadFingerprints)
+}
+
+func TestCustomReleaseMarkReadFailureIsAdvisory(t *testing.T) {
+	fingerprint := strings.Repeat("d", 64)
+	stub := &customReleaseHandlerServiceStub{
+		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
+		markNoticeReadErr:              errors.New("fixture write failed"),
+	}
+	router := newCustomReleaseHandlerTestRouter(stub, newMemoryIdempotencyRepoStub())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/custom-release/read", bytes.NewBufferString(`{"fingerprint":"`+fingerprint+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Data struct {
+			Fingerprint string `json:"fingerprint"`
+			Persisted   bool   `json:"persisted"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, fingerprint, envelope.Data.Fingerprint)
+	require.False(t, envelope.Data.Persisted)
+}
+
 func newCustomReleaseHandlerTestRouter(stub *customReleaseHandlerServiceStub, repo *memoryIdempotencyRepoStub) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	lock := service.NewSystemOperationLockService(repo, service.IdempotencyConfig{ProcessingTimeout: time.Second, SystemOperationTTL: time.Minute})
 	handler := NewSystemHandler(stub, lock)
 	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		if c.GetHeader("X-Test-No-Auth") != "true" {
+			userID := int64(41)
+			if raw := c.GetHeader("X-Test-User"); raw != "" {
+				userID, _ = strconv.ParseInt(raw, 10, 64)
+			}
+			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: userID})
+		}
+		c.Next()
+	})
 	router.GET("/api/v1/admin/system/custom-release/check", handler.CheckCustomRelease)
+	router.POST("/api/v1/admin/system/custom-release/read", handler.MarkCustomReleaseRead)
 	router.GET("/api/v1/admin/system/release", handler.CurrentRelease)
 	router.GET("/api/v1/admin/system/releases/rollback", handler.ListRollbackReleases)
 	router.POST("/api/v1/admin/system/update", handler.PrepareUpdate)

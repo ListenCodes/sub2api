@@ -34,6 +34,7 @@ func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, cust
 	admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)
 	admin.POST("/users/:id/risk-status", custom.AdminUser.SetRiskStatus)
 	admin.GET("/system/custom-release/check", h.Admin.System.CheckCustomRelease)
+	admin.POST("/system/custom-release/read", h.Admin.System.MarkCustomReleaseRead)
 	admin.GET("/system/release", h.Admin.System.CurrentRelease)
 	admin.GET("/system/releases/rollback", h.Admin.System.ListRollbackReleases)
 	admin.POST("/system/update/prepare", h.Admin.System.PrepareUpdate)
