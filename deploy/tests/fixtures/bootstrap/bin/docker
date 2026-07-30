@@ -23,7 +23,10 @@ if [[ "${1:-}" == compose ]]; then
     jq -n --arg main "$main" --arg extensions "$extensions" '{
       name:"deploy",
       services:{
-        sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/repo"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},
+        sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[
+          {type:"volume",source:"sub2api_data",target:"/app/data",read_only:false},
+          {type:"bind",source:"/opt/sub2api-custom/sync-trigger.sh",target:"/app/scripts/sync-upstream.sh",read_only:true}
+        ],networks:{"sub2api-network":{}}},
         "extensions-self":{image:$extensions,healthcheck:{test:["CMD","true"]},networks:{"sub2api-network":{}}},
         postgres:{},redis:{},"risk-control-postgres":{}
       },
