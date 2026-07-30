@@ -19,8 +19,6 @@ const (
 	defaultReleaseLedgerRoot          = "/app/data/release-ledger"
 	defaultReleaseRecordBackupRoot    = "/var/lib/docker/volumes/deploy_sub2api_data/_data/release-backups"
 	githubCustomRepo                  = "ListenCodes/sub2api"
-	customReleaseMainRepository       = "ghcr.io/listencodes/sub2api-custom"
-	customReleaseExtensionsRepository = "ghcr.io/listencodes/sub2api-extensions"
 
 	UpdateKindNone     = "none"
 	UpdateKindOfficial = "official"
@@ -85,9 +83,6 @@ type ChangedFile struct {
 var (
 	customReleaseMu                 sync.Mutex
 	customReleaseStartScript        = startCustomReleaseScript
-	customReleaseRollbackEligible   = rollbackReleaseRuntimeEligible
-	customReleaseSourceAvailable    = rollbackSourceAvailable
-	customReleaseImageAvailable     = rollbackImageAvailable
 	ErrUpdateDetectionIncomplete    = infraerrors.Conflict("UPDATE_DETECTION_INCOMPLETE", "release detection is incomplete; retry before preparing")
 	ErrRollbackReleaseInvalid       = infraerrors.BadRequest("ROLLBACK_RELEASE_INVALID", "rollback release is not eligible")
 	ErrReleaseOperationInconsistent = infraerrors.InternalServer("RELEASE_OPERATION_INCONSISTENT", "release operation state is inconsistent")
@@ -310,9 +305,7 @@ func (s *UpdateService) ListRollbackReleases(ctx context.Context) ([]ReleaseReco
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return newCustomReleaseLedgerStore().ListRollbackReleases(3, func(record *ReleaseRecord) bool {
-		return customReleaseRollbackEligible(ctx, s.githubClient, record)
-	})
+	return newCustomReleaseLedgerStore().ListRollbackReleases(3, nil)
 }
 
 func (s *UpdateService) PrepareRollback(ctx context.Context, releaseID string) (*UpdateJob, error) {
@@ -475,39 +468,6 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 		return job, nil
 	}
 	return nil, ErrRollbackReleaseInvalid
-}
-
-func rollbackReleaseRuntimeEligible(ctx context.Context, _ GitHubReleaseClient, record *ReleaseRecord) bool {
-	if record == nil || !customReleaseSourceAvailable(ctx, record.CustomCommit) {
-		return false
-	}
-	return customReleaseImageAvailable(ctx, customReleaseMainRepository+"@"+record.MainDigest) &&
-		customReleaseImageAvailable(ctx, customReleaseExtensionsRepository+"@"+record.ExtensionsDigest)
-}
-
-func rollbackSourceAvailable(ctx context.Context, commit string) bool {
-	repo := customReleaseEnv("SUB2API_REPO", "/repo")
-	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	return exec.CommandContext(
-		checkCtx,
-		"git",
-		"-c", "safe.directory="+repo,
-		"-C", repo,
-		"cat-file", "-e", commit+"^{commit}",
-	).Run() == nil
-}
-
-func rollbackImageAvailable(ctx context.Context, reference string) bool {
-	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if exec.CommandContext(checkCtx, "docker", "image", "inspect", reference).Run() == nil {
-		return true
-	}
-	if checkCtx.Err() != nil {
-		return false
-	}
-	return exec.CommandContext(checkCtx, "docker", "manifest", "inspect", reference).Run() == nil
 }
 
 func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) (*UpdateJob, error) {

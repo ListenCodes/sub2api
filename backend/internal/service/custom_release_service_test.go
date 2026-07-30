@@ -70,9 +70,6 @@ func configureCustomReleaseLedgerTestRoot(t *testing.T, root string) {
 	t.Helper()
 	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", root)
 	t.Setenv("SUB2API_RELEASE_BACKUP_ROOT", filepath.Join(root, "artifacts"))
-	previousEligibility := customReleaseRollbackEligible
-	customReleaseRollbackEligible = func(context.Context, GitHubReleaseClient, *ReleaseRecord) bool { return true }
-	t.Cleanup(func() { customReleaseRollbackEligible = previousEligibility })
 }
 
 func TestCustomReleaseJobsDefaultToLedgerOperations(t *testing.T) {
@@ -319,51 +316,29 @@ func TestCustomReleaseRollbackPrepareAndApplyUseCompleteSnapshot(t *testing.T) {
 	require.Equal(t, ReleaseStatusApplyQueued, applied.Status)
 }
 
-func TestCustomReleaseRollbackCandidatesDoNotLetUnavailableSnapshotsConsumeSlots(t *testing.T) {
-	configureCustomReleaseTestRuntime(t)
+func TestCustomReleaseRollbackCandidatesNeedNoRuntimeTools(t *testing.T) {
 	ledgerRoot := t.TempDir()
 	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 5, "2026-07-23T08:30:00Z")
-	unavailable := releaseLedgerTestRecord(ledgerRoot, "release-unavailable", 4, "2026-07-23T08:20:00Z")
-	first := releaseLedgerTestRecord(ledgerRoot, "release-first", 3, "2026-07-23T08:10:00Z")
-	second := releaseLedgerTestRecord(ledgerRoot, "release-second", 2, "2026-07-23T08:00:00Z")
-	third := releaseLedgerTestRecord(ledgerRoot, "release-third", 1, "2026-07-23T07:50:00Z")
+	release4 := releaseLedgerTestRecord(ledgerRoot, "release-4", 4, "2026-07-23T08:20:00Z")
+	release3 := releaseLedgerTestRecord(ledgerRoot, "release-3", 3, "2026-07-23T08:10:00Z")
+	release2 := releaseLedgerTestRecord(ledgerRoot, "release-2", 2, "2026-07-23T08:00:00Z")
+	release1 := releaseLedgerTestRecord(ledgerRoot, "release-1", 1, "2026-07-23T07:50:00Z")
 	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{
 		SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 5,
 		UpdatedAt: "2026-07-23T08:31:00Z",
-	}, current, unavailable, first, second, third)
-	configureCustomReleaseLedgerTestRoot(t, ledgerRoot)
-	customReleaseRollbackEligible = func(_ context.Context, _ GitHubReleaseClient, record *ReleaseRecord) bool {
-		return record.ReleaseID != unavailable.ReleaseID
-	}
+	}, current, release4, release3, release2, release1)
+	t.Setenv("SUB2API_RELEASE_LEDGER_ROOT", ledgerRoot)
+	t.Setenv("SUB2API_RELEASE_BACKUP_ROOT", filepath.Join(ledgerRoot, "artifacts"))
+	t.Setenv("SUB2API_REPO", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("PATH", t.TempDir())
 
 	releases, err := NewUpdateService(nil, nil, "0.1.164", "release").ListRollbackReleases(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []ReleaseRecord{first, second, third}, releases)
-}
-
-func TestRollbackReleaseRuntimeEligibilityRequiresSourceAndBothImages(t *testing.T) {
-	record := releaseLedgerTestRecord(t.TempDir(), "release-eligible", 1, "2026-07-23T08:00:00Z")
-	previousSourceAvailable := customReleaseSourceAvailable
-	previousImageAvailable := customReleaseImageAvailable
-	t.Cleanup(func() {
-		customReleaseSourceAvailable = previousSourceAvailable
-		customReleaseImageAvailable = previousImageAvailable
-	})
-
-	customReleaseSourceAvailable = func(context.Context, string) bool { return true }
-	customReleaseImageAvailable = func(_ context.Context, reference string) bool {
-		return reference == customReleaseMainRepository+"@"+record.MainDigest ||
-			reference == customReleaseExtensionsRepository+"@"+record.ExtensionsDigest
+	releaseIDs := make([]string, 0, len(releases))
+	for _, release := range releases {
+		releaseIDs = append(releaseIDs, release.ReleaseID)
 	}
-	require.True(t, rollbackReleaseRuntimeEligible(context.Background(), nil, &record))
-
-	customReleaseSourceAvailable = func(context.Context, string) bool { return false }
-	require.False(t, rollbackReleaseRuntimeEligible(context.Background(), nil, &record))
-	customReleaseSourceAvailable = func(context.Context, string) bool { return true }
-	customReleaseImageAvailable = func(_ context.Context, reference string) bool {
-		return reference != customReleaseExtensionsRepository+"@"+record.ExtensionsDigest
-	}
-	require.False(t, rollbackReleaseRuntimeEligible(context.Background(), nil, &record))
+	require.Equal(t, []string{"release-4", "release-3", "release-2"}, releaseIDs)
 }
 
 func TestCustomReleasePrepareIsIdempotentForSameOperationAndRejectsDifferentTarget(t *testing.T) {
