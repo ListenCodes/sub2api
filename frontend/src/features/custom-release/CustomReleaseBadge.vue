@@ -3,14 +3,15 @@
     <!-- Admin: Full version badge with dropdown -->
     <template v-if="isAdmin">
       <button
+        data-testid="custom-release-badge"
         @click="toggleDropdown"
         class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
         :class="[
-          hasUpdate
+          noticeUnread
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="noticeUnread ? t('version.updateAvailable') : t('version.currentVersion')"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -18,9 +19,14 @@
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
         ></span>
         <!-- Update indicator -->
-        <span v-if="hasUpdate" class="relative flex h-2 w-2">
+        <span
+          v-if="noticeUnread"
+          class="relative flex h-2 w-2"
+          data-testid="release-notice-indicator"
+        >
           <span
             class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"
+            data-testid="release-notice-ping"
           ></span>
           <span class="relative inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
         </span>
@@ -132,6 +138,12 @@
                 class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300"
               >
                 {{ t('version.updateDetectionIncomplete') }}: {{ updateWarning }}
+              </div>
+              <div
+                v-if="noticeWarning"
+                class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300"
+              >
+                {{ noticeWarning }}
               </div>
 
               <!-- Priority 1: Durable release job progress -->
@@ -532,15 +544,17 @@
                 <transition name="rollback">
                   <div v-if="rollbackPanelOpen" class="mt-2">
                     <ReleaseRollbackPanel
-                      v-if="isReleaseBuild && currentReleaseIdentity"
-                      v-model:selected="selectedRollbackVersion"
+                      v-if="isReleaseBuild"
                       :current="currentReleaseIdentity"
                       :releases="rollbackReleases"
                       :operation="rollbackOperation"
-                      :loading="rollbackVersionsLoading || rollingBack"
-                      :error="rollbackVersionsError || rollbackError"
+                      :current-loading="currentReleaseLoading"
+                      :history-loading="rollbackVersionsLoading || rollingBack"
+                      :error="rollbackPanelError"
+                      @retry="handleRollbackRetry"
                       @prepare="handlePrepareRollback"
                       @apply="handleApplyRollback"
+                      @expired="handleRollbackExpired"
                     />
                     <p
                       v-else-if="!isReleaseBuild"
@@ -721,6 +735,9 @@ const currentVersion = computed(() => appStore.currentVersion || props.version |
 const currentReleaseIdentity = computed<ReleaseIdentity | null>(() => appStore.currentRelease || null)
 const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
+const noticeUnread = computed(() => appStore.noticeUnread === true)
+const updateFingerprint = computed(() => appStore.updateFingerprint || '')
+const noticeWarning = computed(() => appStore.noticeWarning || '')
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
 const updateKind = computed(() => appStore.updateKind || 'none')
@@ -729,6 +746,7 @@ const targetOfficialVersion = computed(() => appStore.targetOfficialVersion || '
 const targetCustomVersion = computed(() => appStore.targetCustomVersion || '')
 const detectionComplete = computed(() => appStore.detectionComplete)
 const updateWarning = computed(() => appStore.updateWarning || '')
+const currentReleaseLoading = computed(() => appStore.currentReleaseLoading === true)
 const canPrepareUpdate = computed(
   () =>
     detectionComplete.value &&
@@ -775,19 +793,41 @@ const rollbackReleases = ref<ReleaseIdentity[]>([])
 const rollbackOperation = ref<UpdateJob | null>(null)
 const rollbackVersionsLoading = ref(false)
 const rollbackVersionsError = ref('')
-const selectedRollbackVersion = ref('')
 const preparedRollbackJobID = ref('')
 const rollingBack = ref(false)
 const rollbackError = ref('')
+const rollbackPanelError = computed(
+  () => appStore.currentReleaseError || rollbackVersionsError.value || rollbackError.value
+)
+const lastAcknowledgedFingerprint = ref('')
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
 
 function toggleDropdown() {
-  if (!dropdownOpen.value) {
+  const opening = !dropdownOpen.value
+  if (opening) {
     resetTerminalUpdateFeedback()
   }
-  dropdownOpen.value = !dropdownOpen.value
+  dropdownOpen.value = opening
+  if (opening) void acknowledgeCurrentNotice()
+}
+
+async function acknowledgeCurrentNotice(): Promise<void> {
+  const fingerprint = updateFingerprint.value
+  if (
+    !noticeUnread.value ||
+    !fingerprint ||
+    lastAcknowledgedFingerprint.value === fingerprint
+  ) {
+    return
+  }
+  lastAcknowledgedFingerprint.value = fingerprint
+  try {
+    await appStore.markCurrentNoticeRead?.()
+  } catch {
+    // Notice persistence is advisory and must not block release operations.
+  }
 }
 
 function closeDropdown() {
@@ -859,6 +899,7 @@ function resetTerminalUpdateFeedback() {
 async function handleUpdate() {
   if (updating.value) return
 
+  await acknowledgeCurrentNotice()
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
@@ -892,6 +933,7 @@ async function handleUpdate() {
 async function handleApply() {
   if (applying.value || !preparedJobID.value) return
 
+  await acknowledgeCurrentNotice()
   applying.value = true
   updateError.value = ''
   try {
@@ -1047,7 +1089,7 @@ async function finishRollbackSuccess(status: UpdateJob) {
   await appStore.fetchCurrentRelease?.()
 }
 
-function finishRollbackFailure(status: UpdateJob) {
+async function finishRollbackFailure(status: UpdateJob) {
   stopUpdatePolling()
   localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
   rollbackOperation.value = status
@@ -1056,6 +1098,10 @@ function finishRollbackFailure(status: UpdateJob) {
   updating.value = false
   rollbackError.value = status.message || t('version.rollbackFailed')
   rollbackMessage.value = status.rollback?.attempted ? status.rollback.message : ''
+  if (status.status === 'expired') {
+    rollbackOperation.value = null
+    await Promise.all([appStore.fetchCurrentRelease?.(), loadRollbackVersions()])
+  }
 }
 
 async function pollUpdateStatus(jobID: string) {
@@ -1069,7 +1115,7 @@ async function pollUpdateStatus(jobID: string) {
       rollbackOperation.value = status
       if (status.status === 'prepared') finishRollbackPrepared(status)
       else if (status.status === 'success') await finishRollbackSuccess(status)
-      else if (isTerminalUpdateStatus(status.status)) finishRollbackFailure(status)
+      else if (isTerminalUpdateStatus(status.status)) await finishRollbackFailure(status)
       return
     }
     if (status.status === 'prepared') {
@@ -1134,7 +1180,6 @@ function resetRollbackState() {
   rollbackReleases.value = []
   rollbackOperation.value = null
   rollbackVersionsError.value = ''
-  selectedRollbackVersion.value = ''
   rollbackError.value = ''
 }
 
@@ -1167,8 +1212,18 @@ async function loadRollbackVersions() {
   }
 }
 
+async function handleRollbackRetry() {
+  rollbackError.value = ''
+  rollbackVersionsError.value = ''
+  if (rollbackOperation.value && isTerminalUpdateStatus(rollbackOperation.value.status)) {
+    rollbackOperation.value = null
+  }
+  await Promise.all([appStore.fetchCurrentRelease?.(), loadRollbackVersions()])
+}
+
 async function handlePrepareRollback(releaseID: string) {
   if (!isAdmin.value || rollingBack.value) return
+  await acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
   try {
@@ -1184,6 +1239,7 @@ async function handlePrepareRollback(releaseID: string) {
 
 async function handleApplyRollback(jobID: string) {
   if (!isAdmin.value || rollingBack.value) return
+  await acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
   try {
@@ -1195,6 +1251,21 @@ async function handleApplyRollback(jobID: string) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
     rollingBack.value = false
+  }
+}
+
+async function handleRollbackExpired(jobID: string) {
+  if (!isAdmin.value || rollingBack.value) return
+  await acknowledgeCurrentNotice()
+  rollingBack.value = true
+  rollbackError.value = ''
+  try {
+    const queued = await applyRollback(jobID)
+    rollbackOperation.value = queued
+    startUpdatePolling(queued.job_id, queued)
+  } catch {
+    rollingBack.value = false
+    startUpdatePolling(jobID)
   }
 }
 

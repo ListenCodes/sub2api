@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VersionBadge from '@/features/custom-release/CustomReleaseBadge.vue'
 
@@ -9,13 +10,19 @@ const mocks = vi.hoisted(() => ({
     currentVersion: '0.1.152',
     latestVersion: '0.1.153',
     hasUpdate: true,
+    noticeUnread: true,
+    updateFingerprint: 'f'.repeat(64),
+    noticeWarning: '',
     releaseInfo: undefined,
     buildType: 'source',
     currentRelease: null as Record<string, unknown> | null,
+    currentReleaseLoading: false,
+    currentReleaseError: '',
     targetOfficialVersion: '',
     targetCustomVersion: '',
     fetchVersion: vi.fn(),
     fetchCurrentRelease: vi.fn(),
+    markCurrentNoticeRead: vi.fn(),
     clearVersionCache: vi.fn()
   },
   prepareUpdate: vi.fn(),
@@ -32,9 +39,11 @@ vi.mock('@/stores', () => ({
   useAuthStore: () => mocks.authStore
 }))
 
-vi.mock('@/features/custom-release/store', () => ({
-  useCustomReleaseStore: () => mocks.appStore
-}))
+vi.mock('@/features/custom-release/store', async () => {
+  const { reactive } = await import('vue')
+  mocks.appStore = reactive(mocks.appStore)
+  return { useCustomReleaseStore: () => mocks.appStore }
+})
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key })
@@ -62,6 +71,9 @@ describe('VersionBadge conflict reporting', () => {
     vi.clearAllMocks()
     localStorage.clear()
     mocks.appStore.hasUpdate = true
+    mocks.appStore.noticeUnread = true
+    mocks.appStore.updateFingerprint = 'f'.repeat(64)
+    mocks.appStore.noticeWarning = ''
     mocks.appStore.buildType = 'release'
     mocks.appStore.updateKind = 'official'
     mocks.appStore.detectionComplete = true
@@ -80,11 +92,122 @@ describe('VersionBadge conflict reporting', () => {
       extensions_digest: `sha256:${'2'.repeat(64)}`,
       published_at: '2026-07-24T00:00:00Z'
     }
+    mocks.appStore.currentReleaseLoading = false
+    mocks.appStore.currentReleaseError = ''
+    mocks.appStore.markCurrentNoticeRead.mockImplementation(async () => {
+      mocks.appStore.noticeUnread = false
+    })
     mocks.getUpdateStatus.mockRejectedValueOnce({ response: { status: 404 } })
   })
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('uses unread state only for the collapsed amber styling and indicator', async () => {
+    mocks.appStore.noticeUnread = false
+    const acknowledged = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    const acknowledgedBadge = acknowledged.get('[data-testid="custom-release-badge"]')
+    expect(acknowledgedBadge.classes()).not.toContain('bg-amber-100')
+    expect(acknowledged.find('[data-testid="release-notice-indicator"]').exists()).toBe(false)
+    await acknowledgedBadge.trigger('click')
+    expect(acknowledged.text()).toContain('version.latestVersion')
+    acknowledged.unmount()
+
+    mocks.appStore.noticeUnread = true
+    const unread = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    const unreadBadge = unread.get('[data-testid="custom-release-badge"]')
+    expect(unreadBadge.classes()).toContain('bg-amber-100')
+    expect(unread.get('[data-testid="release-notice-indicator"]').exists()).toBe(true)
+    expect(unread.get('[data-testid="release-notice-ping"]').classes()).toContain('animate-ping')
+    unread.unmount()
+  })
+
+  it('acknowledges one fingerprint once and permits a new target', async () => {
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    const badge = wrapper.get('[data-testid="custom-release-badge"]')
+
+    await badge.trigger('click')
+    await flushPromises()
+    await badge.trigger('click')
+    await badge.trigger('click')
+    await flushPromises()
+    expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(1)
+
+    await badge.trigger('click')
+    mocks.appStore.updateFingerprint = 'e'.repeat(64)
+    mocks.appStore.noticeUnread = true
+    await nextTick()
+    await badge.trigger('click')
+    await flushPromises()
+    expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('acknowledges a new target before update preparation', async () => {
+    mocks.prepareUpdate.mockResolvedValue({
+      job_id: 'update-order',
+      status: 'resolving_target',
+      message: 'queued',
+      need_restart: false
+    })
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+    await flushPromises()
+    mocks.appStore.updateFingerprint = 'd'.repeat(64)
+    mocks.appStore.noticeUnread = true
+    mocks.appStore.markCurrentNoticeRead.mockRejectedValueOnce(new Error('notice write failed'))
+    await nextTick()
+
+    const updateButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('version.updateNow'))
+    await updateButton!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(2)
+    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.prepareUpdate.mock.invocationCallOrder[0]
+    )
+    expect(mocks.prepareUpdate).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('renders current release errors and retries identity plus history', async () => {
+    mocks.appStore.currentRelease = null
+    mocks.appStore.currentReleaseError = 'current release unavailable'
+    mocks.getRollbackReleases.mockRejectedValue(new Error('history unavailable'))
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+    await wrapper.get('[data-testid="rollback-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="rollback-error"]').text()).toContain('current release unavailable')
+    await wrapper.get('[data-testid="rollback-retry"]').trigger('click')
+    await flushPromises()
+    expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(2)
+    expect(mocks.getRollbackReleases).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
   })
 
   it('shows conflicted files and production safety state after a failed update', async () => {
@@ -307,10 +430,16 @@ describe('VersionBadge conflict reporting', () => {
       .findAll('button')
       .find((button) => button.text().includes('version.confirmUpdate'))
     expect(confirmButton).toBeDefined()
+    mocks.appStore.updateFingerprint = 'c'.repeat(64)
+    mocks.appStore.noticeUnread = true
+    await nextTick()
     await confirmButton!.trigger('click')
     await flushPromises()
 
     expect(mocks.applyUpdate).toHaveBeenCalledWith('update-prepared')
+    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.applyUpdate.mock.invocationCallOrder[0]
+    )
     wrapper.unmount()
   })
 
@@ -422,10 +551,16 @@ describe('VersionBadge conflict reporting', () => {
 
     expect(wrapper.find('[data-testid="rollback-panel"]').exists()).toBe(true)
     await wrapper.find('[data-testid="rollback-panel"] button').trigger('click')
+    mocks.appStore.updateFingerprint = 'b'.repeat(64)
+    mocks.appStore.noticeUnread = true
+    await nextTick()
     await wrapper.find('[data-testid="prepare-rollback"]').trigger('click')
     await flushPromises()
 
     expect(mocks.prepareRollback).toHaveBeenCalledWith('release-target')
+    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.prepareRollback.mock.invocationCallOrder[0]
+    )
     expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -471,11 +606,71 @@ describe('VersionBadge conflict reporting', () => {
 
     expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(true)
     expect(mocks.applyUpdate).not.toHaveBeenCalled()
+    mocks.appStore.updateFingerprint = 'a'.repeat(64)
+    mocks.appStore.noticeUnread = true
+    await nextTick()
     await wrapper.find('[data-testid="confirm-rollback"]').trigger('click')
     await flushPromises()
 
     expect(mocks.applyRollback).toHaveBeenCalledWith('rollback-prepared')
+    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.applyRollback.mock.invocationCallOrder[0]
+    )
     expect(mocks.applyUpdate).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('settles local rollback expiry through the server refusal path and reloads identity', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T00:00:00Z'))
+    const target = {
+      release_id: 'release-target',
+      official_version: 'v0.1.162',
+      official_commit: 'c'.repeat(40),
+      custom_version: 'v1.0.3',
+      custom_version_sequence: 3,
+      custom_commit: 'd'.repeat(40),
+      published_at: '2026-07-22T00:00:00Z'
+    }
+    const prepared = {
+      job_id: 'rollback-expiring',
+      operation_kind: 'rollback',
+      action: 'prepare',
+      status: 'prepared',
+      message: 'prepared',
+      need_restart: false,
+      target_release_id: target.release_id,
+      expires_at: '2026-07-30T00:00:02Z'
+    }
+    mocks.getRollbackReleases.mockResolvedValue([target])
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({
+        ...prepared,
+        status: 'expired',
+        message: 'prepared rollback expired'
+      })
+    mocks.applyRollback.mockRejectedValue(new Error('prepared rollback expired'))
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+    await wrapper.find('[data-testid="rollback-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(2_500)
+    await flushPromises()
+
+    expect(mocks.applyRollback).toHaveBeenCalledWith('rollback-expiring')
+    expect(mocks.getUpdateStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="rollback-target-pair"]')).toHaveLength(1)
     wrapper.unmount()
   })
 })
