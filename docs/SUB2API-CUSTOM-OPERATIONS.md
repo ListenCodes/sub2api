@@ -280,6 +280,17 @@ systemd units 的校验备份位于
 `release-host-backups/20260730T090022Z-stage-a-7aadd0b68/`。因此 Stage B 可以推进
 `origin/custom-release`，但没有单独生产授权时必须继续停留在“代码已推送、生产未部署”。
 
+2026-07-30 随后由管理员完成 Stage B 两阶段确认。生产 release
+`release-candidate-20260730T100420651606255Z-5152cebe8` 已运行
+`5152cebe82e505adf20a3f75d32276b9ae9c5a74`（`v0.1.168 / v1.0.13`），主应用和扩展
+OCI revision 均为该 commit。运行中 `sub2api` 只剩数据卷和只读 trigger 两个挂载，源码、
+Docker socket 和 Docker binary 挂载均不存在。最终 21 个宿主脚本和两个 systemd unit 已从该
+commit 重新安装并逐文件比较；严格 validator 已实测接受两挂载并拒绝旧五挂载，宿主专用
+`health-monitor.sh` 保持不变。安装前校验备份位于
+`release-host-backups/20260730T102758Z-stage-b-5152cebe8/`，其中 `SHA256SUMS` 已通过。
+完成后 ledger 无活动任务，release service 为 inactive、path 为 enabled + active，发布锁可取得，
+五个 Compose 服务及内外 `/health` 均正常；本次未执行回退。
+
 清理统一采用以下口径：
 
 - `release-ledger/` 和兼容期 `release-jobs/` 保留完整审计历史。

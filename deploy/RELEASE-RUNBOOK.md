@@ -107,6 +107,26 @@ The verified pre-install host backup is
 Stage B to advance to `origin/custom-release`; it does not authorize or imply a
 Stage B production deployment.
 
+Stage B completion evidence recorded on 2026-07-30: administrator operation
+`update-1785405836400402256-93cdff8e4745a591` applied production release
+`release-candidate-20260730T100420651606255Z-5152cebe8` at commit
+`5152cebe82e505adf20a3f75d32276b9ae9c5a74` (`v0.1.168` / `v1.0.13`). The
+running main and extensions OCI revisions match that commit and use digests
+`sha256:6e97ac9a7d089acdfac47c54460c972e167d3fd058fcac8a8aaac59c875f470e`
+and `sha256:80ecba1351e2e79d435c719f34857a8ee6492a8d31d671e0d6e871fc348df6f3`.
+The live Web container has only the data volume and read-only trigger bind;
+the source checkout, Docker socket, and Docker binary mounts are absent.
+
+The final 21 host scripts and both units were backed up, installed from the
+deployed commit, syntax-checked, and byte-compared. The strict validator accepts
+the reduced live rendering and rejects a synthetic legacy rendering. The
+verified pre-install backup is
+`release-host-backups/20260730T102758Z-stage-b-5152cebe8/`; the host-only
+`health-monitor.sh` was preserved. After maintenance the ledger has no active
+operation, the service is inactive, the path watcher is enabled and active,
+the lock is available, all five Compose services are healthy, and internal and
+public health checks pass. No rollback was executed.
+
 Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
