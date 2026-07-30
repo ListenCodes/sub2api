@@ -26,7 +26,7 @@ write_target() {
   printf 'SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@%s\nEXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@%s\n' \
     "$main" "$ext" > "$dir/target/.env"
   jq -n --arg main "ghcr.io/listencodes/sub2api-custom@$main" --arg ext "ghcr.io/listencodes/sub2api-extensions@$ext" '
-    {name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data"},{target:"/repo"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},
+    {name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh"},{target:"/repo"},{target:"/usr/bin/docker"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},
     "extensions-self":{image:$ext,healthcheck:{},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},
     volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}
   ' > "$dir/target/rendered-compose.json"
@@ -111,7 +111,7 @@ if [[ "${1:-}" == compose ]]; then
     main="$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file")"
     ext="$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file")"
     jq -n --arg main "$main" --arg ext "$ext" '
-      {name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data"},{target:"/repo"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},
+      {name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh"},{target:"/repo"},{target:"/usr/bin/docker"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},
       "extensions-self":{image:$ext,healthcheck:{},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},
       volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
   fi

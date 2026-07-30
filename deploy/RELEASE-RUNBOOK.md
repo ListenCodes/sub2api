@@ -61,6 +61,22 @@ the normal validation and paired-image gates.
 
 ## Versioned Host Operations
 
+### Stage A Web mount transition
+
+Before removing the Web container's source and Docker mounts, deploy a Stage A
+release whose installed `release-common.sh` accepts exactly either the legacy
+five-target Web mount set or the reduced data-plus-trigger set. This temporary
+dual-shape validator exists only so the host can prepare the later reduced
+Compose snapshot without rejecting it. Stage A does not change
+`deploy/docker-compose.custom.yml`; production therefore remains on the legacy
+mount shape until that release has completed and the versioned scripts have
+been synchronized separately into `/opt/sub2api-custom/`.
+
+Do not advance the reduced-mount release to production until the Stage A
+release, its paired images, the production ledger state, and the installed
+script copy have all been verified. The final reduced-mount release must replace
+this transition predicate with a strict reduced-shape check.
+
 Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
