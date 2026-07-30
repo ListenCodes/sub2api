@@ -8,6 +8,7 @@ import {
   isTerminalUpdateStatus,
   updateNeedsRestart,
   updateWasPublished,
+  markCustomReleaseRead,
   type UpdateJob,
   type UpdateJobStatus
 } from '@/features/custom-release/api'
@@ -17,17 +18,35 @@ afterEach(() => {
 })
 
 describe('upstream preparation jobs', () => {
+  it('acknowledges the exact custom release fingerprint', async () => {
+    const fingerprint = 'a'.repeat(64)
+    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
+      data: { fingerprint, persisted: true }
+    })
+
+    await expect(markCustomReleaseRead(fingerprint)).resolves.toEqual({
+      fingerprint,
+      persisted: true
+    })
+    expect(post).toHaveBeenCalledWith('/admin/system/custom-release/read', { fingerprint })
+  })
+
 	it('exposes proposed official and custom versions from detection', async () => {
 		const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: {
 			current_version: '0.1.164', latest_version: '0.1.165', has_update: true,
 			build_type: 'release', update_kind: 'combined', official_update: true,
 			custom_update: true, docs_only: false, runtime_update: true, detection_complete: true,
-			target_official_version: 'v0.1.165', target_custom_version: 'v1.0.6'
+			target_official_version: 'v0.1.165', target_official_commit: 'a'.repeat(40),
+			target_custom_version: 'v1.0.6', update_fingerprint: 'b'.repeat(64),
+			notice_unread: true
 		} })
 		const { checkUpdates } = await import('@/features/custom-release/api')
 		const result = await checkUpdates()
 		expect(result.target_official_version).toBe('v0.1.165')
 		expect(result.target_custom_version).toBe('v1.0.6')
+		expect(result.target_official_commit).toBe('a'.repeat(40))
+		expect(result.update_fingerprint).toBe('b'.repeat(64))
+		expect(result.notice_unread).toBe(true)
 		expect(get).toHaveBeenCalled()
 	})
 	it('uses separate prepare and apply endpoints with independent idempotency keys', async () => {

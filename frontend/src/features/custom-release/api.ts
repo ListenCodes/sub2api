@@ -29,9 +29,13 @@ export interface VersionInfo {
   production_stable_tag?: string
   production_stable_commit?: string
   target_official_version?: string
+  target_official_commit?: string
   target_custom_version?: string
   target_custom_commit?: string
   target_custom_short_sha?: string
+  update_fingerprint?: string
+  notice_unread: boolean
+  notice_warning?: string
   release_tag?: string
   custom_scope_error?: string
 }
@@ -49,6 +53,11 @@ export interface ReleaseIdentity {
 export type ReleaseOperationKind = 'update' | 'rollback'
 export type ReleaseOperationAction = 'prepare' | 'apply'
 
+export interface NoticeReadResult {
+  fingerprint: string
+  persisted: boolean
+}
+
 /**
  * Get current version
  */
@@ -64,6 +73,13 @@ export async function getVersion(): Promise<{ version: string }> {
 export async function checkUpdates(force = false): Promise<VersionInfo> {
   const { data } = await apiClient.get<VersionInfo>('/admin/system/custom-release/check', {
     params: force ? { force: 'true' } : undefined
+  })
+  return data
+}
+
+export async function markCustomReleaseRead(fingerprint: string): Promise<NoticeReadResult> {
+  const { data } = await apiClient.post<NoticeReadResult>('/admin/system/custom-release/read', {
+    fingerprint
   })
   return data
 }
@@ -118,6 +134,12 @@ export interface UpdateJob {
   message: string
   base_release_id?: string
   target_release_id?: string
+  current_official_version?: string
+  current_custom_version?: string
+  target_official_version?: string
+  target_custom_version?: string
+  proposed_custom_sequence?: number
+  advances_custom_version?: boolean
   integration_branch?: string
   base_commit?: string
   target_commit?: string
@@ -246,6 +268,7 @@ export async function restartService(): Promise<{ message: string }> {
 export const systemAPI = {
   getVersion,
   checkUpdates,
+  markCustomReleaseRead,
   prepareUpdate,
   applyUpdate,
   getUpdateStatus,

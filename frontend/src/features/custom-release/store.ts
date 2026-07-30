@@ -6,6 +6,7 @@ import {
   type UpdateKind,
   type VersionInfo,
   getCurrentRelease,
+  markCustomReleaseRead,
   type ReleaseIdentity
 } from './api'
 
@@ -34,9 +35,17 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
   const currentReleaseID = ref('')
   const currentRelease = ref<ReleaseIdentity | null>(null)
   const targetOfficialVersion = ref('')
+  const targetOfficialCommit = ref('')
   const targetCustomVersion = ref('')
+  const updateFingerprint = ref('')
+  const noticeUnread = ref(false)
+  const noticeWarning = ref('')
+  const currentReleaseLoading = ref(false)
+  const currentReleaseError = ref('')
 
   async function fetchCurrentRelease(): Promise<ReleaseIdentity | null> {
+    currentReleaseLoading.value = true
+    currentReleaseError.value = ''
     try {
       const identity = await getCurrentRelease()
       currentRelease.value = identity
@@ -45,7 +54,16 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
       currentReleaseID.value = identity.release_id
       currentVersion.value = identity.official_version.replace(/^v/, '')
       return identity
-    } catch { return null }
+    } catch (error: unknown) {
+      currentRelease.value = null
+      currentOfficialVersion.value = ''
+      currentCustomVersion.value = ''
+      currentReleaseID.value = ''
+      currentReleaseError.value = normalizeCustomReleaseError(error, 'Failed to load current release')
+      return null
+    } finally {
+      currentReleaseLoading.value = false
+    }
   }
 
   async function fetchVersion(force = false): Promise<VersionInfo | null> {
@@ -67,6 +85,12 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
         target_custom_short_sha: targetCustomShortSHA.value || undefined,
         production_stable_tag: productionStableTag.value || undefined,
         production_stable_commit: productionStableCommit.value || undefined,
+        target_official_version: targetOfficialVersion.value || undefined,
+        target_official_commit: targetOfficialCommit.value || undefined,
+        target_custom_version: targetCustomVersion.value || undefined,
+        update_fingerprint: updateFingerprint.value || undefined,
+        notice_unread: noticeUnread.value,
+        notice_warning: noticeWarning.value || undefined,
         warning: updateWarning.value || undefined,
         cached: true
       }
@@ -94,7 +118,11 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
       productionStableCommit.value = data.production_stable_commit || ''
       updateWarning.value = data.warning || ''
       targetOfficialVersion.value = data.target_official_version || data.release_tag || data.latest_version || ''
+      targetOfficialCommit.value = data.target_official_commit || ''
       targetCustomVersion.value = data.target_custom_version || ''
+      updateFingerprint.value = data.update_fingerprint || ''
+      noticeUnread.value = data.notice_unread === true
+      noticeWarning.value = data.notice_warning || ''
       versionLoaded.value = true
       return data
     } catch (error) {
@@ -105,12 +133,27 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
     }
   }
 
+  async function markCurrentNoticeRead(): Promise<void> {
+    const fingerprint = updateFingerprint.value
+    if (!fingerprint || !noticeUnread.value) return
+    noticeUnread.value = false
+    try {
+      await markCustomReleaseRead(fingerprint)
+    } catch {
+      // The next server response remains authoritative after an advisory write failure.
+    }
+  }
+
   function clearVersionCache(): void {
     versionLoaded.value = false
     hasUpdate.value = false
     updateKind.value = 'none'
     targetOfficialVersion.value = ''
+    targetOfficialCommit.value = ''
     targetCustomVersion.value = ''
+    updateFingerprint.value = ''
+    noticeUnread.value = false
+    noticeWarning.value = ''
   }
 
   return {
@@ -138,9 +181,24 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
     currentReleaseID,
     currentRelease,
     targetOfficialVersion,
+    targetOfficialCommit,
     targetCustomVersion,
+    updateFingerprint,
+    noticeUnread,
+    noticeWarning,
+    currentReleaseLoading,
+    currentReleaseError,
     fetchCurrentRelease,
     fetchVersion,
+    markCurrentNoticeRead,
     clearVersionCache
   }
 })
+
+function normalizeCustomReleaseError(error: unknown, fallback: string): string {
+  const requestError = error as {
+    response?: { data?: { message?: string } }
+    message?: string
+  }
+  return requestError.response?.data?.message || requestError.message || fallback
+}
