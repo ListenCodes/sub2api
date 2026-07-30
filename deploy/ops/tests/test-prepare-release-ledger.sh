@@ -20,7 +20,7 @@ assert_eq() { [[ "$1" == "$2" ]] || fail "$3 (expected=$1 actual=$2)"; }
 
 fixture_compose_json() {
   local main="$1" ext="$2"
-  jq -n --arg main "$main" --arg ext "$ext" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh"},{target:"/repo"},{target:"/usr/bin/docker"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+  jq -n --arg main "$main" --arg ext "$ext" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
 }
 
 make_fake_tools() {
@@ -65,7 +65,7 @@ if [[ "${1:-}" == compose ]]; then
   if [[ "$format" == json ]]; then
     main="$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file" | tail -n 1)"
     ext="$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file" | tail -n 1)"
-    jq -n --arg main "$main" --arg ext "$ext" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh"},{target:"/repo"},{target:"/usr/bin/docker"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+    jq -n --arg main "$main" --arg ext "$ext" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
   fi
   exit 0
 fi

@@ -28,7 +28,7 @@ assert_eq() { [[ "$1" == "$2" ]] || fail "$3 (expected=$1 actual=$2)"; }
 
 fixture_compose_json() {
   local main="$1" ext="$2" monitor_enabled="${3:-false}"
-  jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "$monitor_enabled" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh"},{target:"/repo"},{target:"/usr/bin/docker"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+  jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "$monitor_enabled" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
 }
 
 assert_inherited_lock_contract() {
@@ -118,6 +118,9 @@ case "${1:-}" in
   pull) exit 97 ;;
   exec)
     [[ " $* " != *' pg_dump '* && " $* " != *' pg_restore '* ]] || exit 97
+    if [[ "$*" == *' sub2api-postgres '* && "$*" == *' psql '* ]]; then
+      exit 0
+    fi
     if [[ "$FIXTURE_SCENARIO" == rollback-health-config ]]; then
       if [[ "$*" == *'/api/v1/admin/account-monitor/data-quality'* ]]; then
         printf '{"source_connected":true,"missing_group_requests":0,"data_as_of":"2026-07-23T08:00:00Z"}\n'
@@ -177,7 +180,7 @@ case "${1:-}" in
         main="$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file" | tail -n 1)"
         ext="$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file" | tail -n 1)"
         enabled="$(sed -n 's/^ACCOUNT_MONITOR_ENABLED=//p' "$env_file" | tail -n 1)"
-        jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "${enabled:-false}" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh"},{target:"/repo"},{target:"/usr/bin/docker"},{target:"/var/run/docker.sock"}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+        jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "${enabled:-false}" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
       fi
       exit 0
     fi
@@ -256,7 +259,8 @@ seed_case() {
   local scenario="$1" root="$TMP_DIR/$scenario" job_id="update-apply-$scenario"
   local backup="$root/data/release-backups/prepared" base_artifact="$root/data/release-backups/base-artifact"
   mkdir -p "$root/data/release-ledger/releases" "$root/data/release-ledger/operations" "$root/data/release-prepared/$job_id" \
-    "$backup/target" "$base_artifact" "$root/repo/deploy" "$root/repo-state" "$root/runtime"
+    "$backup/target" "$base_artifact" "$root/repo/deploy" "$root/repo/extensions-self/account-monitor/sql" \
+    "$root/repo-state" "$root/runtime"
   : > "$root/calls"
   printf '%s\n' "$CURRENT_COMMIT" > "$root/repo-state/head"
   printf '%s\n' "$TARGET_COMMIT" > "$root/repo-state/origin"
@@ -264,6 +268,7 @@ seed_case() {
   printf 'custom-release\n' > "$root/repo-state/ref"
   printf 'base\n' > "$root/runtime/extensions-self"
   printf 'base\n' > "$root/runtime/sub2api"
+  printf 'SELECT 1;\n' > "$root/repo/extensions-self/account-monitor/sql/main_source_views.sql"
 
   printf 'services:\n  sub2api:\n    image: ${SUB2API_IMAGE}\n# current base\n' > "$root/repo/deploy/docker-compose.yml"
   printf 'services:\n  extensions-self:\n    image: ${EXTENSIONS_SELF_IMAGE}\n# current custom\n' > "$root/repo/deploy/docker-compose.custom.yml"

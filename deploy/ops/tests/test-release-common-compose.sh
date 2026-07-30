@@ -17,7 +17,15 @@ render_fixture() {
   local target
 
   for target in "$@"; do
-    targets="$(jq -c --arg target "${target#/}" '. + [{target:("/" + $target)}]' <<< "$targets")"
+    targets="$(jq -c --arg target "${target#/}" '
+      ("/" + $target) as $full |
+      . + [{
+        target:$full,
+        source:(if $full == "/app/scripts/sync-upstream.sh" then "/opt/sub2api-custom/sync-trigger.sh" else "fixture" end),
+        type:(if $full == "/app/data" then "volume" else "bind" end),
+        read_only:($full == "/app/scripts/sync-upstream.sh")
+      }]
+    ' <<< "$targets")"
   done
 
   jq -n --arg main "$MAIN_IMAGE" --arg ext "$EXTENSIONS_IMAGE" --argjson targets "$targets" '{
@@ -75,7 +83,7 @@ render_fixture "$TMP_DIR/hybrid-repo.json" \
 render_fixture "$TMP_DIR/hybrid-docker.json" \
   /app/data /app/scripts/sync-upstream.sh /var/run/docker.sock
 
-expect_valid "$TMP_DIR/legacy.json" 'legacy compose was rejected'
+expect_invalid "$TMP_DIR/legacy.json" 'legacy compose was accepted'
 expect_valid "$TMP_DIR/reduced.json" 'reduced compose was rejected'
 expect_invalid "$TMP_DIR/hybrid-repo.json" 'repo-only hybrid compose was accepted'
 expect_invalid "$TMP_DIR/hybrid-docker.json" 'Docker-only hybrid compose was accepted'

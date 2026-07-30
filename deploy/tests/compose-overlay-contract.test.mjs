@@ -49,13 +49,17 @@ test('custom production differences live only in the explicit overlay', () => {
   assert.doesNotMatch(base, /SUB2API_IMAGE|EXTENSIONS_SELF_IMAGE|risk-control-postgres|extensions-self/)
   assert.doesNotMatch(base, /\/root\/sub2api|docker\.sock|sync-trigger\.sh|\/usr\/bin\/docker/)
   assert.match(overlay, /services:\s*\n\s+sub2api:/)
+  for (const forbidden of [
+    '/root/sub2api:/repo:rw',
+    '/var/run/docker.sock:/var/run/docker.sock',
+    '/usr/bin/docker:/usr/bin/docker:ro'
+  ]) {
+    assert.doesNotMatch(overlay, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `overlay must not contain ${forbidden}`)
+  }
   for (const marker of [
     'image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}',
     'image: ${EXTENSIONS_SELF_IMAGE:?EXTENSIONS_SELF_IMAGE is required}',
-    '/root/sub2api:/repo:rw',
-    '/var/run/docker.sock:/var/run/docker.sock',
     '/opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro',
-    '/usr/bin/docker:/usr/bin/docker:ro',
     'RISK_CONTROL_URL:',
     'RISK_CONTROL_INTERNAL_SECRET:',
     'RISK_CONTROL_DECISION_FAIL_MODE:',
@@ -180,7 +184,15 @@ test('rendered Compose keeps the production service and identity contract', (t) 
     assert.equal(rendered.services['risk-control-postgres'].container_name, 'risk-control-postgres')
     assert.ok(rendered.volumes.risk_control_postgres_data)
     assert.ok(rendered.networks['sub2api-network'])
-    assert.ok(rendered.services.sub2api.volumes.some((volume) => volume.source === '/root/sub2api' && volume.target === '/repo'))
+    assert.deepEqual(
+      rendered.services.sub2api.volumes.map((volume) => volume.target).sort(),
+      ['/app/data', '/app/scripts/sync-upstream.sh']
+    )
+    const trigger = rendered.services.sub2api.volumes.find(
+      (volume) => volume.target === '/app/scripts/sync-upstream.sh'
+    )
+    assert.equal(trigger.source, '/opt/sub2api-custom/sync-trigger.sh')
+    assert.equal(trigger.read_only, true)
     assert.equal(rendered.services.sub2api.environment.RISK_CONTROL_URL, 'http://extensions-self:8090')
     assert.equal(rendered.services['extensions-self'].depends_on['risk-control-postgres'].condition, 'service_healthy')
   } catch (error) {

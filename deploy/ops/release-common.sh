@@ -213,20 +213,7 @@ release_validate_rendered_compose() {
   local rendered_json="$1" main_image="$2" extensions_image="$3"
   jq -e --arg main "$main_image" --arg ext "$extensions_image" '
     def mount_targets:
-      ([.services.sub2api.volumes[]?.target] | unique | sort);
-    def legacy_mounts:
-      mount_targets == ([
-        "/app/data",
-        "/app/scripts/sync-upstream.sh",
-        "/repo",
-        "/usr/bin/docker",
-        "/var/run/docker.sock"
-      ] | sort);
-    def reduced_mounts:
-      mount_targets == ([
-        "/app/data",
-        "/app/scripts/sync-upstream.sh"
-      ] | sort);
+      ([.services.sub2api.volumes[]?.target] | sort);
 
     .name == "deploy"
     and ([.services | keys[]] | index("sub2api") != null)
@@ -238,7 +225,16 @@ release_validate_rendered_compose() {
     and .services["extensions-self"].image == $ext
     and (.services.sub2api.healthcheck != null)
     and (.services["extensions-self"].healthcheck != null)
-    and (legacy_mounts or reduced_mounts)
+    and mount_targets == ([
+      "/app/data",
+      "/app/scripts/sync-upstream.sh"
+    ] | sort)
+    and ([.services.sub2api.volumes[]? | select(
+      .target == "/app/scripts/sync-upstream.sh"
+      and .source == "/opt/sub2api-custom/sync-trigger.sh"
+      and .type == "bind"
+      and .read_only == true
+    )] | length == 1)
     and ((.services.sub2api.networks // {}) | has("sub2api-network"))
     and ((.services["extensions-self"].networks // {}) | has("sub2api-network"))
     and ((.volumes // {}) | has("sub2api_data"))

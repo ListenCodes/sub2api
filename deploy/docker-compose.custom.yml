@@ -2,10 +2,7 @@ services:
   sub2api:
     image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}
     volumes:
-      - /root/sub2api:/repo:rw
-      - /var/run/docker.sock:/var/run/docker.sock
       - /opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro
-      - /usr/bin/docker:/usr/bin/docker:ro
     environment:
       RISK_CONTROL_URL: ${RISK_CONTROL_URL:-http://extensions-self:8090}
       RISK_CONTROL_INTERNAL_SECRET: ${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
