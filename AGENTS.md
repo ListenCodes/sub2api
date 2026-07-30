@@ -164,6 +164,30 @@ workflow, and then reapply custom behavior only through the additive seams. Any
 genuine need to expand a residual budget requires explicit review, matching
 behavior tests, and documentation in the same commit.
 
+## Custom Release Notice And Rollback Contract
+
+Custom release behavior belongs to `frontend/src/features/custom-release/`, the
+custom release service/handler, and `backend/internal/server/routes/custom_extensions.go`.
+Do not modify the official `VersionBadge.vue`, central router, official user
+model, Wire files, or another Stable zero-overlap file for this feature.
+
+`has_update` is the functional update state. `notice_unread` is a separate,
+advisory presentation state and alone controls the amber badge, dot, and ping.
+The canonical update fingerprint is a SHA-256 over the update kind, target
+Official version and commit, and target Custom commit. The last-read value is
+persisted per administrator user ID in
+`/app/data/custom-release-notice-state.json`, not in the official user table.
+Opening the release menu or starting a prepare/apply action marks the current
+fingerprint read. State read/write failures must not block update or rollback.
+
+The Web API lists only the newest three complete ledger snapshots, excludes the
+current release, and performs no Git, Docker CLI, socket, image, or OCI probes.
+The custom rollback panel owns loading, error/retry, empty, selection, prepared
+countdown, expiry, and apply states. Host `prepare-rollback.sh` remains the
+fail-closed authority for Git commits, both images, OCI revision, Compose,
+backup checksums, and immutable manifest creation. Normal rollback never
+restores a database.
+
 ## Normal Change Workflow
 
 1. Inspect `git status`, branch, remotes, and the current production commit.
@@ -178,6 +202,12 @@ behavior tests, and documentation in the same commit.
    `ghcr.io/listencodes/sub2api-extensions:custom-<full-sha>`.
 8. Production changes only after an administrator explicitly uses the update
    button. The host `sub2api-release.path` unit starts the durable release job.
+
+A release that removes Web source/Docker mounts is a staged exception. First
+publish the transition validator release and synchronize its verified
+`release-common.sh` into `/opt/sub2api-custom/`. Do not advance the strict
+reduced-mount release to `origin/custom-release` until that Stage A production
+deployment and installed-script comparison are complete.
 
 ## VPS Fallback Workflow
 
@@ -214,6 +244,12 @@ Every production deployment must:
 The production Compose file requires `SUB2API_IMAGE` and
 `EXTENSIONS_SELF_IMAGE`; both values are `ghcr.io/...@sha256:...`. Do not add a
 production build context or a mutable application tag.
+
+The rendered `sub2api` service may mount only the named `/app/data` volume and
+the bind source `/opt/sub2api-custom/sync-trigger.sh` at
+`/app/scripts/sync-upstream.sh` read-only. It must not mount `/root/sub2api`,
+`/repo`, `/var/run/docker.sock`, or `/usr/bin/docker`. Git, Docker, image, OCI,
+Compose, and backup validation belongs to the versioned host scripts.
 
 Host maintenance is a separate, explicitly authorized operation. Before
 installing host scripts or pruning release artifacts, acquire the production

@@ -44,8 +44,9 @@ EXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@sha256:<digest>
 Production Compose is an explicit two-file contract. `deploy/docker-compose.yml`
 stays byte-for-byte aligned with the current official Stable Release, while
 `deploy/docker-compose.custom.yml` owns the immutable image substitutions,
-host update mounts, risk-control settings, `extensions-self`, and its dedicated
-database/volume. Every production validation or lifecycle command must include
+the single read-only host trigger bind, risk-control settings,
+`extensions-self`, and its dedicated database/volume. Every production
+validation or lifecycle command must include
 both files in this order; implicit `docker-compose.override.yml` discovery is
 forbidden:
 
@@ -55,6 +56,12 @@ docker compose --project-name deploy \
   -f /root/sub2api/deploy/docker-compose.custom.yml \
   --env-file /root/sub2api/deploy/.env config --quiet
 ```
+
+The rendered Web service has exactly two mounts: `sub2api_data:/app/data` and
+`/opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro`. Source
+checkout, `/repo`, `/var/run/docker.sock`, and `/usr/bin/docker` mounts are
+forbidden. The Web API reads the ledger and writes trigger/data state only;
+host scripts own Git, Docker, image/OCI, Compose, and backup validation.
 
 The packages are public and the VPS pulls anonymously. GitHub credentials are
 not production image credentials.
@@ -178,6 +185,13 @@ custom-format database dumps and backs up the official and custom Compose files,
 and key files, old digests, rollback tags, container/image metadata, and
 checksums. It never recreates or replaces `risk-control-postgres`.
 
+The Web rollback list uses only complete ledger snapshots, excludes current,
+and returns the newest three without Git or Docker probes. The selected target
+does not become actionable until `prepare-rollback.sh` verifies its commit,
+paired images, OCI revisions, exact Compose artifacts, backup directory, and
+checksums. The prepared manifest expires after 60 minutes and requires a
+separate administrator apply action.
+
 The backup names are `main-docker-compose.yml` and
 `custom-docker-compose.yml`. Rollback and its Compose health gate load that
 matching pair from the same backup directory; they never combine a backed-up
@@ -232,6 +246,14 @@ maintenance log with exact deletion targets and before/after storage. After
 cleanup, rerun backup, digest, Compose, container, HTTP, and systemd checks.
 
 ## Installation
+
+For the Web mount reduction, first deploy the transition release whose
+`release-common.sh` accepts both exact legacy and reduced shapes, then back up
+and synchronize that version into `/opt/sub2api-custom/`. Verify the installed
+copy and a terminal ledger state before advancing the strict Stage B commit to
+`origin/custom-release`. Stage B removes the three privileged mounts and
+installs a validator that accepts only the reduced shape; reversing this order
+causes the old host validator to reject the target before preparation.
 
 Install scripts with mode `0755`, units with mode `0644`, then enable the path:
 

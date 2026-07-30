@@ -77,6 +77,24 @@ release, its paired images, the production ledger state, and the installed
 script copy have all been verified. The final reduced-mount release must replace
 this transition predicate with a strict reduced-shape check.
 
+### Stage B strict Web mount contract
+
+The Stage B commit may be built and reviewed on an isolated feature branch, but
+must not advance to `origin/custom-release` until Stage A has been deployed and
+the installed `/opt/sub2api-custom/release-common.sh` is byte-compared with its
+Stage A source. Stage B removes the source checkout, Docker socket, and Docker
+binary from the Web service. Its rendered `sub2api` mounts are exactly:
+
+```text
+sub2api_data -> /app/data
+/opt/sub2api-custom/sync-trigger.sh -> /app/scripts/sync-upstream.sh (bind, read-only)
+```
+
+The strict validator rejects legacy and hybrid shapes. Do not add glibc to the
+Alpine image or modify the official Dockerfile to retain Web Docker access.
+Docker/Git/OCI/Compose and backup checks execute only in the host prepare/apply
+scripts.
+
 Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
@@ -198,6 +216,24 @@ with the backend constants.
 Installing a newer script set does not rewrite an already-running or historical
 operation. Let an operation created by older scripts reach a terminal state
 before starting another update.
+
+### Administrator notice and rollback contract
+
+Update detection returns functional `has_update` independently from advisory
+`notice_unread`. The fingerprint is the canonical SHA-256 of schema marker,
+update kind, target Official version/commit, and target Custom commit. Per-admin
+last-read state is stored atomically in
+`/app/data/custom-release-notice-state.json`. Opening the menu or beginning a
+prepare/apply action acknowledges the current fingerprint. A state-file failure
+returns a warning and must not disable release controls.
+
+Rollback history is a data-volume query: list complete ledger records, exclude
+the current release, and return the newest three. The Web process must not run
+Git or Docker or inspect runtime images. The administrator selects one record,
+prepares it, then explicitly confirms apply before the one-hour expiry. Host
+`prepare-rollback.sh` verifies the Git commit, both local images, OCI revisions,
+matching Compose artifacts, complete backup, and checksums before writing the
+immutable manifest. Any missing or mismatched item leaves production unchanged.
 
 Production always uses an explicit Compose pair. The base
 `deploy/docker-compose.yml` is the unmodified file from the recorded official
@@ -544,6 +580,13 @@ The additive `extensions_self_ro.public_group_catalog` view and appended
 Database restore is not automatic. Restore `risk_control_db.dump` only for
 separately confirmed schema/data corruption; a normal code rollback must not
 discard newly collected risk or monitor data.
+
+For an administrator-requested historical rollback, the panel must expose
+loading, error/retry, empty, selection, prepared countdown, expiry, and apply
+states. Every candidate shows Official/Custom versions, short commit, and
+publication time. Preparation locks the selected release; apply uses
+`--pull never`, restores `extensions-self` before `sub2api`, runs the full
+health gate, and performs paired recovery on failure.
 
 After rollback, verify the same health checklist and record the failed commit,
 the rollback target, and the reason.

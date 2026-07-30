@@ -41,7 +41,7 @@ v1.0.1；仅官方更新不增加自定义版本，combined 只增加一次。do
 生成双镜像并按 digest 成对发布。`risk-control-postgres` 独立存在，发布和回滚不得重建或替换它。
 
 生产 Compose 也分成两个职责明确的文件：`deploy/docker-compose.yml` 必须与当前记录的官方
-Stable Release 原文件完全一致；`deploy/docker-compose.custom.yml` 承载双 digest 镜像、宿主机更新挂载、
+Stable Release 原文件完全一致；`deploy/docker-compose.custom.yml` 承载双 digest 镜像、只读 trigger 挂载、
 风控环境、`extensions-self`、`risk-control-postgres` 和 `risk_control_postgres_data`。生产不得依赖
 隐式 `docker-compose.override.yml`，所有 Compose 命令都按 base 在前、custom 在后的顺序显式加载。
 
@@ -237,6 +237,10 @@ docker compose --project-name deploy \
 
 需要核对有效服务、镜像、挂载、环境、网络和 volume 时，在相同参数后使用
 `config --format json`。Compose 的 map 覆盖和 list 追加以最终渲染结果为准，不能只检查某一源文件。
+最终渲染的 `sub2api` 只能包含命名 `/app/data` volume 和
+`/opt/sub2api-custom/sync-trigger.sh` -> `/app/scripts/sync-upstream.sh:ro`；禁止
+`/root/sub2api:/repo`、Docker socket 和 `/usr/bin/docker`。Git、双镜像、OCI、Compose 和
+备份验证全部由宿主机脚本执行，Web 容器不承担这些职责。
 备份文件固定为同一目录下的 `main-docker-compose.yml` 与 `custom-docker-compose.yml`；回滚及其健康
 检查只能加载这对备份，禁止把备份 base 与当前 custom（或反向组合）混用。
 
@@ -263,6 +267,11 @@ docker compose --project-name deploy \
 `deploy/ops/` 的发布成功后，应先把已安装脚本和两个 systemd unit 备份到
 `release-host-backups/` 并生成 `SHA256SUMS`，再从已部署 commit 重新安装、reload systemd、
 执行 `bash -n`，逐文件比较源码与安装副本。宿主机专用 `health-monitor.sh` 必须保留。
+
+移除 Web 高权限挂载必须分两次生产发布。Stage A 只部署兼容旧五挂载和最终两挂载的
+transition validator，overlay 仍保持旧形态；Stage A 成功并把同 commit 的宿主脚本同步、逐文件
+校验后，Stage B 才能进入 `origin/custom-release`，并同时落地最终 overlay 和只接受两挂载的
+严格 validator。Stage A 未完成前不得让 Stage B 成为生产分支目标。
 
 清理统一采用以下口径：
 
@@ -391,6 +400,14 @@ commit 短 SHA，不使用 semver。检测是只读的，不修改生产、不�
 任何运行时代码差异都进入运行时门禁；纯 Markdown、`AGENTS.md` 和 `.gitignore`
 可以提示但不会创建生产切换任务。
 
+提示状态与功能状态彼此独立：`has_update` 始终表示真实可操作更新，`notice_unread` 只控制
+左上角橙色背景、圆点和动画。服务端 fingerprint 固定包含 update kind、目标 Official
+version/commit 和目标 Custom commit；最后已读 fingerprint 按管理员 `user_id` 写入
+`/app/data/custom-release-notice-state.json`，因此同一管理员跨浏览器/设备只提示一次，其他
+管理员互不影响，新目标会重新提示。打开下拉或准备/确认操作会尽力标记已读；状态文件异常
+只能返回 advisory warning，不得阻断检测、prepare 或 apply。docs-only 目标也可标记已读，但
+检测内容仍保留。
+
 管理员按钮采用明确的 prepare/apply 两步：
 
 1. `prepare` 持久化锁定 production、Stable 和 custom target，等待七个 Actions job，
@@ -412,6 +429,13 @@ commit 短 SHA，不使用 semver。检测是只读的，不修改生产、不�
 失败、冲突或回滚只作为审计历史，重新打开弹框不会显示上一次结果。旧单阶段 job 会
 fail-closed，`/admin/system/update` 仅保留为 prepare 兼容别名，不得直接调用
 `publish-custom.sh`。
+
+完整回退与更新共用官方视觉语言，但逻辑仍由自定义组件拥有。页面先显示 loading；current
+release 或历史列表失败时显示错误和 retry；无完整历史时显示 empty。候选仅从 ledger 读取，
+排除 current 后按新到旧最多三条，每条显示 Official、Custom、短 commit 和时间；Web API
+不得调用 Git 或 Docker 做筛选。管理员选择后执行“准备回退”，prepared 后锁定目标并显示一小时
+倒计时，只有“确认回退”才 apply；过期或失败后恢复为可重试状态。宿主 prepare 对目标 Git、
+双镜像、OCI revision、Compose、备份及其校验和任一失败都 fail-closed，生产保持不变。
 
 ## 14. Docker 新站与完整迁移
 
