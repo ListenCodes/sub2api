@@ -438,6 +438,9 @@ describe('VersionBadge conflict reporting', () => {
     expect(confirmButton).toBeDefined()
     mocks.appStore.updateFingerprint = 'c'.repeat(64)
     mocks.appStore.noticeUnread = true
+    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
+      () => new Promise<void>(() => {})
+    )
     await nextTick()
     await confirmButton!.trigger('click')
     await flushPromises()
@@ -582,6 +585,9 @@ describe('VersionBadge conflict reporting', () => {
     await wrapper.find('[data-testid="rollback-panel"] button').trigger('click')
     mocks.appStore.updateFingerprint = 'b'.repeat(64)
     mocks.appStore.noticeUnread = true
+    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
+      () => new Promise<void>(() => {})
+    )
     await nextTick()
     await wrapper.find('[data-testid="prepare-rollback"]').trigger('click')
     await flushPromises()
@@ -637,6 +643,9 @@ describe('VersionBadge conflict reporting', () => {
     expect(mocks.applyUpdate).not.toHaveBeenCalled()
     mocks.appStore.updateFingerprint = 'a'.repeat(64)
     mocks.appStore.noticeUnread = true
+    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
+      () => new Promise<void>(() => {})
+    )
     await nextTick()
     await wrapper.find('[data-testid="confirm-rollback"]').trigger('click')
     await flushPromises()

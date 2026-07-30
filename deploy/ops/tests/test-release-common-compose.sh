@@ -86,6 +86,8 @@ render_fixture "$TMP_DIR/reduced.json" \
 jq '(.services.sub2api.volumes[] | select(.target == "/app/data")) |=
   (.source = "/etc" | .type = "bind")' \
   "$TMP_DIR/reduced.json" > "$TMP_DIR/data-bind.json"
+jq '(.services.sub2api.volumes[] | select(.target == "/app/data")).read_only = true' \
+  "$TMP_DIR/reduced.json" > "$TMP_DIR/data-read-only.json"
 render_fixture "$TMP_DIR/hybrid-repo.json" \
   /app/data /app/scripts/sync-upstream.sh /repo
 render_fixture "$TMP_DIR/hybrid-docker.json" \
@@ -94,6 +96,7 @@ render_fixture "$TMP_DIR/hybrid-docker.json" \
 expect_invalid "$TMP_DIR/legacy.json" 'legacy compose was accepted'
 expect_valid "$TMP_DIR/reduced.json" 'reduced compose was rejected'
 expect_invalid "$TMP_DIR/data-bind.json" 'host bind was accepted for application data'
+expect_invalid "$TMP_DIR/data-read-only.json" 'read-only named volume was accepted for application data'
 expect_invalid "$TMP_DIR/hybrid-repo.json" 'repo-only hybrid compose was accepted'
 expect_invalid "$TMP_DIR/hybrid-docker.json" 'Docker-only hybrid compose was accepted'
 
