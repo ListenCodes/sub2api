@@ -188,6 +188,12 @@ test('rendered Compose keeps the production service and identity contract', (t) 
       rendered.services.sub2api.volumes.map((volume) => volume.target).sort(),
       ['/app/data', '/app/scripts/sync-upstream.sh']
     )
+    const data = rendered.services.sub2api.volumes.find(
+      (volume) => volume.target === '/app/data'
+    )
+    assert.equal(data.source, 'sub2api_data')
+    assert.equal(data.type, 'volume')
+    assert.notEqual(data.read_only, true)
     const trigger = rendered.services.sub2api.volumes.find(
       (volume) => volume.target === '/app/scripts/sync-upstream.sh'
     )

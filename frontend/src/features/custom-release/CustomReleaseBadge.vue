@@ -799,7 +799,7 @@ const rollbackError = ref('')
 const rollbackPanelError = computed(
   () => appStore.currentReleaseError || rollbackVersionsError.value || rollbackError.value
 )
-const lastAcknowledgedFingerprint = ref('')
+const noticeAcknowledgementsInFlight = new Set<string>()
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
@@ -810,24 +810,26 @@ function toggleDropdown() {
     resetTerminalUpdateFeedback()
   }
   dropdownOpen.value = opening
-  if (opening) void acknowledgeCurrentNotice()
+  if (opening) acknowledgeCurrentNotice()
 }
 
-async function acknowledgeCurrentNotice(): Promise<void> {
+function acknowledgeCurrentNotice(): void {
   const fingerprint = updateFingerprint.value
   if (
     !noticeUnread.value ||
     !fingerprint ||
-    lastAcknowledgedFingerprint.value === fingerprint
+    noticeAcknowledgementsInFlight.has(fingerprint)
   ) {
     return
   }
-  lastAcknowledgedFingerprint.value = fingerprint
-  try {
-    await appStore.markCurrentNoticeRead?.()
-  } catch {
-    // Notice persistence is advisory and must not block release operations.
-  }
+  const acknowledgement = appStore.markCurrentNoticeRead?.()
+  if (!acknowledgement) return
+  noticeAcknowledgementsInFlight.add(fingerprint)
+  void acknowledgement
+    .catch(() => {
+      // Notice persistence is advisory and must not block release operations.
+    })
+    .finally(() => noticeAcknowledgementsInFlight.delete(fingerprint))
 }
 
 function closeDropdown() {
@@ -899,7 +901,7 @@ function resetTerminalUpdateFeedback() {
 async function handleUpdate() {
   if (updating.value) return
 
-  await acknowledgeCurrentNotice()
+  acknowledgeCurrentNotice()
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
@@ -933,7 +935,7 @@ async function handleUpdate() {
 async function handleApply() {
   if (applying.value || !preparedJobID.value) return
 
-  await acknowledgeCurrentNotice()
+  acknowledgeCurrentNotice()
   applying.value = true
   updateError.value = ''
   try {
@@ -1223,7 +1225,7 @@ async function handleRollbackRetry() {
 
 async function handlePrepareRollback(releaseID: string) {
   if (!isAdmin.value || rollingBack.value) return
-  await acknowledgeCurrentNotice()
+  acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
   try {
@@ -1239,7 +1241,7 @@ async function handlePrepareRollback(releaseID: string) {
 
 async function handleApplyRollback(jobID: string) {
   if (!isAdmin.value || rollingBack.value) return
-  await acknowledgeCurrentNotice()
+  acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
   try {
@@ -1256,7 +1258,7 @@ async function handleApplyRollback(jobID: string) {
 
 async function handleRollbackExpired(jobID: string) {
   if (!isAdmin.value || rollingBack.value) return
-  await acknowledgeCurrentNotice()
+  acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
   try {

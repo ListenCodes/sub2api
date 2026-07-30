@@ -21,7 +21,12 @@ render_fixture() {
       ("/" + $target) as $full |
       . + [{
         target:$full,
-        source:(if $full == "/app/scripts/sync-upstream.sh" then "/opt/sub2api-custom/sync-trigger.sh" else "fixture" end),
+        source:(
+          if $full == "/app/data" then "sub2api_data"
+          elif $full == "/app/scripts/sync-upstream.sh" then "/opt/sub2api-custom/sync-trigger.sh"
+          else "fixture"
+          end
+        ),
         type:(if $full == "/app/data" then "volume" else "bind" end),
         read_only:($full == "/app/scripts/sync-upstream.sh")
       }]
@@ -78,6 +83,9 @@ render_fixture "$TMP_DIR/legacy.json" \
   /app/data /app/scripts/sync-upstream.sh /repo /var/run/docker.sock /usr/bin/docker
 render_fixture "$TMP_DIR/reduced.json" \
   /app/data /app/scripts/sync-upstream.sh
+jq '(.services.sub2api.volumes[] | select(.target == "/app/data")) |=
+  (.source = "/etc" | .type = "bind")' \
+  "$TMP_DIR/reduced.json" > "$TMP_DIR/data-bind.json"
 render_fixture "$TMP_DIR/hybrid-repo.json" \
   /app/data /app/scripts/sync-upstream.sh /repo
 render_fixture "$TMP_DIR/hybrid-docker.json" \
@@ -85,6 +93,7 @@ render_fixture "$TMP_DIR/hybrid-docker.json" \
 
 expect_invalid "$TMP_DIR/legacy.json" 'legacy compose was accepted'
 expect_valid "$TMP_DIR/reduced.json" 'reduced compose was rejected'
+expect_invalid "$TMP_DIR/data-bind.json" 'host bind was accepted for application data'
 expect_invalid "$TMP_DIR/hybrid-repo.json" 'repo-only hybrid compose was accepted'
 expect_invalid "$TMP_DIR/hybrid-docker.json" 'Docker-only hybrid compose was accepted'
 

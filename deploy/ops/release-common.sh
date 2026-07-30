@@ -230,6 +230,12 @@ release_validate_rendered_compose() {
       "/app/scripts/sync-upstream.sh"
     ] | sort)
     and ([.services.sub2api.volumes[]? | select(
+      .target == "/app/data"
+      and .source == "sub2api_data"
+      and .type == "volume"
+      and ((.read_only // false) == false)
+    )] | length == 1)
+    and ([.services.sub2api.volumes[]? | select(
       .target == "/app/scripts/sync-upstream.sh"
       and .source == "/opt/sub2api-custom/sync-trigger.sh"
       and .type == "bind"

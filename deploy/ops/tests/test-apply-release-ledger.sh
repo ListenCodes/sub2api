@@ -28,7 +28,7 @@ assert_eq() { [[ "$1" == "$2" ]] || fail "$3 (expected=$1 actual=$2)"; }
 
 fixture_compose_json() {
   local main="$1" ext="$2" monitor_enabled="${3:-false}"
-  jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "$monitor_enabled" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+  jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "$monitor_enabled" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data",source:"sub2api_data",type:"volume",read_only:false},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
 }
 
 assert_inherited_lock_contract() {
@@ -180,7 +180,7 @@ case "${1:-}" in
         main="$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file" | tail -n 1)"
         ext="$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file" | tail -n 1)"
         enabled="$(sed -n 's/^ACCOUNT_MONITOR_ENABLED=//p' "$env_file" | tail -n 1)"
-        jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "${enabled:-false}" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+        jq -c -n --arg main "$main" --arg ext "$ext" --arg enabled "${enabled:-false}" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{test:["CMD","true"]},volumes:[{target:"/app/data",source:"sub2api_data",type:"volume",read_only:false},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{test:["CMD","true"]},environment:{ACCOUNT_MONITOR_ENABLED:$enabled,RISK_CONTROL_INTERNAL_SECRET:"fixture-secret"},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
       fi
       exit 0
     fi

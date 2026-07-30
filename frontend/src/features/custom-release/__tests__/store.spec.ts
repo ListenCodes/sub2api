@@ -82,6 +82,21 @@ describe('custom release store', () => {
     expect(store.hasUpdate).toBe(true)
   })
 
+  it('reconciles a persisted false acknowledgement from the next server check', async () => {
+    const fingerprint = '4'.repeat(64)
+    mocks.checkUpdates.mockResolvedValue(versionFixture(fingerprint, true))
+    mocks.markCustomReleaseRead.mockResolvedValue({ fingerprint, persisted: false })
+    const store = useCustomReleaseStore()
+    await store.fetchVersion(true)
+
+    await store.markCurrentNoticeRead()
+    expect(store.noticeUnread).toBe(false)
+
+    await store.fetchVersion(true)
+    expect(store.noticeUnread).toBe(true)
+    expect(store.updateFingerprint).toBe(fingerprint)
+  })
+
   it('exposes current release failure and clears it after a successful retry', async () => {
     const identity = {
       release_id: 'release-current',

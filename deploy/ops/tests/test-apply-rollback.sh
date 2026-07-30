@@ -28,7 +28,7 @@ write_target() {
 render_json() {
   local path="$1" main="$2" ext="$3"
   jq -n --arg main "$main" --arg ext "$ext" '
-    {name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},
+    {name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data",source:"sub2api_data",type:"volume",read_only:false},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},
     "extensions-self":{image:$ext,healthcheck:{},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},
     volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}' > "$path"
 }
@@ -113,7 +113,7 @@ if [[ "${1:-}" == compose ]]; then
   if [[ "$*" == *'config --format json'* ]]; then
     args=("$@"); env_file=''; for ((i=0;i<${#args[@]};i++)); do [[ "${args[$i]}" != --env-file ]] || env_file="${args[$((i+1))]}"; done
     main="$(sed -n 's/^SUB2API_IMAGE=//p' "$env_file")"; ext="$(sed -n 's/^EXTENSIONS_SELF_IMAGE=//p' "$env_file")"
-    jq -n --arg main "$main" --arg ext "$ext" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data"},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
+    jq -n --arg main "$main" --arg ext "$ext" '{name:"deploy",services:{sub2api:{image:$main,healthcheck:{},volumes:[{target:"/app/data",source:"sub2api_data",type:"volume",read_only:false},{target:"/app/scripts/sync-upstream.sh",source:"/opt/sub2api-custom/sync-trigger.sh",type:"bind",read_only:true}],networks:{"sub2api-network":{}}},"extensions-self":{image:$ext,healthcheck:{},networks:{"sub2api-network":{}}},postgres:{},redis:{},"risk-control-postgres":{}},volumes:{sub2api_data:{},postgres_data:{},redis_data:{},risk_control_postgres_data:{}}}'
   elif [[ " $* " == *' up '* ]]; then
     service="${*: -1}"; args=("$@"); env_file=''; for ((i=0;i<${#args[@]};i++)); do [[ "${args[$i]}" != --env-file ]] || env_file="${args[$((i+1))]}"; done
     identity=base; grep -q "@$FIXTURE_TARGET_MAIN\|@$FIXTURE_TARGET_EXT" "$env_file" && identity=target

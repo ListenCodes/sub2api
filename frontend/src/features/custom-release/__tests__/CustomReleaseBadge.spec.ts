@@ -131,7 +131,7 @@ describe('VersionBadge conflict reporting', () => {
     unread.unmount()
   })
 
-  it('acknowledges one fingerprint once and permits a new target', async () => {
+  it('retries a reconciled unread fingerprint and permits a new target', async () => {
     const wrapper = mount(VersionBadge, {
       props: { version: '0.1.164' },
       global: { stubs: { Icon: true } }
@@ -147,16 +147,23 @@ describe('VersionBadge conflict reporting', () => {
     expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(1)
 
     await badge.trigger('click')
-    mocks.appStore.updateFingerprint = 'e'.repeat(64)
     mocks.appStore.noticeUnread = true
     await nextTick()
     await badge.trigger('click')
     await flushPromises()
     expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(2)
+
+    await badge.trigger('click')
+    mocks.appStore.updateFingerprint = 'e'.repeat(64)
+    mocks.appStore.noticeUnread = true
+    await nextTick()
+    await badge.trigger('click')
+    await flushPromises()
+    expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(3)
     wrapper.unmount()
   })
 
-  it('acknowledges a new target before update preparation', async () => {
+  it('starts update preparation without waiting for advisory acknowledgement', async () => {
     mocks.prepareUpdate.mockResolvedValue({
       job_id: 'update-order',
       status: 'resolving_target',
@@ -172,7 +179,9 @@ describe('VersionBadge conflict reporting', () => {
     await flushPromises()
     mocks.appStore.updateFingerprint = 'd'.repeat(64)
     mocks.appStore.noticeUnread = true
-    mocks.appStore.markCurrentNoticeRead.mockRejectedValueOnce(new Error('notice write failed'))
+    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
+      () => new Promise<void>(() => {})
+    )
     await nextTick()
 
     const updateButton = wrapper
@@ -182,9 +191,6 @@ describe('VersionBadge conflict reporting', () => {
     await flushPromises()
 
     expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(2)
-    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      mocks.prepareUpdate.mock.invocationCallOrder[0]
-    )
     expect(mocks.prepareUpdate).toHaveBeenCalled()
     wrapper.unmount()
   })
