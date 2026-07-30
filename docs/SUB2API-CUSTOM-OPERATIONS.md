@@ -273,6 +273,13 @@ transition validator，overlay 仍保持旧形态；Stage A 成功并把同 comm
 校验后，Stage B 才能进入 `origin/custom-release`，并同时落地最终 overlay 和只接受两挂载的
 严格 validator。Stage A 未完成前不得让 Stage B 成为生产分支目标。
 
+2026-07-30 已完成 Stage A 门禁：生产 ledger、Git 和双 OCI revision 均为
+`7aadd0b682d67a4124d08a006bbb054d0cc8c37d`，版本为 `v0.1.168 / v1.0.12`，现网仍保留
+旧五挂载；`/opt/sub2api-custom/release-common.sh` 已与 Stage A 源码逐字节一致，旧宿主文件及
+systemd units 的校验备份位于
+`release-host-backups/20260730T090022Z-stage-a-7aadd0b68/`。因此 Stage B 可以推进
+`origin/custom-release`，但没有单独生产授权时必须继续停留在“代码已推送、生产未部署”。
+
 清理统一采用以下口径：
 
 - `release-ledger/` 和兼容期 `release-jobs/` 保留完整审计历史。

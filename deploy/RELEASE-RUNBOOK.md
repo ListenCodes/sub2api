@@ -95,6 +95,18 @@ Alpine image or modify the official Dockerfile to retain Web Docker access.
 Docker/Git/OCI/Compose and backup checks execute only in the host prepare/apply
 scripts.
 
+Migration evidence recorded on 2026-07-30: Stage A commit
+`7aadd0b682d67a4124d08a006bbb054d0cc8c37d` is the production ledger release
+`release-candidate-20260730T085834658639257Z-7aadd0b68` (`v0.1.168` / `v1.0.12`).
+Both running OCI revisions match that commit, production still has the legacy
+five Web mounts, and `/opt/sub2api-custom/release-common.sh` byte-matches the
+Stage A source at SHA-256
+`60cbf4426ec088eb98b807b3163f0acca098f7178e037d34d3c87b0098d5838e`.
+The verified pre-install host backup is
+`release-host-backups/20260730T090022Z-stage-a-7aadd0b68/`. This evidence permits
+Stage B to advance to `origin/custom-release`; it does not authorize or imply a
+Stage B production deployment.
+
 Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 
 ```text
