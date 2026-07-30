@@ -465,6 +465,29 @@ describe('VersionBadge conflict reporting', () => {
     wrapper.unmount()
   })
 
+  it('acknowledges a docs-only notice without hiding its content', async () => {
+    mocks.appStore.updateKind = 'docs-only'
+    mocks.appStore.hasUpdate = true
+    mocks.appStore.noticeUnread = true
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.158' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    const badge = wrapper.get('[data-testid="custom-release-badge"]')
+    expect(badge.classes()).toContain('bg-amber-100')
+
+    await badge.trigger('click')
+    await flushPromises()
+
+    expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(1)
+    expect(badge.classes()).not.toContain('bg-amber-100')
+    expect(wrapper.text()).toContain('version.docsOnlyUpdate')
+    expect(wrapper.findAll('button').some((button) => button.text().includes('version.updateNow'))).toBe(false)
+    wrapper.unmount()
+  })
+
   it('shows an incomplete detection warning without a production action', async () => {
     mocks.appStore.detectionComplete = false
     mocks.appStore.updateWarning = 'custom branch probe unavailable'
