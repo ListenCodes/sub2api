@@ -340,6 +340,21 @@ systemctl daemon-reload
 systemctl enable --now sub2api-release.path
 ```
 
+The installed copy does not update when `/root/sub2api` fast-forwards. After a
+successful release containing `deploy/ops/` changes, wait for the release
+service to become inactive, back up the installed scripts and units, reinstall
+from the deployed commit, and compare them byte for byte. The complete
+installation and cleanup contract is in `deploy/RELEASE-RUNBOOK.md` under
+"Versioned Host Operations" and "Host Artifact Retention And Cleanup".
+
+Host cleanup is never an automatic release step. Keep the complete ledger, the
+three newest complete rollback snapshots, the current image pair, and all image
+pairs required by those snapshots. Never use `docker image prune -a`, Docker
+system/volume prune, or delete another application's images. Prepared/conflict,
+host-script, and manual backup retention must follow the classified rules in
+the runbook and run only while the release lock is held and no operation is
+active.
+
 The administrator action writes a durable job and `release-trigger` immediately.
 The path unit starts the one-shot host orchestrator, which validates only the
 latest official stable Release, waits for Actions and both images, rechecks the

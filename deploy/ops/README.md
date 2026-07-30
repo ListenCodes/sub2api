@@ -208,6 +208,29 @@ production commit, stable Release tag/commit, both digests, publication time,
 and backup directory. Backfill starts only after health and only across the
 `data-quality` `available_from/to` range.
 
+## Host Retention And Maintenance
+
+The full cleanup contract is defined in `deploy/RELEASE-RUNBOOK.md` under
+"Host Artifact Retention And Cleanup". Maintenance is manually authorized and
+must hold `/var/lock/sub2api-release.lock`; it stops when the ledger has an
+active/prepared operation, the release service is running, or the production
+worktree is dirty.
+
+Keep the complete ledger and legacy compatibility audit. Retain the three
+backup directories referenced by the newest successful releases, validate
+their checksums, and protect the current image pair plus every main/extensions
+pair and rollback tag recorded by those three snapshots. Retain the prepared
+directories associated with those releases, the newest three conflict
+diagnostics, and newest three host-script backups. Manual
+backups may be reduced to the newest three only after unique or explicitly
+pinned migration/emergency material has been excluded from deletion.
+
+Never use `docker image prune -a`, `docker system prune`, or a volume prune.
+Construct the protected image-ID set first, leave other applications out of
+scope, validate every recursive target with `realpath`, and write a UTC
+maintenance log with exact deletion targets and before/after storage. After
+cleanup, rerun backup, digest, Compose, container, HTTP, and systemd checks.
+
 ## Installation
 
 Install scripts with mode `0755`, units with mode `0644`, then enable the path:

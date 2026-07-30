@@ -108,6 +108,57 @@ Production `.env` pins `SUB2API_IMAGE` and `EXTENSIONS_SELF_IMAGE` to the
 verified `ghcr.io/...@sha256:...` references. The VPS pulls them anonymously.
 There is no release polling job or automatic source update.
 
+### Host Artifact Retention And Cleanup
+
+Host cleanup is manual maintenance, not part of release apply and not a cron
+job. It requires explicit operator authorization and must not change the
+production commit, release projection, database volumes, or running container
+set. Do not hardcode a "current" version in operating documents; read
+`release-state.json`, the ledger state, both running OCI revisions, and the
+container version output at the start of each operation.
+
+Before changing installed scripts or deleting artifacts:
+
+1. Acquire `/var/lock/sub2api-release.lock` without waiting. Stop if it is busy.
+2. Require `release-ledger/state.json.active_operation_id` to be null, no
+   prepared operation awaiting confirmation, `sub2api-release.service` to be
+   inactive, and `/root/sub2api` to be clean at the ledger commit.
+3. Back up `/opt/sub2api-custom/` and both systemd units under
+   `release-host-backups/`, including a `SHA256SUMS` manifest. Reinstall from the
+   deployed `deploy/ops/` source, reload systemd, run `bash -n`, and compare all
+   installed scripts and units byte for byte. Preserve host-only files such as
+   `health-monitor.sh`.
+
+Use this retention contract:
+
+| Artifact | Retention |
+|---|---|
+| `release-ledger/` and compatible legacy `release-jobs/` | Keep the complete audit history. |
+| `release-backups/` | Keep the three backup directories referenced by the newest successful release records. Validate each retained `SHA256SUMS` before deleting an older directory. These directories are the three complete snapshots excluding current. |
+| Current and rollback images | Keep the current main/extensions digest pair plus every pair and rollback tag recorded by the three retained backups. Also protect every image ID used by any running container. |
+| `release-prepared/` | Never remove an active or confirmable manifest. With no active operation, keep the directories associated with the three retained successful release records. |
+| `sync-conflicts/` | Keep the newest three diagnostic snapshots; the ledger remains the permanent operation audit. |
+| `release-host-backups/` | Keep the newest three verified host-script backups. |
+| `/root/backups/sub2api/` | Keep the newest three superseded manual backups plus every explicitly pinned, unique migration, or emergency backup. Delete only after confirming the retained release backups cover current rollback needs. |
+| Legacy root `.prepared-update-*`, `sync-job-id`, `sync-status`, and `sync-result` | Remove only after the ledger path is active, no operation is running, and current code no longer reads them. |
+
+Resolve every recursive deletion target with `realpath`, require it to be a
+direct child of the intended root, and log the exact target before deletion.
+For Docker, build a protected image-ID set from running containers, the current
+digest pair, and all three rollback snapshots. Remove only unprotected Sub2API
+or obsolete VPS-build images. Do not use `docker image prune -a`,
+`docker system prune`, or any volume prune; images belonging to other
+applications are outside this procedure.
+
+After cleanup, revalidate all retained backup checksums and digest references,
+render the explicit Compose pair with `config --quiet`, check the main,
+extensions, PostgreSQL, Redis, and risk database containers, exercise public
+health and homepage endpoints, and confirm the path unit is active while the
+service is inactive. Record the UTC maintenance log path, retained counts,
+removed counts, Docker storage, filesystem usage, and whether deleted material
+is locally recoverable. Cleanup does not create a Git commit unless this
+versioned policy or implementation changes.
+
 ### Release status contract
 
 Versioned host scripts must persist only the canonical status values declared

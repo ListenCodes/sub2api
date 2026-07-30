@@ -68,13 +68,15 @@ Stable Release 原文件完全一致；`deploy/docker-compose.custom.yml` 承载
 - 禁止把整个 `custom` 合并回 `custom-release`。
 - VPS 应急改动必须创建 `emergency/vps-YYYYMMDD`，commit 并推送，不能让未提交改动成为唯一副本。
 
-推荐的本地起点：
+完成有限发现并进入已验证仓库后的推荐起点：
 
 ```powershell
-git -C E:\Code\sub2api fetch origin --prune --tags
-git -C E:\Code\sub2api fetch upstream --prune --tags
-git -C E:\Code\sub2api worktree add `
-  E:\Code\sub2api-worktrees\feature-name `
+$repo = (git rev-parse --show-toplevel).Trim()
+$worktree = Join-Path (Split-Path $repo -Parent) 'sub2api-worktrees\feature-name'
+git -C $repo fetch origin --prune --tags
+git -C $repo fetch upstream --prune --tags
+git -C $repo worktree add `
+  $worktree `
   -b feature/feature-name origin/custom-release
 ```
 
@@ -251,6 +253,38 @@ docker compose --project-name deploy \
 - 不使用 `docker compose down`、全量 volume prune 或直接编辑运行中容器。
 - 不通过 cron、定时任务或后台轮询自动发布新代码。
 
+### 6.1 宿主机脚本同步与发布资产清理
+
+宿主机维护不是发布 apply 的一部分，也不能配置成 cron。只有获得明确授权后才能执行；开始前必须
+通过 `/var/lock/sub2api-release.lock` 取得发布锁，确认 ledger 没有活动或待确认任务、
+`sub2api-release.service` 已结束、`/root/sub2api` 干净且等于 ledger 当前 commit。
+
+`/opt/sub2api-custom/` 是独立的版本化发布产物，Git 工作树更新不会自动同步它。涉及
+`deploy/ops/` 的发布成功后，应先把已安装脚本和两个 systemd unit 备份到
+`release-host-backups/` 并生成 `SHA256SUMS`，再从已部署 commit 重新安装、reload systemd、
+执行 `bash -n`，逐文件比较源码与安装副本。宿主机专用 `health-monitor.sh` 必须保留。
+
+清理统一采用以下口径：
+
+- `release-ledger/` 和兼容期 `release-jobs/` 保留完整审计历史。
+- `release-backups/` 只保留最新三个成功 release record 引用的完整备份；删除旧目录前必须先验证
+  三份保留备份的 `SHA256SUMS`。
+- Docker 必须保护所有运行中容器镜像、当前主/扩展 digest，以及三份保留备份中
+  `release-state.json` 记录的三组历史 digest 和回滚 tag；禁止 `docker image prune -a`、
+  `docker system prune` 和任何 volume prune，也不得清理其他应用镜像。
+- 没有活动任务时，`release-prepared/` 保留与三份成功 release record 对应的目录，
+  `sync-conflicts/` 和 `release-host-backups/` 各保留最新三份；活动或仍可确认的 manifest 不得删除。
+- `/root/backups/sub2api/` 默认保留最新三份，但显式固定、唯一迁移或应急资料必须额外保留；只有确认
+  release backup 已覆盖当前回滚需求后才能删除其余目录。
+- 旧 `.prepared-update-*`、`sync-job-id`、`sync-status`、`sync-result` 只有在新 ledger 已生效、
+  当前代码不再读取且没有活动任务时才可删除。
+
+递归删除前必须用 `realpath` 校验目标是预期根目录的直接子项，并先把确切目标写入 UTC 维护日志。
+清理后重新验证保留备份校验和、当前及三层回滚镜像、双 Compose `config --quiet`、全部关键容器、
+公网健康/扩展首页和 systemd path/service。报告必须列出日志路径、保留/删除数量、清理前后空间和
+本地可恢复性。详细权威流程以 `deploy/RELEASE-RUNBOOK.md` 的
+“Host Artifact Retention And Cleanup”为准。
+
 ## 7. 失败、冲突与回滚
 
 ### 发布前失败
@@ -297,6 +331,8 @@ Release 校验、合并冲突、Actions 失败、镜像缺失、分支基线变�
 - [ ] `sub2api-release.path` enabled + active，发布 service 完成后 inactive。
 - [ ] root crontab 不包含发布、自动更新或 trigger 消费者，仅保留独立健康监控。
 - [ ] 备份目录包含双库 dump、两份匹配 Compose、`.env`、校验和、证书、镜像元数据和 rollback 证据。
+- [ ] 涉及 `deploy/ops/` 的发布完成后，安装副本与当前部署源码逐文件一致，宿主机专用监控仍保留。
+- [ ] 维护清理保留完整 ledger、三层完整回滚备份及其镜像，并记录 UTC 日志和清理前后空间。
 
 ## 10. 时间预期
 
@@ -328,6 +364,10 @@ Custom Release Actions：
 公网健康：
 触发器/定时任务状态：
 回滚资料：
+宿主机脚本同步：
+维护日志与保留数量：
+清理前后空间：
+删除资料的本地可恢复性：
 是否实际执行回滚：否（除非另行授权）
 ```
 

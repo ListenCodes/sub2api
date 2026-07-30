@@ -10,7 +10,9 @@ differ.
 
 ## Canonical Locations
 
-- Local source of truth: `E:\Code\sub2api`
+- Local source of truth: the uniquely verified worktree for
+  `ListenCodes/sub2api`; never treat one machine's drive letter as a
+  cross-device repository location
 - Fork remote: `origin` -> `ListenCodes/sub2api`
 - Upstream remote: `upstream` -> `Wei-Shaw/sub2api`
 - Production-approved branch: `custom-release`
@@ -213,6 +215,25 @@ The production Compose file requires `SUB2API_IMAGE` and
 `EXTENSIONS_SELF_IMAGE`; both values are `ghcr.io/...@sha256:...`. Do not add a
 production build context or a mutable application tag.
 
+Host maintenance is a separate, explicitly authorized operation. Before
+installing host scripts or pruning release artifacts, acquire the production
+release lock, confirm the ledger has no active or prepared operation, confirm
+`sub2api-release.service` is inactive, and verify the production worktree is
+clean at the ledger commit. The installed `/opt/sub2api-custom/` files are a
+versioned release artifact: back them up, reinstall from the deployed
+`deploy/ops/` source, reload systemd, and compare every installed script and
+unit before accepting another update trigger.
+
+Retention must preserve the complete ledger, current running images, and the
+three complete rollback snapshots exposed by the administrator UI. Keep the
+three backup directories referenced by the newest successful release records
+and every main/extensions image needed by the current state plus those three
+snapshots. Never use `docker image prune -a`, `docker system prune`, or a volume
+prune. Delete only explicitly classified artifacts under validated roots, keep
+other applications' images out of scope, and record deletion targets and
+before/after storage in a maintenance log. The authoritative procedure is
+`deploy/RELEASE-RUNBOOK.md` under "Host Artifact Retention And Cleanup".
+
 ## Agent Coordination
 
 Conversations do not share memory. Shared files, Git history, and these rules
@@ -225,7 +246,9 @@ are the coordination mechanism.
 - A code change is not a deployment. Report the commit, tests, and deployment
   status separately.
 - If the task says "暂不修改" or does not authorize a release, do not deploy.
-- For remote work, also follow `E:\BaiduSyncdisk\Private\VPS\AGENTS.md`.
+- For remote work, also follow the active environment's VPS operations rules,
+  server inventory, service ledger, credential boundary, and required SSH
+  tooling. Do not assume a fixed local path for that external knowledge base.
 
 ## Release Boundary
 
