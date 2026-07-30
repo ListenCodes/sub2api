@@ -207,10 +207,16 @@ func TestUpdateServiceCheckUpdateDualVersionMatrix(t *testing.T) {
 			require.Equal(t, "v0.1.163", info.CurrentOfficialVersion)
 			require.Equal(t, "v1.0.4", info.CurrentCustomVersion)
 			require.Equal(t, test.wantOfficial, info.TargetOfficialVersion)
+			require.Equal(t, test.releaseCommit, info.TargetOfficialCommit)
 			require.Equal(t, test.wantCustom, info.TargetCustomVersion)
 			require.Equal(t, test.wantKind, info.UpdateKind)
 			require.Equal(t, test.wantRuntime, info.RuntimeUpdate)
 			require.Equal(t, test.wantHasUpdate, info.HasUpdate)
+			if test.wantHasUpdate {
+				require.Regexp(t, `^[0-9a-f]{64}$`, info.UpdateFingerprint)
+			} else {
+				require.Empty(t, info.UpdateFingerprint)
+			}
 		})
 	}
 }

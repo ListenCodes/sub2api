@@ -43,6 +43,7 @@ type CustomReleaseInfo struct {
 	CurrentOfficialVersion string       `json:"current_official_version,omitempty"`
 	CurrentCustomVersion   string       `json:"current_custom_version,omitempty"`
 	TargetOfficialVersion  string       `json:"target_official_version,omitempty"`
+	TargetOfficialCommit   string       `json:"target_official_commit,omitempty"`
 	TargetCustomVersion    string       `json:"target_custom_version,omitempty"`
 	HasUpdate              bool         `json:"has_update"`
 	ReleaseInfo            *ReleaseInfo `json:"release_info,omitempty"`
@@ -60,6 +61,9 @@ type CustomReleaseInfo struct {
 	ProductionStableCommit string       `json:"production_stable_commit,omitempty"`
 	TargetCustomCommit     string       `json:"target_custom_commit,omitempty"`
 	TargetCustomShortSHA   string       `json:"target_custom_short_sha,omitempty"`
+	UpdateFingerprint      string       `json:"update_fingerprint,omitempty"`
+	NoticeUnread           bool         `json:"notice_unread"`
+	NoticeWarning          string       `json:"notice_warning,omitempty"`
 	CustomScopeError       string       `json:"custom_scope_error,omitempty"`
 }
 
@@ -174,6 +178,7 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 			info.CurrentOfficialVersion = current.OfficialVersion
 			info.CurrentCustomVersion = current.CustomVersion
 			info.TargetOfficialVersion = current.OfficialVersion
+			info.TargetOfficialCommit = current.OfficialCommit
 			info.TargetCustomVersion = current.CustomVersion
 			info.CurrentVersion = strings.TrimPrefix(current.OfficialVersion, "v")
 			info.LatestVersion = info.CurrentVersion
@@ -209,8 +214,12 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 			if commit, err := client.FetchRefCommit(ctx, githubRepo, release.TagName); err != nil {
 				warnings = append(warnings, "stable commit probe: "+err.Error())
 				info.DetectionComplete = false
+			} else if commit = strings.TrimSpace(commit); !isFullCommitSHA(commit) {
+				warnings = append(warnings, "stable commit probe returned no commit")
+				info.DetectionComplete = false
 			} else {
 				releaseCommit = commit
+				info.TargetOfficialCommit = commit
 			}
 		}
 	}
@@ -278,6 +287,7 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 	if len(warnings) > 0 {
 		info.Warning = strings.Join(warnings, "; ")
 	}
+	info.UpdateFingerprint = customReleaseUpdateFingerprint(info)
 	return info, nil
 }
 
