@@ -71,6 +71,7 @@ make_fake_tools() {
   cat > "$root/bin/git" <<'EOF'
 #!/usr/bin/env bash
 printf 'git %s\n' "$*" >> "$FIXTURE_CALLS"
+[[ "$FIXTURE_SCENARIO" != missing-git ]] || exit 127
 [[ "$*" == *'cat-file -e'* ]] || exit 2
 [[ "$FIXTURE_SCENARIO" != missing-source ]] || exit 1
 [[ "$FIXTURE_SCENARIO" != crowded-missing-source || "$*" != *"$FIXTURE_MISSING_COMMIT"* ]]
@@ -80,10 +81,16 @@ EOF
 printf 'docker %s\n' "$*" >> "$FIXTURE_CALLS"
 if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
   ref="${3:-}"
+  if [[ "$FIXTURE_SCENARIO" == main-pull-failure && "$ref" == *sub2api-custom* ]]; then exit 1; fi
+  if [[ "$FIXTURE_SCENARIO" == extensions-pull-failure && "$ref" == *sub2api-extensions* ]]; then exit 1; fi
   if [[ "$FIXTURE_SCENARIO" == missing-image && "$ref" == *sub2api-extensions* && ! -e "$FIXTURE_ROOT/pulled-ext" ]]; then exit 1; fi
   if [[ "$FIXTURE_SCENARIO" == crowded-missing-image && "$ref" == *"$FIXTURE_MISSING_MAIN"* ]]; then exit 1; fi
   case "$*" in
-    *'.Config.Labels'*) jq -n --arg revision "$FIXTURE_TARGET_COMMIT" '{"org.opencontainers.image.revision":$revision,"org.opencontainers.image.version":"0.1.162","org.opencontainers.image.source":"https://github.com/ListenCodes/sub2api"}' ;;
+    *'.Config.Labels'*)
+      revision="$FIXTURE_TARGET_COMMIT"
+      [[ "$FIXTURE_SCENARIO" != wrong-revision || "$ref" != *sub2api-custom* ]] || revision="$FIXTURE_OTHER_COMMIT"
+      jq -n --arg revision "$revision" '{"org.opencontainers.image.revision":$revision,"org.opencontainers.image.version":"0.1.162","org.opencontainers.image.source":"https://github.com/ListenCodes/sub2api"}'
+      ;;
     *'.Architecture'*) printf 'amd64\n' ;;
     *'.RepoDigests'*) jq -cn --arg ref "$ref" '[$ref]' ;;
     *'--format {{.Id}}'*) printf 'sha256:imageid\n' ;;
@@ -97,6 +104,8 @@ if [[ "${1:-}" == manifest && "${2:-}" == inspect ]]; then
 fi
 if [[ "${1:-}" == pull ]]; then
   [[ "$FIXTURE_SCENARIO" != pull-failure ]] || exit 1
+  [[ "$FIXTURE_SCENARIO" != main-pull-failure || "${2:-}" != *sub2api-custom* ]] || exit 1
+  [[ "$FIXTURE_SCENARIO" != extensions-pull-failure || "${2:-}" != *sub2api-extensions* ]] || exit 1
   [[ "${2:-}" != *sub2api-extensions* ]] || touch "$FIXTURE_ROOT/pulled-ext"
   exit 0
 fi
@@ -191,6 +200,7 @@ invoke_prepare() {
   [[ "$scenario" != crowded-missing-source && "$scenario" != crowded-missing-image ]] || target_commit="$OTHER_COMMIT"
   PATH="$root/bin:$PATH" FIXTURE_ROOT="$root" FIXTURE_CALLS="$root/calls" FIXTURE_SCENARIO="$scenario" \
     FIXTURE_MISSING_COMMIT="$MISSING_COMMIT" FIXTURE_MISSING_MAIN="$MISSING_MAIN" \
+    FIXTURE_OTHER_COMMIT="$OTHER_COMMIT" \
     FIXTURE_TARGET_COMMIT="$target_commit" FIXTURE_TARGET_RENDERED="$root/data/release-backups/old2/target/rendered-compose.json" \
     SUB2API_DATA_DIR="$root/data" SUB2API_REPO="$root/repo" SUB2API_ENV_FILE="$root/repo/deploy/.env" \
     SUB2API_COMPOSE_BASE="$root/repo/deploy/docker-compose.yml" SUB2API_COMPOSE_CUSTOM="$root/repo/deploy/docker-compose.custom.yml" \
@@ -231,10 +241,11 @@ run_success() {
 }
 
 run_refusal() {
-  local scenario="$1" root job_id state_before projection_before code
+  local scenario="$1" root job_id state_before projection_before backup_count_before code
   root="$(seed_case "$scenario")"; job_id="rollback-prepare-$scenario"
   state_before="$(jq -c '{current_release_id,custom_version_high_water}' "$root/data/release-ledger/state.json")"
   projection_before="$(sha256sum "$root/data/release-state.json")"
+  backup_count_before="$(find "$root/data/release-backups" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
   set +e; invoke_prepare "$root" "$scenario" >/dev/null 2>&1; code=$?; set -e
   [[ "$code" -ne 0 ]] || fail "$scenario unexpectedly succeeded"
   assert_eq "$state_before" "$(jq -c '{current_release_id,custom_version_high_water}' "$root/data/release-ledger/state.json")" "$scenario changed ledger pointer/high-water"
@@ -242,6 +253,10 @@ run_refusal() {
   assert_eq failed "$(jq -r '.status' "$root/data/release-ledger/operations/$job_id.json")" "$scenario did not settle failed"
   assert_eq "$projection_before" "$(sha256sum "$root/data/release-state.json")" "$scenario changed projection"
   [[ -z "$(grep -E 'docker compose .* (up|down|rm|restart|stop|kill)' "$root/calls" || true)" ]] || fail "$scenario changed container lifecycle"
+  [[ ! -e "$root/data/release-prepared/$job_id/manifest.json" ]] || fail "$scenario created a prepared manifest"
+  if [[ "$scenario" == wrong-revision ]]; then
+    assert_eq "$backup_count_before" "$(find "$root/data/release-backups" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" +      "$scenario created a fresh backup before rejecting the OCI revision"
+  fi
 }
 
 if [[ -n "${FIXTURE_ONLY:-}" ]]; then
@@ -250,7 +265,7 @@ if [[ -n "${FIXTURE_ONLY:-}" ]]; then
   exit 0
 fi
 
-scenarios=(success missing-image crowded-missing-source crowded-missing-image invalid current ineligible corrupt-target ledger-drift backup-failure dump-validation-failure missing-source)
+scenarios=(success missing-image crowded-missing-source crowded-missing-image invalid current ineligible corrupt-target ledger-drift backup-failure dump-validation-failure missing-source missing-git main-pull-failure extensions-pull-failure wrong-revision)
 for ((offset=0; offset<${#scenarios[@]}; offset+=5)); do
   pids=(); batch=()
   for ((index=offset; index<offset+5 && index<${#scenarios[@]}; index++)); do
