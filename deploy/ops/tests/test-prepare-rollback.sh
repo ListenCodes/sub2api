@@ -255,7 +255,8 @@ run_refusal() {
   [[ -z "$(grep -E 'docker compose .* (up|down|rm|restart|stop|kill)' "$root/calls" || true)" ]] || fail "$scenario changed container lifecycle"
   [[ ! -e "$root/data/release-prepared/$job_id/manifest.json" ]] || fail "$scenario created a prepared manifest"
   if [[ "$scenario" == wrong-revision ]]; then
-    assert_eq "$backup_count_before" "$(find "$root/data/release-backups" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" +      "$scenario created a fresh backup before rejecting the OCI revision"
+    assert_eq "$backup_count_before" "$(find "$root/data/release-backups" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" \
+      "$scenario created a fresh backup before rejecting the OCI revision"
   fi
 }
 
