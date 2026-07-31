@@ -47,6 +47,14 @@ test('pinned Stable identity matches the newest Stable Release merge', () => {
   const releaseTag = mergeSubject?.match(/^merge: integrate stable Release (v\d+\.\d+\.\d+)$/)?.[1]
   assert.equal(stableBaseline.tag, releaseTag)
 
+  const parents = spawnSync(
+    'git',
+    ['rev-list', '--parents', '-n', '1', mergeCommit],
+    { cwd, encoding: 'utf8' }
+  )
+  assert.equal(parents.status, 0, parents.stdout || parents.stderr)
+  assert.equal(parents.stdout.trim().split(/\s+/).length, 3, 'Stable integration must have exactly two parents')
+
   const releaseCommit = spawnSync(
     'git',
     ['rev-parse', `${mergeCommit}^2`],

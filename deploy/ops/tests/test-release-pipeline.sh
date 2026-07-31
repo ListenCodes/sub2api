@@ -312,8 +312,20 @@ promote_local="$(git -C "$PROMOTE_SEED" rev-parse HEAD)"
 printf 'approved base\n' >> "$PROMOTE_SEED/release.txt"
 git -C "$PROMOTE_SEED" commit -q -am base
 promote_base="$(git -C "$PROMOTE_SEED" rev-parse HEAD)"
-printf 'target\n' >> "$PROMOTE_SEED/release.txt"
-git -C "$PROMOTE_SEED" commit -q -am target
+git -C "$PROMOTE_SEED" switch -q -c stable-fixture "$promote_local"
+printf 'stable\n' > "$PROMOTE_SEED/stable.txt"
+git -C "$PROMOTE_SEED" add stable.txt
+git -C "$PROMOTE_SEED" commit -q -m 'stable release'
+promote_stable="$(git -C "$PROMOTE_SEED" rev-parse HEAD)"
+git -C "$PROMOTE_SEED" switch -q custom-release
+git -C "$PROMOTE_SEED" merge -q --no-ff -m 'merge: integrate stable Release v0.1.159' "$promote_stable"
+mkdir -p "$PROMOTE_SEED/deploy"
+jq -n --arg commit "$promote_stable" '{
+  repository:"Wei-Shaw/sub2api",tag:"v0.1.159",
+  tag_object_sha:("b" * 40),commit_sha:$commit,published_at:"2026-07-17T00:00:00Z"
+}' > "$PROMOTE_SEED/deploy/stable-release-baseline.json"
+git -C "$PROMOTE_SEED" add deploy/stable-release-baseline.json
+git -C "$PROMOTE_SEED" commit -q -m 'chore: record stable Release v0.1.159'
 promote_target="$(git -C "$PROMOTE_SEED" rev-parse HEAD)"
 git -C "$PROMOTE_SEED" branch integration/release-v0.1.159-fixture "$promote_target"
 git -C "$PROMOTE_SEED" switch -q --detach "$promote_target"

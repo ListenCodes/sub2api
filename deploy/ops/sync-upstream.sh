@@ -131,16 +131,19 @@ if [[ "$baseline_tag" == "$RELEASE_TAG" && "$baseline_tag_object" == "$RELEASE_T
   baseline_matches=1
 fi
 
-if [[ "$baseline_matches" -eq 1 ]] && git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
-  metadata="$(jq -n \
-    --arg base "$BASE_COMMIT" \
-    --arg target "$BASE_COMMIT" \
-    --arg tag "$RELEASE_TAG" \
-    --arg commit "$RELEASE_COMMIT" \
-    --arg published "$RELEASE_PUBLISHED_AT" \
-    '{base_commit:$base,target_commit:$target,integration_branch:"",release_tag:$tag,release_commit:$commit,release_published_at:$published}')"
-  release_job_update "$JOB_ID" resolving_target "Stable Release $RELEASE_TAG is already integrated" "$metadata"
-  exit 0
+if git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
+  if [[ "$baseline_matches" -eq 1 ]]; then
+    metadata="$(jq -n \
+      --arg base "$BASE_COMMIT" \
+      --arg target "$BASE_COMMIT" \
+      --arg tag "$RELEASE_TAG" \
+      --arg commit "$RELEASE_COMMIT" \
+      --arg published "$RELEASE_PUBLISHED_AT" \
+      '{base_commit:$base,target_commit:$target,integration_branch:"",release_tag:$tag,release_commit:$commit,release_published_at:$published}')"
+    release_job_update "$JOB_ID" resolving_target "Stable Release $RELEASE_TAG is already integrated" "$metadata"
+    exit 0
+  fi
+  fail_job 'stable Release ancestry exists without the matching canonical baseline identity' BASELINE_MERGE_IDENTITY_MISMATCH
 fi
 
 INTEGRATION_BRANCH="integration/release-$RELEASE_TAG-$(date -u '+%Y%m%d-%H%M%S')-$RANDOM"
@@ -150,7 +153,8 @@ git worktree add --detach "$WORKTREE" "$ORIGIN_REMOTE/$BRANCH" >> "$LOG" 2>&1 ||
 git -C "$WORKTREE" switch -c "$INTEGRATION_BRANCH" >> "$LOG" 2>&1 || fail_job 'create candidate branch failed' INTEGRATION_BRANCH_FAILED
 release_job_update "$JOB_ID" resolving_target "Merging $RELEASE_TAG into $INTEGRATION_BRANCH" "$(jq -n --arg branch "$INTEGRATION_BRANCH" --arg base "$BASE_COMMIT" '{integration_branch:$branch,base_commit:$base}')"
 
-if ! git -C "$WORKTREE" merge --no-ff --no-edit "$RELEASE_COMMIT" >> "$LOG" 2>&1; then
+MERGE_SUBJECT="merge: integrate stable Release $RELEASE_TAG"
+if ! git -C "$WORKTREE" merge --no-ff -m "$MERGE_SUBJECT" "$RELEASE_COMMIT" >> "$LOG" 2>&1; then
   conflict_snapshot_dir="$CONFLICT_DIR/$JOB_ID"
   mkdir -p "$conflict_snapshot_dir"
   conflict_files_json="$(git -C "$WORKTREE" diff --name-only --diff-filter=U | jq -R -s 'split("\n") | map(select(length > 0))')"
@@ -179,6 +183,19 @@ if ! git -C "$WORKTREE" merge --no-ff --no-edit "$RELEASE_COMMIT" >> "$LOG" 2>&1
   exit 2
 fi
 
+MERGE_COMMIT="$(git -C "$WORKTREE" rev-parse HEAD)"
+merge_subject="$(git -C "$WORKTREE" show -s --format=%s "$MERGE_COMMIT")"
+read -r merge_identity merge_parent_one merge_parent_two merge_parent_extra \
+  <<< "$(git -C "$WORKTREE" rev-list --parents -n 1 "$MERGE_COMMIT")"
+[[ "$merge_identity" == "$MERGE_COMMIT" && -z "$merge_parent_extra" ]] \
+  || fail_job 'stable Release integration is not an exact two-parent merge' RELEASE_MERGE_SHAPE_INVALID
+[[ "$merge_subject" == "$MERGE_SUBJECT" ]] \
+  || fail_job 'stable Release integration subject is not canonical' RELEASE_MERGE_SUBJECT_INVALID
+[[ "$merge_parent_one" == "$BASE_COMMIT" ]] \
+  || fail_job 'stable Release integration first parent is not the approved custom-release base' RELEASE_MERGE_FIRST_PARENT_INVALID
+[[ "$merge_parent_two" == "$RELEASE_COMMIT" ]] \
+  || fail_job 'stable Release integration second parent is not the resolved Release commit' RELEASE_MERGE_SECOND_PARENT_INVALID
+
 jq -n \
   --arg repository 'Wei-Shaw/sub2api' \
   --arg tag "$RELEASE_TAG" \
@@ -188,6 +205,18 @@ jq -n \
   '{repository:$repository,tag:$tag,tag_object_sha:$tag_object_sha,commit_sha:$commit_sha,published_at:$published_at}' \
   > "$WORKTREE/$BASELINE_RELATIVE.tmp"
 mv -f "$WORKTREE/$BASELINE_RELATIVE.tmp" "$WORKTREE/$BASELINE_RELATIVE"
+jq -e \
+  --arg tag "$RELEASE_TAG" \
+  --arg tag_object "$RELEASE_TAG_OBJECT_SHA" \
+  --arg commit "$RELEASE_COMMIT" \
+  --arg published "$RELEASE_PUBLISHED_AT" '
+    .repository == "Wei-Shaw/sub2api"
+    and .tag == $tag
+    and .tag_object_sha == $tag_object
+    and .commit_sha == $commit
+    and .published_at == $published
+  ' "$WORKTREE/$BASELINE_RELATIVE" >/dev/null \
+  || fail_job 'stable Release baseline does not match the canonical merge identity' BASELINE_IDENTITY_INVALID
 git -C "$WORKTREE" add "$BASELINE_RELATIVE"
 if ! git -C "$WORKTREE" diff --cached --quiet; then
   git -C "$WORKTREE" commit -m "chore: record stable Release $RELEASE_TAG" >> "$LOG" 2>&1 || fail_job 'commit stable baseline failed' BASELINE_COMMIT_FAILED
