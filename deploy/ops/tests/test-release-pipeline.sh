@@ -233,10 +233,23 @@ cat > "$TMP_DIR/checks-failed.json" <<'JSON'
 JSON
 
 checks_output="$(SUB2API_CHECKS_JSON_FILE="$TMP_DIR/checks-success.json" "$ROOT_DIR/deploy/ops/wait-for-actions.sh" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"
-[[ "$checks_output" == *'workflow_url=https://github.example/images'* ]] || fail 'successful checks did not return workflow evidence'
-if SUB2API_CHECKS_JSON_FILE="$TMP_DIR/checks-failed.json" "$ROOT_DIR/deploy/ops/wait-for-actions.sh" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null 2>&1; then
+[[ "$(jq -r '.ok' <<< "$checks_output")" == true ]] || fail 'successful checks did not return success evidence'
+[[ "$(jq -r '.workflow_url' <<< "$checks_output")" == https://github.example/images ]] || fail 'successful checks did not return workflow evidence'
+set +e
+checks_failure_output="$(SUB2API_CHECKS_JSON_FILE="$TMP_DIR/checks-failed.json" "$ROOT_DIR/deploy/ops/wait-for-actions.sh" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"
+checks_failure_status=$?
+set -e
+if [[ "$checks_failure_status" -eq 0 ]]; then
   fail 'failed Actions checks were accepted'
 fi
+jq -e '
+  .ok == false
+  and .error_code == "ACTIONS_REQUIRED_CHECK_FAILED"
+  and .failed_check == "backend"
+  and .check_url == "https://github.example/backend"
+  and .conclusion == "failure"
+  and .production_changed == false
+' <<< "$checks_failure_output" >/dev/null || fail 'failed Actions checks lost concrete evidence'
 
 cat > "$TMP_DIR/docker" <<'SH'
 #!/usr/bin/env bash

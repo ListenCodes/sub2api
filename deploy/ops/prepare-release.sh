@@ -36,8 +36,10 @@ JOB_FILE="$(release_job_path "$JOB_ID")"
 [[ "$(jq -r '.action // empty' "$JOB_FILE")" == prepare ]] || { release_job_fail "$JOB_ID" LEGACY_SINGLE_PHASE_UNSUPPORTED 'Legacy or non-prepare release job rejected'; exit 1; }
 
 fail_prepare() {
-  local message="$1" code="${2:-PREPARE_FAILED}" metadata
-  metadata="$(jq -n --arg code "$code" '{error_code:$code,published:false,production_changed:false}')"
+  local message="$1" code="${2:-PREPARE_FAILED}" evidence="${3:-}" metadata
+  [[ -n "$evidence" ]] || evidence='{}'
+  metadata="$(jq -cn --arg code "$code" --argjson evidence "$evidence" \
+    '$evidence + {error_code:$code,published:false,production_changed:false}')"
   ledger_settle_pre_mutation_failure "$JOB_ID" failed "$message" "$metadata" || true
   printf '%s\n' "$message" >&2
   exit 1
@@ -241,9 +243,19 @@ if [[ "$REUSE_VERIFIED_EVIDENCE" == true ]]; then
       '{workflow_url:$url,main_digest:$main,extensions_digest:$ext,images_verified:true}')"
 else
   release_job_update "$JOB_ID" resolving_target "Waiting for Actions on $TARGET_COMMIT" '{}'
-  actions_output="$($WAIT_ACTIONS_SCRIPT "$TARGET_COMMIT")" || fail_prepare 'required GitHub Actions checks failed' ACTIONS_FAILED
-  WORKFLOW_URL="${actions_output#workflow_url=}"
-  [[ "$actions_output" == workflow_url=* && -n "$WORKFLOW_URL" ]] || fail_prepare 'Actions waiter returned invalid evidence' ACTIONS_EVIDENCE_INVALID
+  if ! actions_output="$($WAIT_ACTIONS_SCRIPT "$TARGET_COMMIT")"; then
+    if jq -e '.ok == false and (.message | type == "string" and length > 0) and (.error_code | type == "string" and length > 0)' \
+      <<< "$actions_output" >/dev/null 2>&1; then
+      actions_message="$(jq -r '.message' <<< "$actions_output")"
+      actions_code="$(jq -r '.error_code' <<< "$actions_output")"
+      actions_evidence="$(jq -c '{failed_check,check_url,conclusion,workflow_url}' <<< "$actions_output")"
+      fail_prepare "$actions_message" "$actions_code" "$actions_evidence"
+    fi
+    fail_prepare 'required GitHub Actions checks failed without valid evidence' ACTIONS_EVIDENCE_INVALID
+  fi
+  jq -e '.ok == true and (.workflow_url | type == "string" and length > 0)' <<< "$actions_output" >/dev/null \
+    || fail_prepare 'Actions waiter returned invalid evidence' ACTIONS_EVIDENCE_INVALID
+  WORKFLOW_URL="$(jq -r '.workflow_url' <<< "$actions_output")"
   release_job_update "$JOB_ID" verifying_images "Verifying paired GHCR images for $TARGET_COMMIT" "$(jq -n --arg url "$WORKFLOW_URL" '{workflow_url:$url}')"
   images_output="$($VERIFY_IMAGES_SCRIPT "$TARGET_COMMIT" "${RELEASE_TAG#v}")" || fail_prepare 'paired GHCR image verification failed' IMAGES_FAILED
   MAIN_DIGEST="$(awk -F= '$1=="main_digest" {print $2}' <<< "$images_output")"
