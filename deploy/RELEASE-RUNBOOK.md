@@ -133,6 +133,7 @@ Install the scripts from `deploy/ops/` to `/opt/sub2api-custom/`:
 sync-trigger.sh    container-mounted trigger; writes a job ID and returns
 sync-upstream.sh   verifies a stable Release and prepares origin/integration/release-*
 wait-for-actions.sh / verify-release-images.sh  Actions and image gates
+actions-check-result.jq normalizes required-check evidence for the durable job
 promote-release.sh guarded remote-only branch promotion
 sync-and-publish.sh durable host orchestrator
 prepare-release.sh creates the immutable manifest, backup, and rollback evidence
@@ -145,6 +146,7 @@ Install scripts and units, then enable the path watcher:
 
 ```bash
 install -m 0755 deploy/ops/*.sh /opt/sub2api-custom/
+install -m 0644 deploy/ops/actions-check-result.jq /opt/sub2api-custom/
 install -m 0644 deploy/ops/sub2api-release.path /etc/systemd/system/
 install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
 systemctl daemon-reload
@@ -245,6 +247,13 @@ metadata. They must not introduce private status values. The deployment
 contract tests compare `deploy/ops/release-state.sh` and literal script writes
 with the backend constants.
 
+`wait-for-actions.sh` emits exactly one JSON result. A failed, cancelled, or
+skipped required check records `failed_check`, `check_url`, `conclusion`,
+`workflow_url`, a specific `error_code`, and `production_changed=false` in the
+same durable operation. Missing or malformed check evidence fails closed;
+`images` is a required check and cannot be skipped. Do not replace this evidence
+with the generic label "required GitHub Actions".
+
 Installing a newer script set does not rewrite an already-running or historical
 operation. Let an operation created by older scripts reach a terminal state
 before starting another update.
@@ -252,12 +261,22 @@ before starting another update.
 ### Administrator notice and rollback contract
 
 Update detection returns functional `has_update` independently from advisory
-`notice_unread`. The fingerprint is the canonical SHA-256 of schema marker,
-update kind, target Official version/commit, and target Custom commit. Per-admin
-last-read state is stored atomically in
-`/app/data/custom-release-notice-state.json`. Opening the menu or beginning a
-prepare/apply action acknowledges the current fingerprint. A state-file failure
-returns a warning and must not disable release controls.
+`notice_unread`. Only a `docs-only` target may be acknowledged when an
+administrator opens the menu. Its fingerprint is the canonical SHA-256 of the
+schema marker, update kind, target Official version/commit, and target Custom
+commit; per-admin last-read state is stored atomically in
+`/app/data/custom-release-notice-state.json`. The docs remain visible after
+acknowledgement, and a state-file failure returns a warning without disabling
+release controls.
+
+Runtime `official`, `custom`, and `combined` attention is derived from
+`runtime_update && has_update`; menu open/close, refresh, login, another device,
+prepare, and apply cannot acknowledge or ignore it. It remains amber until a
+successful deployment makes a fresh detection return `has_update=false`.
+Matching terminal update failures are restored from the current durable ledger
+operation across devices. localStorage is only an exact-job accelerator. A
+failure is cleared only by a successful retry/update or by a newly detected
+target identity; closing the menu never clears it.
 
 Rollback history is a data-volume query: list complete ledger records, exclude
 the current release, and return the newest three. The Web process must not run
@@ -659,6 +678,15 @@ digests, Compose and environment hashes, backup directory, `prepared_at`, and
 `expires_at`. A retry after expiry may reuse verified image evidence but must
 create a fresh backup and manifest.
 
+When an official Stable Release is integrated, `sync-upstream.sh` must create
+an exact two-parent merge with subject
+`merge: integrate stable Release vX.Y.Z`, approved `custom-release` as first
+parent, and the peeled official Release commit as second parent. The following
+baseline-record commit must name that same tag and commit. Before any push to
+`custom-release`, `promote-release.sh` revalidates the tested target's single
+new first-parent merge, both parents, canonical subject, and baseline identity.
+Generic Git-generated merge subjects are not promotable.
+
 `apply-release.sh` accepts only a prepared manifest. It does not contact GitHub,
 wait for Actions, pull images, or repeat database backups. It refuses to run on
 production/origin/Compose/.env/digest/backup drift or an expired/corrupt
@@ -671,6 +699,7 @@ release entry point.
 
 The `/admin/system/update` endpoint remains a prepare-only compatibility alias.
 Legacy single-phase jobs are rejected with
-`LEGACY_SINGLE_PHASE_UNSUPPORTED`. Opening the admin version popup only shows
-current detection or an active/prepared durable job; a previous success,
-failure, or rollback result is historical and is not replayed.
+`LEGACY_SINGLE_PHASE_UNSUPPORTED`. A previous success or unrelated target is
+historical and is not replayed. A terminal update failure whose Stable and
+Custom target identity still matches current detection remains actionable and
+is replayed with its concrete failure evidence until replaced or resolved.

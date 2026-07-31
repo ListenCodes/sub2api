@@ -99,15 +99,19 @@ Do not move custom services back into `docker-compose.local.yml`.
   performs local `--pull never` extensions-first/main-second switching and
   health checks, then atomically writes production state or rolls back.
 - `sync-upstream.sh` verifies `Wei-Shaw/sub2api /releases/latest`, fetches the
-  exact annotated tag, and creates `origin/integration/release-*` when needed.
+  exact annotated tag, and creates `origin/integration/release-*` with the
+  canonical Stable merge subject, approved base as first parent, and peeled
+  Release commit as second parent.
 - `classify-release-scope.sh` compares the production and target commits; a
   target containing only Markdown, `AGENTS.md`, or any `.gitignore` is marked
   `docs_only` and stops before Actions, GHCR verification, or publication.
-- `wait-for-actions.sh` requires the complete Custom Release validation suite.
+- `wait-for-actions.sh` requires the complete Custom Release validation suite
+  and returns one structured JSON result with concrete failed-check evidence.
 - `verify-release-images.sh` checks public pull, `linux/amd64`, digest identity,
   and OCI revision/version/source labels for both images.
-- `promote-release.sh` advances only the tested remote candidate after a base
-  recheck. It does not move the local production source.
+- `promote-release.sh` advances only the tested remote candidate after a base,
+  canonical merge-parent, subject, and Stable baseline recheck. It does not move
+  the local production source.
 - `publish-custom.sh` is a deprecated fail-closed compatibility shim and is
   never a final release entry point.
 - `bootstrap-custom-local.sh` owns secret-safe local custom setup and the
@@ -259,6 +263,7 @@ Install scripts with mode `0755`, units with mode `0644`, then enable the path:
 
 ```bash
 install -m 0755 deploy/ops/*.sh /opt/sub2api-custom/
+install -m 0644 deploy/ops/actions-check-result.jq /opt/sub2api-custom/
 install -m 0644 deploy/ops/sub2api-release.path /etc/systemd/system/
 install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
 systemctl daemon-reload

@@ -334,6 +334,7 @@ The versioned scripts in `deploy/ops/` are installed on the VPS as follows:
 
 ```bash
 install -m 0755 deploy/ops/*.sh /opt/sub2api-custom/
+install -m 0644 deploy/ops/actions-check-result.jq /opt/sub2api-custom/
 install -m 0644 deploy/ops/sub2api-release.path /etc/systemd/system/
 install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
 systemctl daemon-reload

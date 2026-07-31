@@ -71,6 +71,7 @@ cleanup_new_site() {
     for source_path in "$REPO"/deploy/ops/*.sh; do
       rm -f -- "$INSTALL_ROOT/$(basename "$source_path")"
     done
+    rm -f -- "$INSTALL_ROOT/actions-check-result.jq"
     rmdir -- "$INSTALL_ROOT" >/dev/null 2>&1 || true
   fi
   for index in "${!CREATED_CONTAINERS[@]}"; do
@@ -396,6 +397,7 @@ fi
 install -d -m 0755 "$INSTALL_ROOT"
 INSTALLED_OPS=true
 install -m 0755 "$REPO"/deploy/ops/*.sh "$INSTALL_ROOT/"
+install -m 0644 "$REPO/deploy/ops/actions-check-result.jq" "$INSTALL_ROOT/"
 install -m 0644 "$REPO/deploy/ops/sub2api-release.path" "$SYSTEMD_ROOT/"
 install -m 0644 "$REPO/deploy/ops/sub2api-release.service" "$SYSTEMD_ROOT/"
 INSTALLED_UNITS=true

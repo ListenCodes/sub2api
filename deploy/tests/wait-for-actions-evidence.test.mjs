@@ -132,3 +132,12 @@ test('prepare-release persists structured waiter evidence without changing produ
   assert.match(source, /\.ok == false/)
   assert.match(source, /\.ok == true/)
 })
+
+test('site bootstrap installs the versioned Actions result filter', () => {
+  const source = readFileSync(resolve(deployRoot, 'ops', 'bootstrap-custom-site.sh'), 'utf8')
+  assert.match(
+    source,
+    /install -m 0644 "\$REPO\/deploy\/ops\/actions-check-result\.jq" "\$INSTALL_ROOT\/"/
+  )
+  assert.match(source, /rm -f -- "\$INSTALL_ROOT\/actions-check-result\.jq"/)
+})

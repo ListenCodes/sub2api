@@ -195,8 +195,11 @@ release-trigger
 按钮会自动处理三种场景：
 
 1. 有新的官方稳定 Release：验证 annotated tag 和 Release commit，在
-   `integration/release-*` 临时分支合并，仅在 Actions/镜像通过且基线未变化时推进
-   `origin/custom-release`。
+   `integration/release-*` 临时分支合并。合并标题必须精确为
+   `merge: integrate stable Release vX.Y.Z`，第一父提交是已批准的
+   `origin/custom-release` 基线，第二父提交是 annotated tag 解引用后的官方 commit；
+   `stable-release-baseline.json` 必须指向同一 tag/commit。只有 Actions/镜像通过且
+   promotion 再次验证这组身份后，才推进 `origin/custom-release`。
 2. 官方无新版，但 `custom-release` 有未部署自定义 commit：等待该 commit 的 Actions/镜像并直接发布。
 3. 官方和自定义代码都没有变化：返回 `success`，不拉取镜像，不重建容器。
 
@@ -418,13 +421,16 @@ commit 短 SHA，不使用 semver。检测是只读的，不修改生产、不�
 任何运行时代码差异都进入运行时门禁；纯 Markdown、`AGENTS.md` 和 `.gitignore`
 可以提示但不会创建生产切换任务。
 
-提示状态与功能状态彼此独立：`has_update` 始终表示真实可操作更新，`notice_unread` 只控制
-左上角橙色背景、圆点和动画。服务端 fingerprint 固定包含 update kind、目标 Official
-version/commit 和目标 Custom commit；最后已读 fingerprint 按管理员 `user_id` 写入
-`/app/data/custom-release-notice-state.json`，因此同一管理员跨浏览器/设备只提示一次，其他
-管理员互不影响，新目标会重新提示。打开下拉或准备/确认操作会尽力标记已读；状态文件异常
-只能返回 advisory warning，不得阻断检测、prepare 或 apply。docs-only 目标也可标记已读，但
-检测内容仍保留。
+提示分为两类。只有 `docs-only` 使用 `notice_unread` 控制左上角橙色背景、圆点和动画；管理员
+打开下拉后可以按 fingerprint 标记已读，但检测内容仍保留。服务端 fingerprint 固定包含
+update kind、目标 Official version/commit 和目标 Custom commit；最后已读 fingerprint 按
+管理员 `user_id` 原子写入 `/app/data/custom-release-notice-state.json`，其他管理员互不影响。
+状态文件异常只能返回 advisory warning，不得阻断检测。
+
+`official`、`custom` 和 `combined` 等真实运行更新的橙色提醒直接由 `runtime_update` 与
+`has_update` 派生，打开/关闭下拉、刷新、重新登录、跨设备或 prepare/apply 都不能标记已读，
+也不提供忽略入口。提醒只在成功部署后的重新检测返回 `has_update=false` 时消失；新目标按新的
+目标身份替代旧目标。
 
 管理员按钮采用明确的 prepare/apply 两步：
 
@@ -443,10 +449,18 @@ version/commit 和目标 Custom commit；最后已读 fingerprint 按管理员 `
    `data-quality` 健康检查后才原子写 `release-state.json`。失败自动使用准备阶段的旧
    digest 和匹配 Compose 对回滚。
 
-刷新、重新登录或浏览器断开会从服务端恢复当前非终态或 `prepared` job；终态 success、
-失败、冲突或回滚只作为审计历史，重新打开弹框不会显示上一次结果。旧单阶段 job 会
-fail-closed，`/admin/system/update` 仅保留为 prepare 兼容别名，不得直接调用
-`publish-custom.sh`。
+刷新、重新登录或浏览器断开时，页面先完成当前目标检测，再同时查询 localStorage 中的精确
+job ID 和服务端最新 durable job。localStorage 只作同设备加速；跨设备以服务端
+`release-current-job-id` 和 ledger operation 为准。两者不同则优先较新的 `updated_at`，
+时间缺失或不明确时优先服务端 current job。
+
+匹配当前 Official tag/commit 和 Custom target commit 的 `failed`、`conflict`、`drifted`、
+`failed_rolled_back`、`rollback_failed` 会持续恢复失败卡和橙色提醒；关闭/重开下拉不会清除。
+失败卡显示持久化的 `failed_check`、`conclusion`、`error_code`、`check_url`/`workflow_url` 和
+`production_changed=false`。只有新目标替代、重新准备后成功、或部署成功使 `has_update=false`
+才清除；重试会创建新 prepare job 并替换本地 job ID。`expired` 回到可重新准备状态，旧
+单阶段 job 继续 fail-closed。`/admin/system/update` 仅保留为 prepare 兼容别名，不得直接
+调用 `publish-custom.sh`。
 
 完整回退与更新共用官方视觉语言，但逻辑仍由自定义组件拥有。页面先显示 loading；current
 release 或历史列表失败时显示错误和 retry；无完整历史时显示 empty。候选仅从 ledger 读取，
