@@ -165,6 +165,9 @@ export interface UpdateJob {
   published_commit?: string
   production_changed?: boolean
   error_code?: string
+  failed_check?: string
+  check_url?: string
+  conclusion?: string
   artifact_path?: string
   prepared_manifest?: string
   prepared_manifest_sha256?: string

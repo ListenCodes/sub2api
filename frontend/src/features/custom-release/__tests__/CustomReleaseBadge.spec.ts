@@ -87,8 +87,10 @@ describe('VersionBadge conflict reporting', () => {
     mocks.appStore.detectionComplete = true
     mocks.appStore.updateWarning = ''
     mocks.appStore.targetCustomShortSHA = ''
-    mocks.appStore.targetOfficialVersion = ''
+    mocks.appStore.targetOfficialVersion = 'v0.1.169'
+    mocks.appStore.targetOfficialCommit = 'c'.repeat(40)
     mocks.appStore.targetCustomVersion = ''
+    mocks.appStore.targetCustomCommit = 'd'.repeat(40)
     mocks.appStore.currentRelease = {
       release_id: 'release-current',
       official_version: 'v0.1.164',
@@ -105,7 +107,8 @@ describe('VersionBadge conflict reporting', () => {
     mocks.appStore.markCurrentNoticeRead.mockImplementation(async () => {
       mocks.appStore.noticeUnread = false
     })
-    mocks.getUpdateStatus.mockRejectedValueOnce({ response: { status: 404 } })
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockRejectedValue({ response: { status: 404 } })
   })
 
   afterEach(() => {
@@ -370,7 +373,7 @@ describe('VersionBadge conflict reporting', () => {
 
     expect(wrapper.text()).toContain('deployment failed; previous release restored')
     expect(wrapper.text()).toContain('automatic restoration succeeded')
-    expect(localStorage.getItem('sub2api-release-job-id')).toBeNull()
+    expect(localStorage.getItem('sub2api-release-job-id')).toBe('update-auto-restored')
     wrapper.unmount()
   })
 
@@ -411,6 +414,146 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).toContain('version.releaseState.waiting_actions')
     expect(wrapper.text()).toContain('Waiting for GitHub Actions')
 
+    wrapper.unmount()
+  })
+
+  it('restores a matching server-side failure across close and reopen', async () => {
+    mocks.appStore.updateKind = 'combined'
+    mocks.appStore.officialUpdate = true
+    mocks.appStore.customUpdate = true
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-server-failure',
+      operation_kind: 'update',
+      action: 'prepare',
+      status: 'failed',
+      message: 'required check deployment concluded failure',
+      stable_release_tag: 'v0.1.169',
+      stable_release_commit: 'c'.repeat(40),
+      target_custom_commit: 'd'.repeat(40),
+      failed_check: 'deployment',
+      check_url: 'https://github.com/ListenCodes/sub2api/actions/runs/1/job/2',
+      conclusion: 'failure',
+      error_code: 'ACTIONS_REQUIRED_CHECK_FAILED',
+      production_changed: false,
+      need_restart: false,
+      updated_at: '2026-07-31T10:00:00Z'
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.168' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+
+    expect(mocks.getUpdateStatus).toHaveBeenCalledWith(undefined)
+    expect(localStorage.getItem('sub2api-release-job-id')).toBe('update-server-failure')
+    const badge = wrapper.get('[data-testid="custom-release-badge"]')
+    await badge.trigger('click')
+    expect(wrapper.text()).toContain('required check deployment concluded failure')
+    expect(wrapper.text()).toContain('deployment')
+    expect(wrapper.text()).toContain('ACTIONS_REQUIRED_CHECK_FAILED')
+    expect(wrapper.text()).toContain('failure')
+    expect(wrapper.text()).toContain('production_changed=false')
+    const actionsLink = wrapper.get(
+      'a[href="https://github.com/ListenCodes/sub2api/actions/runs/1/job/2"]'
+    )
+    expect(actionsLink.attributes('target')).toBe('_blank')
+    expect(actionsLink.attributes('rel')).toContain('noopener')
+
+    await badge.trigger('click')
+    await badge.trigger('click')
+    expect(wrapper.text()).toContain('required check deployment concluded failure')
+    expect(wrapper.text()).toContain('version.retryPreparation')
+    wrapper.unmount()
+  })
+
+  it('prefers a newer server failure over an older local job and replaces it on retry', async () => {
+    localStorage.setItem('sub2api-release-job-id', 'update-local-old')
+    mocks.appStore.updateKind = 'official'
+    mocks.appStore.officialUpdate = true
+    mocks.appStore.customUpdate = false
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus
+      .mockResolvedValueOnce({
+        job_id: 'update-local-old',
+        operation_kind: 'update',
+        action: 'prepare',
+        status: 'failed',
+        message: 'old failure',
+        stable_release_tag: 'v0.1.168',
+        stable_release_commit: 'b'.repeat(40),
+        production_changed: false,
+        need_restart: false,
+        updated_at: '2026-07-31T09:00:00Z'
+      })
+      .mockResolvedValueOnce({
+        job_id: 'update-server-new',
+        operation_kind: 'update',
+        action: 'prepare',
+        status: 'failed',
+        message: 'new target failure',
+        stable_release_tag: 'v0.1.169',
+        stable_release_commit: 'c'.repeat(40),
+        production_changed: false,
+        need_restart: false,
+        updated_at: '2026-07-31T10:00:00Z'
+      })
+    mocks.prepareUpdate.mockResolvedValue({
+      job_id: 'update-retry-new',
+      operation_kind: 'update',
+      action: 'prepare',
+      status: 'resolving_target',
+      message: 'retry queued',
+      need_restart: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.168' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+
+    expect(wrapper.text()).toContain('new target failure')
+    expect(wrapper.text()).not.toContain('old failure')
+    expect(localStorage.getItem('sub2api-release-job-id')).toBe('update-server-new')
+    const retry = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('version.retryPreparation'))
+    expect(retry).toBeDefined()
+    await retry!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.prepareUpdate).toHaveBeenCalled()
+    expect(localStorage.getItem('sub2api-release-job-id')).toBe('update-retry-new')
+    wrapper.unmount()
+  })
+
+  it('does not restore a terminal failure for a replaced target', async () => {
+    localStorage.setItem('sub2api-release-job-id', 'update-stale-target')
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-stale-target',
+      operation_kind: 'update',
+      action: 'prepare',
+      status: 'failed',
+      message: 'old target failure',
+      stable_release_tag: 'v0.1.168',
+      stable_release_commit: 'b'.repeat(40),
+      production_changed: false,
+      need_restart: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.168' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+
+    expect(wrapper.text()).not.toContain('old target failure')
+    expect(localStorage.getItem('sub2api-release-job-id')).toBeNull()
     wrapper.unmount()
   })
 
@@ -534,13 +677,15 @@ describe('VersionBadge conflict reporting', () => {
       message: 'Release job queued',
       need_restart: false
     })
-    mocks.getUpdateStatus.mockResolvedValue({
-      job_id: 'update-custom',
-      status: 'waiting_images',
-      message: 'Waiting for paired images',
-      need_restart: false,
-      published: false
-    })
+    mocks.getUpdateStatus
+      .mockRejectedValueOnce({ response: { status: 404 } })
+      .mockResolvedValue({
+        job_id: 'update-custom',
+        status: 'waiting_images',
+        message: 'Waiting for paired images',
+        need_restart: false,
+        published: false
+      })
 
     const wrapper = mount(VersionBadge, {
       props: { version: '0.1.158' },

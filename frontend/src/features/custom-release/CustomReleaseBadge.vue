@@ -222,9 +222,38 @@
                     <p class="text-sm font-medium text-red-700 dark:text-red-300">
                       {{ t('version.updateFailed') }}
                     </p>
-                    <p class="truncate text-xs text-red-600/70 dark:text-red-400/70">
+                    <p class="break-words text-xs text-red-600/70 dark:text-red-400/70">
                       {{ updateError }}
                     </p>
+                    <dl
+                      v-if="failedCheck || failureConclusion || failureErrorCode || failureCheckURL || failureProductionChanged === false"
+                      class="mt-2 space-y-1 text-xs text-red-600/80 dark:text-red-400/80"
+                      data-testid="release-failure-evidence"
+                    >
+                      <div v-if="failedCheck" class="flex gap-1">
+                        <dt class="font-medium">{{ t('version.requiredCheck') }}:</dt>
+                        <dd class="break-all">{{ failedCheck }}</dd>
+                      </div>
+                      <div v-if="failureConclusion" class="flex gap-1">
+                        <dt class="font-medium">{{ t('version.checkConclusion') }}:</dt>
+                        <dd class="break-all">{{ failureConclusion }}</dd>
+                      </div>
+                      <div v-if="failureErrorCode" class="flex gap-1">
+                        <dt class="font-medium">{{ t('version.errorCode') }}:</dt>
+                        <dd class="break-all">{{ failureErrorCode }}</dd>
+                      </div>
+                      <div v-if="failureProductionChanged === false">production_changed=false</div>
+                    </dl>
+                    <a
+                      v-if="failureCheckURL"
+                      :href="failureCheckURL"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-red-700 underline dark:text-red-300"
+                    >
+                      {{ t('version.viewActions') }}
+                      <Icon name="externalLink" size="xs" :stroke-width="2" />
+                    </a>
                     <p
                       v-if="rollbackMessage"
                       class="mt-1 break-words text-xs text-red-600/70 dark:text-red-400/70"
@@ -260,7 +289,7 @@
                   :disabled="updating"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {{ t('version.retry') }}
+                  {{ t('version.retryPreparation') }}
                 </button>
               </div>
 
@@ -626,6 +655,11 @@ const customReleaseMessages = {
       updateConflictNoProductionChange: 'Production was not changed',
       updateConflictLog: 'Diagnostic artifact',
       updateConflictCommits: 'Merge base -> stable Release',
+      retryPreparation: 'Retry preparation',
+      requiredCheck: 'Required check',
+      checkConclusion: 'Conclusion',
+      errorCode: 'Error code',
+      viewActions: 'View GitHub Actions',
       releaseState: {
         resolving_target: 'Resolving release target',
         resolving_snapshot: 'Resolving rollback snapshot',
@@ -679,6 +713,11 @@ const customReleaseMessages = {
       updateConflictNoProductionChange: '生产环境未改变',
       updateConflictLog: '诊断资料',
       updateConflictCommits: '合并基线 -> 稳定 Release',
+      retryPreparation: '重试准备',
+      requiredCheck: '必需检查',
+      checkConclusion: '结论',
+      errorCode: '错误代码',
+      viewActions: '查看 GitHub Actions',
       releaseState: {
         resolving_target: '正在解析发布目标',
         resolving_snapshot: '正在解析回退快照',
@@ -748,7 +787,9 @@ const releaseAttentionRequired = computed(() =>
 )
 const customShortSHA = computed(() => appStore.targetCustomShortSHA || '')
 const targetOfficialVersion = computed(() => appStore.targetOfficialVersion || '')
+const targetOfficialCommit = computed(() => appStore.targetOfficialCommit || '')
 const targetCustomVersion = computed(() => appStore.targetCustomVersion || '')
+const targetCustomCommit = computed(() => appStore.targetCustomCommit || '')
 const detectionComplete = computed(() => appStore.detectionComplete)
 const updateWarning = computed(() => appStore.updateWarning || '')
 const currentReleaseLoading = computed(() => appStore.currentReleaseLoading === true)
@@ -780,6 +821,11 @@ const conflictRelease = ref('')
 const conflictLog = ref('')
 const resolutionHint = ref('')
 const rollbackMessage = ref('')
+const failedCheck = ref('')
+const failureCheckURL = ref('')
+const failureConclusion = ref('')
+const failureErrorCode = ref('')
+const failureProductionChanged = ref<boolean | null>(null)
 const restartCountdown = ref(0)
 const updatePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const updatePollDeadlineTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -811,7 +857,7 @@ const isReleaseBuild = computed(() => buildType.value === 'release')
 
 function toggleDropdown() {
   const opening = !dropdownOpen.value
-  if (opening) {
+  if (opening && updateSuccess.value) {
     resetTerminalUpdateFeedback()
   }
   dropdownOpen.value = opening
@@ -845,24 +891,7 @@ function closeDropdown() {
 async function refreshVersion(force = true) {
   if (!isAdmin.value || updating.value) return
 
-  // Reset update states when refreshing
-  updateError.value = ''
-  updateSuccess.value = false
-  updateSuccessMessage.value = ''
-  updateStage.value = ''
-  updateStageMessage.value = ''
-  published.value = false
-  publishedCommit.value = ''
-  releaseTag.value = ''
-  releaseCommit.value = ''
-  releasePublishedAt.value = ''
-  conflictFiles.value = []
-  conflictBase.value = ''
-  conflictUpstream.value = ''
-  conflictRelease.value = ''
-  conflictLog.value = ''
-  resolutionHint.value = ''
-  rollbackMessage.value = ''
+  if (!updateError.value) resetTerminalUpdateFeedback()
   needRestart.value = false
   preparedJobID.value = ''
   preparedExpiresAt.value = ''
@@ -872,6 +901,15 @@ async function refreshVersion(force = true) {
   resetRollbackState()
 
   await Promise.all([appStore.fetchVersion(force), appStore.fetchCurrentRelease?.()])
+  await resumeUpdatePolling()
+}
+
+function resetFailureEvidence() {
+  failedCheck.value = ''
+  failureCheckURL.value = ''
+  failureConclusion.value = ''
+  failureErrorCode.value = ''
+  failureProductionChanged.value = null
 }
 
 function resetTerminalUpdateFeedback() {
@@ -896,6 +934,7 @@ function resetTerminalUpdateFeedback() {
   conflictLog.value = ''
   resolutionHint.value = ''
   rollbackMessage.value = ''
+  resetFailureEvidence()
   preparedJobID.value = ''
   preparedExpiresAt.value = ''
   preparedRemainingSeconds.value = 0
@@ -926,6 +965,7 @@ async function handleUpdate() {
   conflictLog.value = ''
   resolutionHint.value = ''
   rollbackMessage.value = ''
+  resetFailureEvidence()
 
   try {
     const job = await prepareUpdate()
@@ -1035,28 +1075,13 @@ async function finishUpdateSuccess(
   await appStore.fetchCurrentRelease?.()
 }
 
-function finishUpdateFailure(
-  status: Pick<
-    UpdateJob,
-    | 'message'
-    | 'base_commit'
-    | 'conflict_files'
-    | 'conflict_base'
-    | 'conflict_upstream'
-    | 'conflict_release'
-    | 'release_tag'
-    | 'release_commit'
-    | 'conflict_log'
-    | 'resolution_hint'
-    | 'rollback'
-  >
-) {
+function finishUpdateFailure(status: Partial<UpdateJob> & Pick<UpdateJob, 'message'>) {
   stopUpdatePolling()
   preparedJobID.value = ''
   preparedExpiresAt.value = ''
   preparedRemainingSeconds.value = 0
   stopPreparedCountdown()
-  localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  if (status.job_id) localStorage.setItem(RELEASE_JOB_STORAGE_KEY, status.job_id)
   updateError.value = status.message || t('version.updateFailed')
   conflictFiles.value = status.conflict_files || []
   conflictBase.value = status.conflict_base || status.base_commit || ''
@@ -1067,7 +1092,12 @@ function finishUpdateFailure(
   conflictLog.value = status.conflict_log || ''
   resolutionHint.value = status.resolution_hint || ''
   rollbackMessage.value = status.rollback?.attempted ? status.rollback.message : ''
-  updateStage.value = 'failed'
+  failedCheck.value = status.failed_check || ''
+  failureCheckURL.value = status.check_url || status.workflow_url || ''
+  failureConclusion.value = status.conclusion || ''
+  failureErrorCode.value = status.error_code || ''
+  failureProductionChanged.value = status.production_changed ?? null
+  updateStage.value = status.status || 'failed'
   updateStageMessage.value = status.message
   updating.value = false
 }
@@ -1166,21 +1196,106 @@ function startUpdatePolling(jobID: string, initial?: UpdateJob) {
 
 async function resumeUpdatePolling() {
   const storedJobID = localStorage.getItem(RELEASE_JOB_STORAGE_KEY) || undefined
-  try {
-    const status = await getUpdateStatus(storedJobID)
-    if (isTerminalUpdateStatus(status.status)) {
-      // The latest terminal job is historical information. Do not replay it in
-      // the badge; only durable work that still needs attention is resumable.
-      localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
-      resetTerminalUpdateFeedback()
-      await appStore.fetchVersion(true)
-      return
-    }
-    startUpdatePolling(status.job_id, status)
-  } catch (error: unknown) {
-    const status = (error as { response?: { status?: number } }).response?.status
-    if (storedJobID && status === 404) localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  const localRequest = storedJobID ? readUpdateStatus(storedJobID) : Promise.resolve(undefined)
+  const [localJob, serverJob] = await Promise.all([localRequest, readUpdateStatus(undefined)])
+  const status = selectLatestUpdateJob(localJob, serverJob)
+
+  if (!status) {
+    if (storedJobID && !localJob) localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+    return
   }
+  if (status.operation_kind === 'rollback') {
+    if (!isTerminalUpdateStatus(status.status)) {
+      startUpdatePolling(status.job_id, status)
+    } else if (!storedJobID || status.job_id === storedJobID) {
+      localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+    }
+    return
+  }
+  if (!isTerminalUpdateStatus(status.status)) {
+    startUpdatePolling(status.job_id, status)
+    return
+  }
+  if (status.status === 'success') {
+    localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+    resetTerminalUpdateFeedback()
+    appStore.clearVersionCache()
+    await appStore.fetchVersion(true)
+    return
+  }
+  if (status.status === 'expired') {
+    localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+    resetTerminalUpdateFeedback()
+    return
+  }
+  if (updateJobMatchesCurrentTarget(status)) {
+    finishUpdateFailure(status)
+    return
+  }
+
+  if (!storedJobID || status.job_id === storedJobID) {
+    localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+  }
+  resetTerminalUpdateFeedback()
+}
+
+async function readUpdateStatus(jobID?: string): Promise<UpdateJob | undefined> {
+  try {
+    return await getUpdateStatus(jobID)
+  } catch {
+    return undefined
+  }
+}
+
+function selectLatestUpdateJob(
+  localJob?: UpdateJob,
+  serverJob?: UpdateJob
+): UpdateJob | undefined {
+  if (!localJob) return serverJob
+  if (!serverJob || localJob.job_id === serverJob.job_id) return localJob
+
+  const localUpdatedAt = Date.parse(localJob.updated_at || '')
+  const serverUpdatedAt = Date.parse(serverJob.updated_at || '')
+  if (Number.isFinite(localUpdatedAt) && Number.isFinite(serverUpdatedAt)) {
+    return localUpdatedAt > serverUpdatedAt ? localJob : serverJob
+  }
+  return serverJob
+}
+
+function updateJobMatchesCurrentTarget(status: UpdateJob): boolean {
+  if (
+    !detectionComplete.value ||
+    !hasUpdate.value ||
+    appStore.runtimeUpdate !== true ||
+    updateKind.value === 'none' ||
+    updateKind.value === 'docs-only'
+  ) {
+    return false
+  }
+  if (status.update_kind && status.update_kind !== updateKind.value) return false
+
+  if (updateKind.value === 'official' || updateKind.value === 'combined') {
+    const jobOfficialVersion = status.target_official_version || status.stable_release_tag || ''
+    if (!targetOfficialVersion.value || jobOfficialVersion !== targetOfficialVersion.value) return false
+    if (
+      !targetOfficialCommit.value ||
+      !status.stable_release_commit ||
+      status.stable_release_commit !== targetOfficialCommit.value
+    ) {
+      return false
+    }
+  }
+
+  if (updateKind.value === 'custom' || updateKind.value === 'combined') {
+    if (
+      !targetCustomCommit.value ||
+      !status.target_custom_commit ||
+      status.target_custom_commit !== targetCustomCommit.value
+    ) {
+      return false
+    }
+  }
+  return true
 }
 
 function resetRollbackState() {
@@ -1358,14 +1473,14 @@ function handleClickOutside(event: MouseEvent) {
 }
 
 onMounted(() => {
-  if (isAdmin.value) {
-    // Use cached version if available, otherwise fetch
-    appStore.fetchVersion(false)
-    void appStore.fetchCurrentRelease?.()
-    void resumeUpdatePolling()
-  }
+  if (isAdmin.value) void initializeReleaseBadge()
   document.addEventListener('click', handleClickOutside)
 })
+
+async function initializeReleaseBadge() {
+  await Promise.all([appStore.fetchVersion(false), appStore.fetchCurrentRelease?.()])
+  await resumeUpdatePolling()
+}
 
 onBeforeUnmount(() => {
   stopUpdatePolling()
