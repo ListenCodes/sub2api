@@ -170,6 +170,44 @@ func TestCustomReleaseHandlerServesReleaseIdentityAndRollbackList(t *testing.T) 
 	}
 }
 
+func TestCustomReleaseHandlerReturnsActionsFailureEvidence(t *testing.T) {
+	stub := &customReleaseHandlerServiceStub{
+		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
+		job: &service.UpdateJob{
+			JobID:             "update-actions-failed",
+			OperationKind:     service.ReleaseOperationUpdate,
+			Action:            service.ReleasePhasePrepare,
+			Status:            service.ReleaseStatusFailed,
+			Message:           "required check deployment concluded failure",
+			FailedCheck:       "deployment",
+			CheckURL:          "https://github.com/ListenCodes/sub2api/actions/runs/1/job/2",
+			Conclusion:        "failure",
+			ErrorCode:         "ACTIONS_REQUIRED_CHECK_FAILED",
+			ProductionChanged: false,
+		},
+	}
+	router := newCustomReleaseHandlerTestRouter(stub, newMemoryIdempotencyRepoStub())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/update/status", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Data struct {
+			FailedCheck       string `json:"failed_check"`
+			CheckURL          string `json:"check_url"`
+			Conclusion        string `json:"conclusion"`
+			ErrorCode         string `json:"error_code"`
+			ProductionChanged bool   `json:"production_changed"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, "deployment", envelope.Data.FailedCheck)
+	require.Equal(t, "https://github.com/ListenCodes/sub2api/actions/runs/1/job/2", envelope.Data.CheckURL)
+	require.Equal(t, "failure", envelope.Data.Conclusion)
+	require.Equal(t, "ACTIONS_REQUIRED_CHECK_FAILED", envelope.Data.ErrorCode)
+	require.False(t, envelope.Data.ProductionChanged)
+}
+
 func TestCustomReleaseCheckDecoratesPerAdminNotice(t *testing.T) {
 	fingerprint := strings.Repeat("a", 64)
 	stub := &customReleaseHandlerServiceStub{
@@ -301,6 +339,7 @@ func newCustomReleaseHandlerTestRouter(stub *customReleaseHandlerServiceStub, re
 	router.POST("/api/v1/admin/system/update", handler.PrepareUpdate)
 	router.POST("/api/v1/admin/system/update/prepare", handler.PrepareUpdate)
 	router.POST("/api/v1/admin/system/update/apply", handler.ApplyUpdate)
+	router.GET("/api/v1/admin/system/update/status", handler.GetUpdateStatus)
 	router.POST("/api/v1/admin/system/rollback/prepare", handler.PrepareRollback)
 	router.POST("/api/v1/admin/system/rollback/apply", handler.ApplyRollback)
 	router.POST("/api/v1/admin/system/rollback", handler.LegacyRollbackUnsupported)

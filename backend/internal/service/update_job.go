@@ -127,6 +127,9 @@ type UpdateJob struct {
 	ExtensionsDigest       string         `json:"extensions_digest,omitempty"`
 	ProductionChanged      bool           `json:"production_changed"`
 	ErrorCode              string         `json:"error_code,omitempty"`
+	FailedCheck            string         `json:"failed_check,omitempty"`
+	CheckURL               string         `json:"check_url,omitempty"`
+	Conclusion             string         `json:"conclusion,omitempty"`
 	ArtifactPath           string         `json:"artifact_path,omitempty"`
 	PreparedManifest       string         `json:"prepared_manifest,omitempty"`
 	PreparedManifestSHA256 string         `json:"prepared_manifest_sha256,omitempty"`

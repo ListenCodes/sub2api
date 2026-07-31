@@ -170,6 +170,35 @@ func TestReadUpdateStatusIncludesConflictMetadata(t *testing.T) {
 	require.Equal(t, "Resolve conflicts and retry.", job.ResolutionHint)
 }
 
+func TestReadUpdateStatusIncludesActionsFailureEvidence(t *testing.T) {
+	t.Parallel()
+
+	statusPath := filepath.Join(t.TempDir(), "release-job.json")
+	require.NoError(t, os.WriteFile(statusPath, []byte(`{
+		"job_id":"update-actions-failed",
+		"operation_kind":"update",
+		"action":"prepare",
+		"status":"failed",
+		"message":"required check deployment concluded failure",
+		"failed_check":"deployment",
+		"check_url":"https://github.com/ListenCodes/sub2api/actions/runs/1/job/2",
+		"conclusion":"failure",
+		"error_code":"ACTIONS_REQUIRED_CHECK_FAILED",
+		"production_changed":false,
+		"ts":"2026-07-31T10:00:00Z",
+		"updated_at":"2026-07-31T10:00:00Z"
+	}`), 0644))
+
+	job, err := readUpdateStatus(statusPath, "update-actions-failed")
+
+	require.NoError(t, err)
+	require.Equal(t, "deployment", job.FailedCheck)
+	require.Equal(t, "https://github.com/ListenCodes/sub2api/actions/runs/1/job/2", job.CheckURL)
+	require.Equal(t, "failure", job.Conclusion)
+	require.Equal(t, "ACTIONS_REQUIRED_CHECK_FAILED", job.ErrorCode)
+	require.False(t, job.ProductionChanged)
+}
+
 func TestReadUpdateStatusRejectsDifferentJobID(t *testing.T) {
 	t.Parallel()
 
