@@ -155,7 +155,11 @@ case "$FIXTURE_SCENARIO" in
   compose-race) printf '# unauthorized remote gate drift\n' >> "$SUB2API_COMPOSE_CUSTOM" ;;
 esac
 printf 'wait %s\n' "$*" >> "$FIXTURE_CALLS"
-printf 'workflow_url=https://github.com/ListenCodes/sub2api/actions/runs/1\n'
+jq -cn --arg url 'https://github.com/ListenCodes/sub2api/actions/runs/1' '{
+  ok:true,message:"all required GitHub Actions checks succeeded",error_code:"",
+  failed_check:"",check_url:"",conclusion:"success",workflow_url:$url,
+  production_changed:false
+}'
 EOF
   cat > "$root/verify.sh" <<EOF
 #!/usr/bin/env bash

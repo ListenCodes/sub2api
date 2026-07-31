@@ -374,7 +374,11 @@ cat > "$FAKE_BIN/wait.sh" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf 'wait %s\n' "$1" >> "$PIPELINE_CALLS"
-printf 'workflow_url=https://github.example/actions/%s\n' "$1"
+jq -cn --arg url "https://github.example/actions/$1" '{
+  ok:true,message:"all required GitHub Actions checks succeeded",error_code:"",
+  failed_check:"",check_url:"",conclusion:"success",workflow_url:$url,
+  production_changed:false
+}'
 SH
 cat > "$FAKE_BIN/scope.sh" <<'SH'
 #!/usr/bin/env bash
