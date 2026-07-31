@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => ({
     latestVersion: '0.1.153',
     hasUpdate: true,
     noticeUnread: true,
+    runtimeUpdate: true,
+    officialUpdate: true,
+    customUpdate: false,
+    targetOfficialCommit: 'c'.repeat(40),
+    targetCustomCommit: 'd'.repeat(40),
     updateFingerprint: 'f'.repeat(64),
     noticeWarning: '',
     releaseInfo: undefined,
@@ -72,6 +77,9 @@ describe('VersionBadge conflict reporting', () => {
     localStorage.clear()
     mocks.appStore.hasUpdate = true
     mocks.appStore.noticeUnread = true
+    mocks.appStore.runtimeUpdate = true
+    mocks.appStore.officialUpdate = true
+    mocks.appStore.customUpdate = false
     mocks.appStore.updateFingerprint = 'f'.repeat(64)
     mocks.appStore.noticeWarning = ''
     mocks.appStore.buildType = 'release'
@@ -104,7 +112,7 @@ describe('VersionBadge conflict reporting', () => {
     vi.useRealTimers()
   })
 
-  it('uses unread state only for the collapsed amber styling and indicator', async () => {
+  it('keeps runtime updates amber independently from advisory unread state', async () => {
     mocks.appStore.noticeUnread = false
     const acknowledged = mount(VersionBadge, {
       props: { version: '0.1.164' },
@@ -112,10 +120,11 @@ describe('VersionBadge conflict reporting', () => {
     })
     await flushPromises()
     const acknowledgedBadge = acknowledged.get('[data-testid="custom-release-badge"]')
-    expect(acknowledgedBadge.classes()).not.toContain('bg-amber-100')
-    expect(acknowledged.find('[data-testid="release-notice-indicator"]').exists()).toBe(false)
+    expect(acknowledgedBadge.classes()).toContain('bg-amber-100')
+    expect(acknowledged.find('[data-testid="release-notice-indicator"]').exists()).toBe(true)
     await acknowledgedBadge.trigger('click')
     expect(acknowledged.text()).toContain('version.latestVersion')
+    expect(mocks.appStore.markCurrentNoticeRead).not.toHaveBeenCalled()
     acknowledged.unmount()
 
     mocks.appStore.noticeUnread = true
@@ -132,6 +141,10 @@ describe('VersionBadge conflict reporting', () => {
   })
 
   it('retries a reconciled unread fingerprint and permits a new target', async () => {
+    mocks.appStore.updateKind = 'docs-only'
+    mocks.appStore.runtimeUpdate = false
+    mocks.appStore.officialUpdate = false
+    mocks.appStore.customUpdate = true
     const wrapper = mount(VersionBadge, {
       props: { version: '0.1.164' },
       global: { stubs: { Icon: true } }
@@ -179,9 +192,6 @@ describe('VersionBadge conflict reporting', () => {
     await flushPromises()
     mocks.appStore.updateFingerprint = 'd'.repeat(64)
     mocks.appStore.noticeUnread = true
-    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
-      () => new Promise<void>(() => {})
-    )
     await nextTick()
 
     const updateButton = wrapper
@@ -190,7 +200,7 @@ describe('VersionBadge conflict reporting', () => {
     await updateButton!.trigger('click')
     await flushPromises()
 
-    expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(2)
+    expect(mocks.appStore.markCurrentNoticeRead).not.toHaveBeenCalled()
     expect(mocks.prepareUpdate).toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -438,23 +448,21 @@ describe('VersionBadge conflict reporting', () => {
     expect(confirmButton).toBeDefined()
     mocks.appStore.updateFingerprint = 'c'.repeat(64)
     mocks.appStore.noticeUnread = true
-    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
-      () => new Promise<void>(() => {})
-    )
     await nextTick()
     await confirmButton!.trigger('click')
     await flushPromises()
 
     expect(mocks.applyUpdate).toHaveBeenCalledWith('update-prepared')
-    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      mocks.applyUpdate.mock.invocationCallOrder[0]
-    )
+    expect(mocks.appStore.markCurrentNoticeRead).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
   it('shows docs-only detection without a production update action', async () => {
     mocks.appStore.updateKind = 'docs-only'
     mocks.appStore.hasUpdate = true
+    mocks.appStore.runtimeUpdate = false
+    mocks.appStore.officialUpdate = false
+    mocks.appStore.customUpdate = true
 
     const wrapper = mount(VersionBadge, {
       props: { version: '0.1.158' },
@@ -472,6 +480,9 @@ describe('VersionBadge conflict reporting', () => {
     mocks.appStore.updateKind = 'docs-only'
     mocks.appStore.hasUpdate = true
     mocks.appStore.noticeUnread = true
+    mocks.appStore.runtimeUpdate = false
+    mocks.appStore.officialUpdate = false
+    mocks.appStore.customUpdate = true
 
     const wrapper = mount(VersionBadge, {
       props: { version: '0.1.158' },
@@ -485,6 +496,9 @@ describe('VersionBadge conflict reporting', () => {
     await flushPromises()
 
     expect(mocks.appStore.markCurrentNoticeRead).toHaveBeenCalledTimes(1)
+    expect(mocks.appStore.noticeUnread).toBe(false)
+    expect(mocks.appStore.runtimeUpdate).toBe(false)
+    await nextTick()
     expect(badge.classes()).not.toContain('bg-amber-100')
     expect(wrapper.text()).toContain('version.docsOnlyUpdate')
     expect(wrapper.findAll('button').some((button) => button.text().includes('version.updateNow'))).toBe(false)
@@ -585,17 +599,12 @@ describe('VersionBadge conflict reporting', () => {
     await wrapper.find('[data-testid="rollback-panel"] button').trigger('click')
     mocks.appStore.updateFingerprint = 'b'.repeat(64)
     mocks.appStore.noticeUnread = true
-    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
-      () => new Promise<void>(() => {})
-    )
     await nextTick()
     await wrapper.find('[data-testid="prepare-rollback"]').trigger('click')
     await flushPromises()
 
     expect(mocks.prepareRollback).toHaveBeenCalledWith('release-target')
-    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      mocks.prepareRollback.mock.invocationCallOrder[0]
-    )
+    expect(mocks.appStore.markCurrentNoticeRead).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -643,17 +652,12 @@ describe('VersionBadge conflict reporting', () => {
     expect(mocks.applyUpdate).not.toHaveBeenCalled()
     mocks.appStore.updateFingerprint = 'a'.repeat(64)
     mocks.appStore.noticeUnread = true
-    mocks.appStore.markCurrentNoticeRead.mockImplementationOnce(
-      () => new Promise<void>(() => {})
-    )
     await nextTick()
     await wrapper.find('[data-testid="confirm-rollback"]').trigger('click')
     await flushPromises()
 
     expect(mocks.applyRollback).toHaveBeenCalledWith('rollback-prepared')
-    expect(mocks.appStore.markCurrentNoticeRead.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      mocks.applyRollback.mock.invocationCallOrder[0]
-    )
+    expect(mocks.appStore.markCurrentNoticeRead).not.toHaveBeenCalled()
     expect(mocks.applyUpdate).not.toHaveBeenCalled()
     wrapper.unmount()
   })

@@ -67,7 +67,13 @@ describe('custom release store', () => {
 
   it('acknowledges optimistically and reconciles a persistence failure', async () => {
     const fingerprint = '3'.repeat(64)
-    mocks.checkUpdates.mockResolvedValue(versionFixture(fingerprint, true))
+    mocks.checkUpdates.mockResolvedValue({
+      ...versionFixture(fingerprint, true),
+      update_kind: 'docs-only',
+      official_update: false,
+      docs_only: true,
+      runtime_update: false
+    })
     mocks.markCustomReleaseRead.mockRejectedValue(new Error('notice state unavailable'))
     const store = useCustomReleaseStore()
     await store.fetchVersion(true)
@@ -84,7 +90,13 @@ describe('custom release store', () => {
 
   it('reconciles a persisted false acknowledgement from the next server check', async () => {
     const fingerprint = '4'.repeat(64)
-    mocks.checkUpdates.mockResolvedValue(versionFixture(fingerprint, true))
+    mocks.checkUpdates.mockResolvedValue({
+      ...versionFixture(fingerprint, true),
+      update_kind: 'docs-only',
+      official_update: false,
+      docs_only: true,
+      runtime_update: false
+    })
     mocks.markCustomReleaseRead.mockResolvedValue({ fingerprint, persisted: false })
     const store = useCustomReleaseStore()
     await store.fetchVersion(true)
@@ -95,6 +107,19 @@ describe('custom release store', () => {
     await store.fetchVersion(true)
     expect(store.noticeUnread).toBe(true)
     expect(store.updateFingerprint).toBe(fingerprint)
+  })
+
+  it('does not acknowledge a runtime update fingerprint', async () => {
+    const fingerprint = '5'.repeat(64)
+    mocks.checkUpdates.mockResolvedValue(versionFixture(fingerprint, true))
+    const store = useCustomReleaseStore()
+    await store.fetchVersion(true)
+
+    await store.markCurrentNoticeRead()
+
+    expect(mocks.markCustomReleaseRead).not.toHaveBeenCalled()
+    expect(store.noticeUnread).toBe(true)
+    expect(store.hasUpdate).toBe(true)
   })
 
   it('exposes current release failure and clears it after a successful retry', async () => {

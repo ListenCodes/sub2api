@@ -7,11 +7,11 @@
         @click="toggleDropdown"
         class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
         :class="[
-          noticeUnread
+          releaseAttentionRequired
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="noticeUnread ? t('version.updateAvailable') : t('version.currentVersion')"
+        :title="releaseAttentionRequired ? t('version.updateAvailable') : t('version.currentVersion')"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -20,7 +20,7 @@
         ></span>
         <!-- Update indicator -->
         <span
-          v-if="noticeUnread"
+          v-if="releaseAttentionRequired"
           class="relative flex h-2 w-2"
           data-testid="release-notice-indicator"
         >
@@ -741,6 +741,11 @@ const noticeWarning = computed(() => appStore.noticeWarning || '')
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
 const updateKind = computed(() => appStore.updateKind || 'none')
+const releaseAttentionRequired = computed(() =>
+  appStore.runtimeUpdate === true && hasUpdate.value
+    ? true
+    : updateKind.value === 'docs-only' && noticeUnread.value
+)
 const customShortSHA = computed(() => appStore.targetCustomShortSHA || '')
 const targetOfficialVersion = computed(() => appStore.targetOfficialVersion || '')
 const targetCustomVersion = computed(() => appStore.targetCustomVersion || '')
@@ -814,6 +819,7 @@ function toggleDropdown() {
 }
 
 function acknowledgeCurrentNotice(): void {
+  if (updateKind.value !== 'docs-only') return
   const fingerprint = updateFingerprint.value
   if (
     !noticeUnread.value ||

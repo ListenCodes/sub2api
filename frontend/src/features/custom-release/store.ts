@@ -135,7 +135,7 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
 
   async function markCurrentNoticeRead(): Promise<void> {
     const fingerprint = updateFingerprint.value
-    if (!fingerprint || !noticeUnread.value) return
+    if (updateKind.value !== 'docs-only' || !fingerprint || !noticeUnread.value) return
     noticeUnread.value = false
     try {
       await markCustomReleaseRead(fingerprint)
