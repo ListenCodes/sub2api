@@ -71,6 +71,9 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
       return {
         current_version: currentVersion.value,
         latest_version: latestVersion.value,
+        release_id: currentReleaseID.value || undefined,
+        current_official_version: currentOfficialVersion.value || undefined,
+        current_custom_version: currentCustomVersion.value || undefined,
         has_update: hasUpdate.value,
         build_type: buildType.value,
         release_info: releaseInfo.value || undefined,
@@ -101,6 +104,12 @@ export const useCustomReleaseStore = defineStore('custom-release', () => {
     try {
       const data = await checkUpdatesAPI(force)
       currentVersion.value = data.current_version
+      currentOfficialVersion.value = data.current_official_version || ''
+      currentCustomVersion.value = data.current_custom_version || ''
+      currentReleaseID.value = data.release_id || ''
+      if (currentRelease.value?.release_id !== currentReleaseID.value) {
+        currentRelease.value = null
+      }
       latestVersion.value = data.latest_version
       hasUpdate.value = data.has_update
       buildType.value = data.build_type || 'source'

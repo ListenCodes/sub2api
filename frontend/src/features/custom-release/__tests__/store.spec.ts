@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { VersionInfo } from '@/features/custom-release/api'
 import { useCustomReleaseStore } from '@/features/custom-release/store'
 
 const mocks = vi.hoisted(() => ({
@@ -37,6 +38,27 @@ function versionFixture(fingerprint: string, noticeUnread: boolean) {
     target_custom_short_sha: 'dddddddd',
     update_fingerprint: fingerprint,
     notice_unread: noticeUnread
+  }
+}
+
+function versionInfo(overrides: Partial<VersionInfo> = {}): VersionInfo {
+  return {
+    current_version: '0.1.170',
+    latest_version: '0.1.171',
+    release_id: 'release-current',
+    current_official_version: 'v0.1.170',
+    current_custom_version: 'v1.0.14',
+    has_update: true,
+    cached: false,
+    build_type: 'release',
+    update_kind: 'official',
+    official_update: true,
+    custom_update: false,
+    docs_only: false,
+    runtime_update: true,
+    detection_complete: true,
+    notice_unread: false,
+    ...overrides
   }
 }
 
@@ -145,6 +167,40 @@ describe('custom release store', () => {
     await expect(store.fetchCurrentRelease()).resolves.toEqual(identity)
     expect(store.currentReleaseError).toBe('')
     expect(store.currentRelease).toEqual(identity)
+    expect(store.currentReleaseID).toBe('release-current')
+  })
+
+  it('hydrates the current version pair from the update check', async () => {
+    mocks.checkUpdates.mockResolvedValue(versionInfo())
+
+    const store = useCustomReleaseStore()
+    await store.fetchVersion(true)
+
+    expect(store.currentVersion).toBe('0.1.170')
+    expect(store.currentOfficialVersion).toBe('v0.1.170')
+    expect(store.currentCustomVersion).toBe('v1.0.14')
+    expect(store.currentReleaseID).toBe('release-current')
+    expect(mocks.getCurrentRelease).not.toHaveBeenCalled()
+  })
+
+  it('invalidates a stale full release identity when the release id changes', async () => {
+    mocks.getCurrentRelease.mockResolvedValue({
+      release_id: 'release-previous',
+      official_version: 'v0.1.169',
+      official_commit: 'a'.repeat(40),
+      custom_version: 'v1.0.13',
+      custom_version_sequence: 13,
+      custom_commit: 'b'.repeat(40),
+      published_at: '2026-07-31T00:00:00Z'
+    })
+    mocks.checkUpdates.mockResolvedValue(versionInfo())
+    const store = useCustomReleaseStore()
+
+    await store.fetchCurrentRelease()
+    expect(store.currentRelease?.release_id).toBe('release-previous')
+
+    await store.fetchVersion(true)
+    expect(store.currentRelease).toBeNull()
     expect(store.currentReleaseID).toBe('release-current')
   })
 })

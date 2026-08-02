@@ -900,7 +900,7 @@ async function refreshVersion(force = true) {
   stopUpdatePolling()
   resetRollbackState()
 
-  await Promise.all([appStore.fetchVersion(force), appStore.fetchCurrentRelease?.()])
+  await appStore.fetchVersion(force)
   await resumeUpdatePolling()
 }
 
@@ -1219,8 +1219,10 @@ async function resumeUpdatePolling() {
   if (status.status === 'success') {
     localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
     resetTerminalUpdateFeedback()
-    appStore.clearVersionCache()
-    await appStore.fetchVersion(true)
+    if (storedJobID) {
+      appStore.clearVersionCache()
+      await appStore.fetchVersion(true)
+    }
     return
   }
   if (status.status === 'expired') {
@@ -1309,15 +1311,17 @@ function resetRollbackState() {
 async function toggleRollbackPanel() {
   if (!isAdmin.value) return
   rollbackPanelOpen.value = !rollbackPanelOpen.value
-  // Source builds only show a hint, no version list to fetch
-  if (
-    rollbackPanelOpen.value &&
-    isReleaseBuild.value &&
-    rollbackReleases.value.length === 0 &&
-    !rollbackVersionsLoading.value
-  ) {
-    await loadRollbackVersions()
+  // Source builds only show a hint. Release builds load rollback-only data on demand.
+  if (!rollbackPanelOpen.value || !isReleaseBuild.value) return
+
+  const requests: Promise<unknown>[] = []
+  if (!currentReleaseIdentity.value) {
+    requests.push(appStore.fetchCurrentRelease())
   }
+  if (rollbackReleases.value.length === 0 && !rollbackVersionsLoading.value) {
+    requests.push(loadRollbackVersions())
+  }
+  await Promise.all(requests)
 }
 
 async function loadRollbackVersions() {
@@ -1478,7 +1482,7 @@ onMounted(() => {
 })
 
 async function initializeReleaseBadge() {
-  await Promise.all([appStore.fetchVersion(false), appStore.fetchCurrentRelease?.()])
+  await appStore.fetchVersion(false)
   await resumeUpdatePolling()
 }
 

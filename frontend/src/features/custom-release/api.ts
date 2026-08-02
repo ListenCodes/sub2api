@@ -14,6 +14,9 @@ export interface ReleaseInfo {
 export interface VersionInfo {
   current_version: string
   latest_version: string
+  release_id?: string
+  current_official_version?: string
+  current_custom_version?: string
   has_update: boolean
   release_info?: ReleaseInfo
   cached: boolean
