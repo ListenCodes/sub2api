@@ -165,7 +165,7 @@ describe('VersionBadge conflict reporting', () => {
     expect(wrapper.text()).toContain('version.updatePublished')
     expect(wrapper.text()).toContain('v0.1.158')
     expect(wrapper.text()).toContain('commit 26abd19a2812')
-    expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(2)
+    expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(1)
 
     wrapper.unmount()
   })
@@ -246,6 +246,66 @@ describe('VersionBadge conflict reporting', () => {
 
     expect(wrapper.get('[data-testid="target-version-pair"]').text()).toContain('v0.1.165')
     expect(wrapper.get('[data-testid="target-version-pair"]').text()).toContain('v1.0.6')
+    wrapper.unmount()
+  })
+
+  it('uses only the update check when the refresh button is clicked', async () => {
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    mocks.appStore.fetchVersion.mockClear()
+    mocks.appStore.fetchCurrentRelease.mockClear()
+
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+    await wrapper.find('button[title="version.refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.appStore.fetchVersion).toHaveBeenCalledTimes(1)
+    expect(mocks.appStore.fetchVersion).toHaveBeenCalledWith(true)
+    expect(mocks.appStore.fetchCurrentRelease).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('loads the full release identity only when rollback is opened', async () => {
+    mocks.appStore.currentRelease = null
+    mocks.appStore.fetchCurrentRelease.mockResolvedValue(null)
+    mocks.getRollbackReleases.mockResolvedValue([])
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+
+    expect(mocks.appStore.fetchCurrentRelease).not.toHaveBeenCalled()
+    await wrapper.find('button[title="version.updateAvailable"]').trigger('click')
+    await wrapper.find('[data-testid="rollback-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(1)
+    expect(mocks.getRollbackReleases).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('does not repeat the initial version check for an unrelated terminal job', async () => {
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-historical',
+      status: 'success',
+      message: 'historical release completed',
+      need_restart: false,
+      published: true
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+
+    expect(mocks.appStore.fetchVersion).toHaveBeenCalledTimes(1)
+    expect(mocks.appStore.fetchVersion).toHaveBeenCalledWith(false)
     wrapper.unmount()
   })
 
