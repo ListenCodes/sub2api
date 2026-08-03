@@ -54,8 +54,9 @@ describe('AppSidebar scroll position persistence', () => {
 })
 
 describe('AppSidebar header styles', () => {
-  it('combines the custom logo with the role-independent home navigation', () => {
-    expect(componentSource).toContain("const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))")
+  it('navigates both sidebar brand links to the public homepage', () => {
+    expect(componentSource).toContain("const homePath = '/home'")
+    expect(componentSource).not.toContain("const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))")
     expect(componentSource).toContain(":src=\"siteLogo || '/logo.svg'\"")
     expect(componentSource.match(/:to=\"homePath\"/g)).toHaveLength(2)
     expect(componentSource.match(/@click=\"handleMenuItemClick\(homePath\)\"/g)).toHaveLength(2)
