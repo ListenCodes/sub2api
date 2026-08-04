@@ -132,18 +132,50 @@ if [[ "$baseline_tag" == "$RELEASE_TAG" && "$baseline_tag_object" == "$RELEASE_T
 fi
 
 if git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
-  if [[ "$baseline_matches" -eq 1 ]]; then
-    metadata="$(jq -n \
-      --arg base "$BASE_COMMIT" \
-      --arg target "$BASE_COMMIT" \
-      --arg tag "$RELEASE_TAG" \
-      --arg commit "$RELEASE_COMMIT" \
-      --arg published "$RELEASE_PUBLISHED_AT" \
-      '{base_commit:$base,target_commit:$target,integration_branch:"",release_tag:$tag,release_commit:$commit,release_published_at:$published}')"
-    release_job_update "$JOB_ID" resolving_target "Stable Release $RELEASE_TAG is already integrated" "$metadata"
-    exit 0
+  target_baseline_json="$(git show "$BASE_COMMIT:$BASELINE_RELATIVE" 2>/dev/null)" \
+    || fail_job 'integrated target does not contain stable Release baseline metadata' BASELINE_MERGE_IDENTITY_MISMATCH
+  jq -e \
+    --arg tag "$RELEASE_TAG" \
+    --arg tag_object "$RELEASE_TAG_OBJECT_SHA" \
+    --arg commit "$RELEASE_COMMIT" \
+    --arg published "$RELEASE_PUBLISHED_AT" '
+      .repository == "Wei-Shaw/sub2api"
+      and .tag == $tag
+      and .tag_object_sha == $tag_object
+      and .commit_sha == $commit
+      and .published_at == $published
+    ' <<< "$target_baseline_json" >/dev/null \
+    || fail_job 'integrated target baseline does not match the resolved Release identity' BASELINE_MERGE_IDENTITY_MISMATCH
+
+  if [[ "$baseline_matches" -ne 1 ]]; then
+    mapfile -t integrated_merges < <(git rev-list --first-parent --merges "$local_head..$BASE_COMMIT")
+    [[ "${#integrated_merges[@]}" -eq 1 ]] \
+      || fail_job 'integrated target does not contain exactly one canonical stable Release merge' BASELINE_MERGE_IDENTITY_MISMATCH
+    integrated_merge="${integrated_merges[0]}"
+    integrated_subject="$(git show -s --format=%s "$integrated_merge")"
+    read -r integrated_identity integrated_parent_one integrated_parent_two integrated_parent_extra \
+      <<< "$(git rev-list --parents -n 1 "$integrated_merge")"
+    [[ "$integrated_identity" == "$integrated_merge" && -z "$integrated_parent_extra" ]] \
+      || fail_job 'integrated stable Release merge must have exactly two parents' BASELINE_MERGE_IDENTITY_MISMATCH
+    [[ "$integrated_subject" == "merge: integrate stable Release $RELEASE_TAG" ]] \
+      || fail_job 'integrated stable Release merge subject does not match the baseline tag' BASELINE_MERGE_IDENTITY_MISMATCH
+    git merge-base --is-ancestor "$local_head" "$integrated_parent_one" \
+      || fail_job 'integrated stable Release merge is not based on the deployed source' BASELINE_MERGE_IDENTITY_MISMATCH
+    ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$integrated_parent_one" \
+      || fail_job 'integrated stable Release ancestry predates the canonical merge' BASELINE_MERGE_IDENTITY_MISMATCH
+    [[ "$integrated_parent_two" == "$RELEASE_COMMIT" ]] \
+      || fail_job 'integrated stable Release merge second parent does not match the resolved Release' BASELINE_MERGE_IDENTITY_MISMATCH
   fi
-  fail_job 'stable Release ancestry exists without the matching canonical baseline identity' BASELINE_MERGE_IDENTITY_MISMATCH
+
+  metadata="$(jq -n \
+    --arg base "$BASE_COMMIT" \
+    --arg target "$BASE_COMMIT" \
+    --arg tag "$RELEASE_TAG" \
+    --arg commit "$RELEASE_COMMIT" \
+    --arg published "$RELEASE_PUBLISHED_AT" \
+    '{base_commit:$base,target_commit:$target,integration_branch:"",release_tag:$tag,release_commit:$commit,release_published_at:$published}')"
+  release_job_update "$JOB_ID" resolving_target "Stable Release $RELEASE_TAG is already integrated" "$metadata"
+  exit 0
 fi
 
 INTEGRATION_BRANCH="integration/release-$RELEASE_TAG-$(date -u '+%Y%m%d-%H%M%S')-$RANDOM"
