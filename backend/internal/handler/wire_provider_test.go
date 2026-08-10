@@ -20,6 +20,7 @@ func TestProvideHandlersLeavesCustomRiskWiringToBootstrap(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		adminHandlers,
 		nil,
 		nil,
