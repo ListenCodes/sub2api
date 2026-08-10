@@ -3,6 +3,8 @@ package repository
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -365,6 +368,22 @@ func (s *GitHubReleaseServiceSuite) TestCompareCommitsReturnsChangedFiles() {
 	files, err := s.client.CompareCommits(context.Background(), "ListenCodes/sub2api", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), []string{"docs/guide.md"}, []string{files[0].Filename})
+}
+
+func (s *GitHubReleaseServiceSuite) TestCompareCommitsReportsTruncatedFileList() {
+	files := make([]service.ChangedFile, 300)
+	for index := range files {
+		files[index] = service.ChangedFile{Filename: fmt.Sprintf("docs/file-%03d.md", index), Status: "modified"}
+	}
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(s.T(), json.NewEncoder(w).Encode(map[string]any{"files": files}))
+	}))
+	s.client = &githubReleaseClient{httpClient: &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}}, downloadHTTPClient: &http.Client{}}
+
+	got, err := s.client.CompareCommits(context.Background(), "ListenCodes/sub2api", strings.Repeat("a", 40), strings.Repeat("b", 40))
+	require.ErrorIs(s.T(), err, service.ErrGitHubCompareFilesTruncated)
+	require.Len(s.T(), got, 300)
 }
 
 func (s *GitHubReleaseServiceSuite) TestFetchRefCommitResolvesStableTag() {

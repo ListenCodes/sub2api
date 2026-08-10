@@ -19,6 +19,7 @@ type customReleaseGitHubClientStub struct {
 	release      *GitHubRelease
 	customHead   *GitRef
 	compareFiles []ChangedFile
+	compareErr   error
 	tagCommits   map[string]string
 }
 
@@ -35,7 +36,7 @@ func (s *customReleaseGitHubClientStub) FetchCustomReleaseHead(context.Context, 
 }
 
 func (s *customReleaseGitHubClientStub) CompareCommits(context.Context, string, string, string) ([]ChangedFile, error) {
-	return s.compareFiles, nil
+	return s.compareFiles, s.compareErr
 }
 
 func (s *customReleaseGitHubClientStub) FetchRefCommit(_ context.Context, _ string, ref string) (string, error) {
@@ -157,6 +158,52 @@ func TestCustomReleaseCheckClassifiesRuntimeAndDocumentationChanges(t *testing.T
 	require.True(t, info.DocsOnly)
 	require.False(t, info.RuntimeUpdate)
 	require.Empty(t, info.TargetCustomVersion)
+}
+
+func TestCustomReleaseCompareLimitFallsBackToRuntimeUpdate(t *testing.T) {
+	configureCustomReleaseTestRuntime(t)
+	productionCommit := strings.Repeat("a", 40)
+	customCommit := strings.Repeat("b", 40)
+	stableCommit := strings.Repeat("c", 40)
+	root := t.TempDir()
+	current := releaseLedgerTestRecord(root, "release-current", 4, "2026-07-23T08:00:00Z")
+	current.CustomCommit = productionCommit
+	current.OfficialCommit = stableCommit
+	writeReleaseLedgerFixture(t, root, ReleaseLedgerState{SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 4, UpdatedAt: "2026-07-23T08:00:00Z"}, current)
+	configureCustomReleaseLedgerTestRoot(t, root)
+
+	client := &customReleaseGitHubClientStub{
+		release:      &GitHubRelease{TagName: current.OfficialVersion},
+		customHead:   &GitRef{SHA: customCommit},
+		compareFiles: []ChangedFile{{Filename: "docs/guide.md", Status: "modified"}},
+		compareErr:   ErrGitHubCompareFilesTruncated,
+		tagCommits:   map[string]string{current.OfficialVersion: stableCommit},
+	}
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.163", "release")
+
+	info, err := svc.CheckCustomRelease(context.Background(), true)
+	require.NoError(t, err)
+	require.True(t, info.DetectionComplete)
+	require.Equal(t, UpdateKindCustom, info.UpdateKind)
+	require.True(t, info.RuntimeUpdate)
+	require.False(t, info.DocsOnly)
+	require.Empty(t, info.CustomScopeError)
+	require.Contains(t, info.Warning, "treating as runtime update")
+	require.Equal(t, "v1.0.5", info.TargetCustomVersion)
+
+	client.compareErr = errors.New("compare unavailable")
+	info, err = svc.CheckCustomRelease(context.Background(), true)
+	require.NoError(t, err)
+	require.False(t, info.DetectionComplete)
+	require.Equal(t, "compare unavailable", info.CustomScopeError)
+	_, err = svc.PrepareUpdate(context.Background())
+	require.ErrorIs(t, err, ErrUpdateDetectionIncomplete)
+
+	client.compareErr = ErrGitHubCompareFilesTruncated
+	job, err := svc.PrepareUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, UpdateKindCustom, job.UpdateKind)
+	require.False(t, job.CustomDocsOnly)
 }
 
 func TestUpdateServiceCheckUpdateDualVersionMatrix(t *testing.T) {

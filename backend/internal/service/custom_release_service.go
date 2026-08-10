@@ -83,6 +83,7 @@ type ChangedFile struct {
 var (
 	customReleaseMu                 sync.Mutex
 	customReleaseStartScript        = startCustomReleaseScript
+	ErrGitHubCompareFilesTruncated  = errors.New("GitHub compare file list reached the 300-file safety limit")
 	ErrUpdateDetectionIncomplete    = infraerrors.Conflict("UPDATE_DETECTION_INCOMPLETE", "release detection is incomplete; retry before preparing")
 	ErrRollbackReleaseInvalid       = infraerrors.BadRequest("ROLLBACK_RELEASE_INVALID", "rollback release is not eligible")
 	ErrReleaseOperationInconsistent = infraerrors.InternalServer("RELEASE_OPERATION_INCONSISTENT", "release operation state is inconsistent")
@@ -243,9 +244,13 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 			info.CustomUpdate = true
 			files, compareErr := client.CompareCommits(ctx, githubCustomRepo, current.CustomCommit, info.TargetCustomCommit)
 			if compareErr != nil {
-				info.CustomScopeError = compareErr.Error()
-				warnings = append(warnings, "custom scope probe: "+compareErr.Error())
-				info.DetectionComplete = false
+				if errors.Is(compareErr, ErrGitHubCompareFilesTruncated) {
+					warnings = append(warnings, "custom scope probe: "+compareErr.Error()+"; treating as runtime update")
+				} else {
+					info.CustomScopeError = compareErr.Error()
+					warnings = append(warnings, "custom scope probe: "+compareErr.Error())
+					info.DetectionComplete = false
+				}
 			} else {
 				info.DocsOnly = len(files) > 0 && allDocumentationFiles(files)
 			}

@@ -239,7 +239,7 @@ func (c *githubReleaseClient) CompareCommits(ctx context.Context, repo, base, he
 		return nil, err
 	}
 	if len(payload.Files) >= 300 {
-		return nil, fmt.Errorf("GitHub compare file list reached the 300-file safety limit")
+		return payload.Files, service.ErrGitHubCompareFilesTruncated
 	}
 	return payload.Files, nil
 }
