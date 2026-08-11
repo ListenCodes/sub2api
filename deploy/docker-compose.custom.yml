@@ -1,6 +1,8 @@
 services:
   sub2api:
     image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}
+    ports: !override
+      - "127.0.0.1:${SERVER_PORT:-8080}:8080"
     volumes:
       - /opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro
     environment:

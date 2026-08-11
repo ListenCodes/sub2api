@@ -58,6 +58,8 @@ test('custom production differences live only in the explicit overlay', () => {
   }
   for (const marker of [
     'image: ${SUB2API_IMAGE:?SUB2API_IMAGE is required}',
+    'ports: !override',
+    '127.0.0.1:${SERVER_PORT:-8080}:8080',
     'image: ${EXTENSIONS_SELF_IMAGE:?EXTENSIONS_SELF_IMAGE is required}',
     '/opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro',
     'RISK_CONTROL_URL:',
@@ -200,6 +202,9 @@ test('rendered Compose keeps the production service and identity contract', (t) 
     assert.equal(trigger.source, '/opt/sub2api-custom/sync-trigger.sh')
     assert.equal(trigger.read_only, true)
     assert.equal(rendered.services.sub2api.environment.RISK_CONTROL_URL, 'http://extensions-self:8090')
+    assert.equal(rendered.services.sub2api.ports.length, 1)
+    assert.equal(rendered.services.sub2api.ports[0].host_ip, '127.0.0.1')
+    assert.equal(rendered.services.sub2api.ports[0].target, 8080)
     assert.equal(rendered.services['extensions-self'].depends_on['risk-control-postgres'].condition, 'service_healthy')
   } catch (error) {
     reportComposeFailure(error, result)
