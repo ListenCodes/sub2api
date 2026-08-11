@@ -68,17 +68,20 @@ func (r *SQLRepository) GetEventByKey(ctx context.Context, key string) (EventRec
 
 func (r *SQLRepository) CountRecent(ctx context.Context, userID int64, subjectID, ipHash, deviceHash, eventType, countStrategy string, since time.Time) (int, error) {
 	var count int
-	var query string
+	query, args := countRecentQuery(userID, subjectID, ipHash, deviceHash, eventType, countStrategy, since)
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	return count, err
+}
+
+func countRecentQuery(userID int64, subjectID, ipHash, deviceHash, eventType, countStrategy string, since time.Time) (string, []any) {
 	switch normalizeCountStrategy(countStrategy) {
 	case countStrategySubjectDeviceEvents:
-		query = `SELECT COUNT(*) FROM risk_events WHERE (($2<>'' AND subject_id=$2) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`
+		return `SELECT COUNT(*) FROM risk_events WHERE (($1<>'' AND subject_id=$1) OR ($2<>'' AND device_hash=$2)) AND event_type=$3 AND occurred_at >= $4`, []any{subjectID, deviceHash, eventType, since}
 	case countStrategyIPDistinctSubjects:
-		query = `SELECT COUNT(DISTINCT subject_id) FROM risk_events WHERE $3<>'' AND ip_hash=$3 AND subject_id<>'' AND subject_id<>$2 AND event_type=$5 AND occurred_at >= $6`
+		return `SELECT COUNT(DISTINCT subject_id) FROM risk_events WHERE $1<>'' AND ip_hash=$1 AND subject_id<>'' AND subject_id<>$2 AND event_type=$3 AND occurred_at >= $4`, []any{ipHash, subjectID, eventType, since}
 	default:
-		query = `SELECT COUNT(*) FROM risk_events WHERE (($1>0 AND user_id=$1) OR ($2<>'' AND subject_id=$2) OR ($3<>'' AND ip_hash=$3) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`
+		return `SELECT COUNT(*) FROM risk_events WHERE (($1>0 AND user_id=$1) OR ($2<>'' AND subject_id=$2) OR ($3<>'' AND ip_hash=$3) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`, []any{userID, subjectID, ipHash, deviceHash, eventType, since}
 	}
-	err := r.db.QueryRowContext(ctx, query, userID, subjectID, ipHash, deviceHash, eventType, since).Scan(&count)
-	return count, err
 }
 
 func (r *SQLRepository) ListRules(ctx context.Context) ([]Rule, error) {
