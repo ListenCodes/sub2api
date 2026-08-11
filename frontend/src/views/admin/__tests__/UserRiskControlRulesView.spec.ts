@@ -182,8 +182,8 @@ describe('UserRiskControlRulesView', () => {
 
     const codeTarget = bodyElement('[data-testid="rule-code-input"]')
     const codeInput = codeTarget.matches('input') ? codeTarget as HTMLInputElement : codeTarget.querySelector<HTMLInputElement>('input')
-    expect(codeInput?.value).toBe('registration_abuse')
-    expect(bodyElement('[data-testid="template-registration_abuse"]').getAttribute('aria-pressed')).toBe('true')
+    expect(codeInput?.value).toBe('registration_identity_abuse')
+    expect(bodyElement('[data-testid="template-registration_identity_abuse"]').getAttribute('aria-pressed')).toBe('true')
   })
 
   it('filters the complete rule list locally by text, enabled state, and risk level', async () => {

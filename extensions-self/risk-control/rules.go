@@ -5,6 +5,23 @@ import (
 	"strings"
 )
 
+const (
+	countStrategyAssociatedEvents    = "associated_events"
+	countStrategySubjectDeviceEvents = "subject_device_events"
+	countStrategyIPDistinctSubjects  = "ip_distinct_subjects"
+)
+
+func normalizeCountStrategy(strategy string) string {
+	switch strings.TrimSpace(strategy) {
+	case countStrategySubjectDeviceEvents:
+		return countStrategySubjectDeviceEvents
+	case countStrategyIPDistinctSubjects:
+		return countStrategyIPDistinctSubjects
+	default:
+		return countStrategyAssociatedEvents
+	}
+}
+
 func evaluateRules(rules []Rule, event EventReport, recentCount func(Rule) int) Decision {
 	return evaluateRulesWithMode(rules, event, recentCount, "enforce")
 }
@@ -65,13 +82,20 @@ func formatRuleReason(rule Rule, event EventReport, count int) string {
 		window = fmt.Sprintf("%d 分钟", rule.WindowSeconds/60)
 	}
 	occurrence := fmt.Sprintf("%d 次事件", count)
-	switch event.EventType {
-	case "login_failure":
-		occurrence = fmt.Sprintf("失败 %d 次", count)
-	case "api_error":
-		occurrence = fmt.Sprintf("API 错误 %d 次", count)
-	case "registration_attempt", "registration_success":
-		occurrence = fmt.Sprintf("注册尝试 %d 次", count)
+	switch normalizeCountStrategy(rule.CountStrategy) {
+	case countStrategySubjectDeviceEvents:
+		occurrence = fmt.Sprintf("同邮箱或设备注册事件 %d 次", count)
+	case countStrategyIPDistinctSubjects:
+		occurrence = fmt.Sprintf("同 IP 注册 %d 个账号", count)
+	default:
+		switch event.EventType {
+		case "login_failure":
+			occurrence = fmt.Sprintf("失败 %d 次", count)
+		case "api_error":
+			occurrence = fmt.Sprintf("API 错误 %d 次", count)
+		case "registration_attempt", "registration_success":
+			occurrence = fmt.Sprintf("注册尝试 %d 次", count)
+		}
 	}
 	return fmt.Sprintf("命中规则：%s（%s内%s）", name, window, occurrence)
 }

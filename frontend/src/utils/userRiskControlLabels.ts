@@ -56,6 +56,8 @@ const processingStatuses: Record<string, string> = {
 
 const legacyRuleReasons: Record<string, string> = {
   registration_abuse: '注册滥用：短时间内出现大量注册尝试，需要核查来源。',
+  registration_identity_abuse: '同邮箱或设备重复注册：同一邮箱或设备在短时间内重复提交注册。',
+  registration_ip_multi_account: '同 IP 多账号注册：同一真实客户端 IP 在短时间内注册多个不同账号。',
   login_failure_burst: '登录失败爆发：短时间内连续登录失败，可能存在密码猜测或账号异常。',
   api_error_burst: 'API 错误爆发：短时间内接口错误明显增多，需要检查调用参数或上游状态。',
   content_risk: '内容风险：请求内容命中安全策略，需要人工核查。',
@@ -66,6 +68,8 @@ const legacyRuleReasons: Record<string, string> = {
 
 const legacyRuleNames: Record<string, string> = {
   registration_abuse: '注册滥用',
+  registration_identity_abuse: '同邮箱或设备重复注册',
+  registration_ip_multi_account: '同 IP 多账号注册',
   login_failure_burst: '登录失败爆发',
   api_error_burst: 'API 错误爆发',
   content_risk: '内容风险',

@@ -218,7 +218,8 @@ const filteredRules = computed(() => {
 })
 const ruleActionOptions = riskActionOptions.filter((option) => ['observe', 'review', 'ban', 'reject_candidate', 'auto_ban'].includes(option.value))
 const ruleTemplates: RuleCreateInput[] = [
-  { code: 'registration_abuse', name: '注册滥用', description: '短时间内重复注册或命中注册风险信号', eventTypes: ['registration_attempt'], enabled: true, windowSeconds: 600, threshold: 3, score: 80, riskLevel: 'critical', action: 'reject_candidate' },
+  { code: 'registration_identity_abuse', name: '同邮箱或设备重复注册', description: '同一邮箱或设备在短时间内重复提交注册', eventTypes: ['registration_attempt', 'registration_success'], countStrategy: 'subject_device_events', enabled: true, windowSeconds: 600, threshold: 3, score: 80, riskLevel: 'critical', action: 'reject_candidate' },
+  { code: 'registration_ip_multi_account', name: '同 IP 多账号注册', description: '同一真实客户端 IP 在短时间内注册多个不同账号', eventTypes: ['registration_success'], countStrategy: 'ip_distinct_subjects', enabled: true, windowSeconds: 600, threshold: 5, score: 60, riskLevel: 'high', action: 'review' },
   { code: 'login_failure_burst', name: '登录失败爆发', description: '同一账号连续登录失败', eventTypes: ['login_failure'], enabled: true, windowSeconds: 600, threshold: 5, score: 70, riskLevel: 'high', action: 'review' },
   { code: 'api_error_burst', name: 'API 错误爆发', description: '同一用户短时间内出现大量 API 错误', eventTypes: ['api_error'], enabled: true, windowSeconds: 300, threshold: 10, score: 35, riskLevel: 'medium', action: 'observe' },
   { code: 'content_risk', name: '内容风险', description: '命中内容安全策略', eventTypes: ['content_risk'], enabled: true, windowSeconds: 86400, threshold: 1, score: 85, riskLevel: 'high', action: 'review' },
@@ -262,7 +263,7 @@ async function submitCreate() {
   const validation = validateDraft()
   if (validation) { createValidationError.value = validation; return }
   creating.value = true; error.value = ''; notice.value = ''
-  try { const created = await userRiskControlV2API.createRule({ ...draft, code: draft.code.trim(), name: draft.name?.trim(), eventTypes: [draft.eventTypes[0]] }); rules.value = [created, ...rules.value]; createOpen.value = false; notice.value = '规则已创建' } catch (err) { createValidationError.value = errorMessage(err, '规则创建失败') } finally { creating.value = false }
+  try { const created = await userRiskControlV2API.createRule({ ...draft, code: draft.code.trim(), name: draft.name?.trim(), eventTypes: draft.eventTypes.filter(Boolean) }); rules.value = [created, ...rules.value]; createOpen.value = false; notice.value = '规则已创建' } catch (err) { createValidationError.value = errorMessage(err, '规则创建失败') } finally { creating.value = false }
 }
 async function save(rule: Rule) {
   const validation = validateRuleFields(rule)

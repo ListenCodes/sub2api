@@ -184,6 +184,7 @@ describe('userRiskControlV2API', () => {
       name: '登录失败爆发',
       description: '短时间内连续登录失败',
       eventTypes: ['login_failure'],
+      countStrategy: 'associated_events',
       enabled: true,
       windowSeconds: 300,
       threshold: 5,
@@ -196,6 +197,7 @@ describe('userRiskControlV2API', () => {
     expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules', expect.objectContaining({
       code: 'login_failure_burst',
       event_types: ['login_failure'],
+      count_strategy: 'associated_events',
       window_seconds: 300,
     }))
   })

@@ -66,14 +66,23 @@ func (r *SQLRepository) GetEventByKey(ctx context.Context, key string) (EventRec
 	return event, err == nil, err
 }
 
-func (r *SQLRepository) CountRecent(ctx context.Context, userID int64, subjectID, ipHash, deviceHash, eventType string, since time.Time) (int, error) {
+func (r *SQLRepository) CountRecent(ctx context.Context, userID int64, subjectID, ipHash, deviceHash, eventType, countStrategy string, since time.Time) (int, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_events WHERE (($1>0 AND user_id=$1) OR ($2<>'' AND subject_id=$2) OR ($3<>'' AND ip_hash=$3) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`, userID, subjectID, ipHash, deviceHash, eventType, since).Scan(&count)
+	var query string
+	switch normalizeCountStrategy(countStrategy) {
+	case countStrategySubjectDeviceEvents:
+		query = `SELECT COUNT(*) FROM risk_events WHERE (($2<>'' AND subject_id=$2) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`
+	case countStrategyIPDistinctSubjects:
+		query = `SELECT COUNT(DISTINCT subject_id) FROM risk_events WHERE $3<>'' AND ip_hash=$3 AND subject_id<>'' AND subject_id<>$2 AND event_type=$5 AND occurred_at >= $6`
+	default:
+		query = `SELECT COUNT(*) FROM risk_events WHERE (($1>0 AND user_id=$1) OR ($2<>'' AND subject_id=$2) OR ($3<>'' AND ip_hash=$3) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`
+	}
+	err := r.db.QueryRowContext(ctx, query, userID, subjectID, ipHash, deviceHash, eventType, since).Scan(&count)
 	return count, err
 }
 
 func (r *SQLRepository) ListRules(ctx context.Context) ([]Rule, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,code,name,description,event_types,enabled,window_seconds,threshold,score,risk_level,action,revision FROM risk_rules ORDER BY code`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision FROM risk_rules ORDER BY code`)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +91,7 @@ func (r *SQLRepository) ListRules(ctx context.Context) ([]Rule, error) {
 	for rows.Next() {
 		var rule Rule
 		var eventTypes []byte
-		if err := rows.Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &eventTypes, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision); err != nil {
+		if err := rows.Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &eventTypes, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(eventTypes, &rule.EventTypes); err != nil {
@@ -100,7 +109,8 @@ func (r *SQLRepository) CreateRule(ctx context.Context, input Rule) (Rule, error
 	}
 	var rule Rule
 	var raw []byte
-	err = r.db.QueryRowContext(ctx, `INSERT INTO risk_rules (code,name,description,event_types,enabled,window_seconds,threshold,score,risk_level,action,revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,code,name,description,event_types,enabled,window_seconds,threshold,score,risk_level,action,revision`, input.Code, input.Name, input.Description, string(eventTypes), input.Enabled, input.WindowSeconds, input.Threshold, input.Score, input.RiskLevel, input.Action, 1).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
+	input.CountStrategy = normalizeCountStrategy(input.CountStrategy)
+	err = r.db.QueryRowContext(ctx, `INSERT INTO risk_rules (code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, input.Code, input.Name, input.Description, string(eventTypes), input.CountStrategy, input.Enabled, input.WindowSeconds, input.Threshold, input.Score, input.RiskLevel, input.Action, 1).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
 	if err != nil {
 		if isRuleCodeConflict(err) {
 			return Rule{}, ErrRuleCodeConflict
@@ -122,7 +132,7 @@ func (r *SQLRepository) UpdateRule(ctx context.Context, code string, expectedRev
 	eventTypes, _ := json.Marshal(update.EventTypes)
 	var rule Rule
 	var raw []byte
-	err := r.db.QueryRowContext(ctx, `UPDATE risk_rules SET name=$2,description=$3,event_types=$4,enabled=$5,window_seconds=$6,threshold=$7,score=$8,risk_level=$9,action=$10,revision=revision+1,updated_at=NOW() WHERE code=$1 AND revision=$11 RETURNING id,code,name,description,event_types,enabled,window_seconds,threshold,score,risk_level,action,revision`, code, update.Name, update.Description, eventTypes, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, expectedRevision).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
+	err := r.db.QueryRowContext(ctx, `UPDATE risk_rules SET name=$2,description=$3,event_types=$4,enabled=$5,window_seconds=$6,threshold=$7,score=$8,risk_level=$9,action=$10,revision=revision+1,updated_at=NOW() WHERE code=$1 AND revision=$11 RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, code, update.Name, update.Description, eventTypes, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, expectedRevision).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Rule{}, ErrRuleRevisionConflict
 	}

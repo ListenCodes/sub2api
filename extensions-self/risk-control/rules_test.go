@@ -43,6 +43,80 @@ func TestEvaluateRulesBuildsReadableChineseReason(t *testing.T) {
 	}
 }
 
+func TestEvaluateEventSeparatesIdentityAndSharedIPRegistrationRules(t *testing.T) {
+	now := time.Now().UTC()
+	rules := []Rule{
+		{ID: 1, Code: "registration_identity_abuse", Name: "同邮箱或设备重复注册", EventTypes: []string{"registration_attempt", "registration_success"}, CountStrategy: countStrategySubjectDeviceEvents, Enabled: true, WindowSeconds: 600, Threshold: 3, Score: 80, RiskLevel: "critical", Action: "reject_candidate", Revision: 1},
+		{ID: 2, Code: "registration_ip_multi_account", Name: "同 IP 多账号注册", EventTypes: []string{"registration_success"}, CountStrategy: countStrategyIPDistinctSubjects, Enabled: true, WindowSeconds: 600, Threshold: 3, Score: 60, RiskLevel: "high", Action: "review", Revision: 1},
+	}
+	repo := NewMemoryRepository(rules)
+	for index, subjectID := range []string{"subject-a", "subject-b"} {
+		_, _, err := repo.InsertEvent(context.Background(), EventRecord{
+			EventKey: "prior-success-" + subjectID, EventType: "registration_success", UserID: int64(index + 1),
+			SubjectID: subjectID, IPHash: "shared-ip", DeviceHash: "device-" + subjectID,
+			OccurredAt: now.Add(-time.Duration(index+1) * time.Minute).Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			t.Fatalf("seed event: %v", err)
+		}
+	}
+	_, _, err := repo.InsertEvent(context.Background(), EventRecord{
+		EventKey: "prior-success-current-subject", EventType: "registration_success", UserID: 3,
+		SubjectID: "subject-c", IPHash: "shared-ip", DeviceHash: "device-c",
+		OccurredAt: now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed current subject event: %v", err)
+	}
+	service := NewRiskService(Config{Mode: "enforce"}, repo)
+	decision, err := service.EvaluateEvent(context.Background(), EventReport{
+		EventKey: "current-success", EventType: "registration_success", UserID: 3,
+		SubjectID: "subject-c", IPHash: "shared-ip", DeviceHash: "device-c", OccurredAt: now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("EvaluateEvent() error = %v", err)
+	}
+	if len(decision.RuleCodes) != 1 || decision.RuleCodes[0] != "registration_ip_multi_account" {
+		t.Fatalf("rule codes = %#v, want only shared-IP rule", decision.RuleCodes)
+	}
+	if decision.Reason != "命中规则：同 IP 多账号注册（10 分钟内同 IP 注册 3 个账号）" {
+		t.Fatalf("reason = %q", decision.Reason)
+	}
+}
+
+func TestEvaluateEventCountsRepeatedRegistrationBySubjectOrDeviceWithoutIP(t *testing.T) {
+	now := time.Now().UTC()
+	rules := []Rule{
+		{ID: 1, Code: "registration_identity_abuse", Name: "同邮箱或设备重复注册", EventTypes: []string{"registration_attempt", "registration_success"}, CountStrategy: countStrategySubjectDeviceEvents, Enabled: true, WindowSeconds: 600, Threshold: 3, Score: 80, RiskLevel: "critical", Action: "reject_candidate", Revision: 1},
+		{ID: 2, Code: "registration_ip_multi_account", Name: "同 IP 多账号注册", EventTypes: []string{"registration_success"}, CountStrategy: countStrategyIPDistinctSubjects, Enabled: true, WindowSeconds: 600, Threshold: 3, Score: 60, RiskLevel: "high", Action: "review", Revision: 1},
+	}
+	repo := NewMemoryRepository(rules)
+	for index, eventType := range []string{"registration_attempt", "registration_success"} {
+		_, _, err := repo.InsertEvent(context.Background(), EventRecord{
+			EventKey: "prior-device-event-" + eventType, EventType: eventType, UserID: int64(index),
+			SubjectID: "subject-a", IPHash: "ip-a", DeviceHash: "shared-device",
+			OccurredAt: now.Add(-time.Duration(index+1) * time.Minute).Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			t.Fatalf("seed event: %v", err)
+		}
+	}
+	service := NewRiskService(Config{Mode: "enforce"}, repo)
+	decision, err := service.EvaluateEvent(context.Background(), EventReport{
+		EventKey: "current-attempt", EventType: "registration_attempt", SubjectID: "subject-b",
+		IPHash: "ip-b", DeviceHash: "shared-device", OccurredAt: now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("EvaluateEvent() error = %v", err)
+	}
+	if len(decision.RuleCodes) != 1 || decision.RuleCodes[0] != "registration_identity_abuse" {
+		t.Fatalf("rule codes = %#v, want only identity rule", decision.RuleCodes)
+	}
+	if decision.Reason != "命中规则：同邮箱或设备重复注册（10 分钟内同邮箱或设备注册事件 3 次）" {
+		t.Fatalf("reason = %q", decision.Reason)
+	}
+}
+
 func TestEvaluateRulesShadowModeDowngradesBlockingAction(t *testing.T) {
 	rule := Rule{Code: "registration_abuse", EventTypes: []string{"registration_attempt"}, Enabled: true, WindowSeconds: 600, Threshold: 1, Score: 90, RiskLevel: "critical", Action: "reject_candidate"}
 	decision := evaluateRulesWithMode([]Rule{rule}, EventReport{EventType: "registration_attempt"}, func(Rule) int { return 1 }, "shadow")

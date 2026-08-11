@@ -59,3 +59,18 @@ func TestEventRecordUsesStableJSONFieldNames(t *testing.T) {
 		t.Fatalf("event record must not expose Go field names: %s", payload)
 	}
 }
+
+func TestSchemaMigratesLegacyRegistrationRuleToSplitStrategies(t *testing.T) {
+	for _, expected := range []string{
+		"ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS count_strategy",
+		"code = 'registration_abuse'",
+		"'registration_identity_abuse'",
+		"'subject_device_events'",
+		"'registration_ip_multi_account'",
+		"'ip_distinct_subjects'",
+	} {
+		if !strings.Contains(schemaSQL, expected) {
+			t.Fatalf("schema is missing %q", expected)
+		}
+	}
+}

@@ -128,6 +128,7 @@ export interface Rule {
   revision: number
   description?: string
   eventTypes?: string[]
+  countStrategy?: 'associated_events' | 'subject_device_events' | 'ip_distinct_subjects'
 }
 
 export type RuleInput = Omit<Rule, 'id' | 'name'> & { code: string; name?: string }
@@ -292,12 +293,12 @@ async function markUsersProcessed(ids: number[], reason: string, concurrency = 4
 
 async function listRules(): Promise<Rule[]> {
   const { data } = await mainAdminClient.get<{ items: Array<Record<string, unknown>> }>('/admin/user-risk-control/rules')
-  return data.items.map((rule) => ({ id: Number(rule.id), code: String(rule.code), name: String(rule.name || rule.code), description: String(rule.description || ''), eventTypes: Array.isArray(rule.event_types) ? rule.event_types.map(String) : [String(rule.code)], enabled: Boolean(rule.enabled), windowSeconds: Number(rule.window_seconds || 0), threshold: Number(rule.threshold || 1), score: Number(rule.score || 0), riskLevel: String(rule.risk_level || 'low') as RiskLevel, action: String(rule.action || 'observe') as RiskAction, revision: Number(rule.revision || 1) }))
+  return data.items.map((rule) => ({ id: Number(rule.id), code: String(rule.code), name: String(rule.name || rule.code), description: String(rule.description || ''), eventTypes: Array.isArray(rule.event_types) ? rule.event_types.map(String) : [String(rule.code)], countStrategy: String(rule.count_strategy || 'associated_events') as Rule['countStrategy'], enabled: Boolean(rule.enabled), windowSeconds: Number(rule.window_seconds || 0), threshold: Number(rule.threshold || 1), score: Number(rule.score || 0), riskLevel: String(rule.risk_level || 'low') as RiskLevel, action: String(rule.action || 'observe') as RiskAction, revision: Number(rule.revision || 1) }))
 }
 
 async function updateRule(_id: number, rule: RuleInput): Promise<Pick<Rule, 'id' | 'revision'>> {
   const { data } = await mainAdminClient.put<Pick<Rule, 'id' | 'revision'>>(`/admin/user-risk-control/rules/${rule.code}`, {
-    code: rule.code, name: rule.name, description: rule.description, event_types: rule.eventTypes?.length ? rule.eventTypes : [rule.code], enabled: rule.enabled, window_seconds: rule.windowSeconds, threshold: rule.threshold, score: rule.score, risk_level: rule.riskLevel, action: rule.action, revision: rule.revision,
+    code: rule.code, name: rule.name, description: rule.description, event_types: rule.eventTypes?.length ? rule.eventTypes : [rule.code], count_strategy: rule.countStrategy, enabled: rule.enabled, window_seconds: rule.windowSeconds, threshold: rule.threshold, score: rule.score, risk_level: rule.riskLevel, action: rule.action, revision: rule.revision,
   })
   return data
 }
@@ -308,6 +309,7 @@ async function createRule(rule: RuleCreateInput): Promise<Rule> {
     name: rule.name,
     description: rule.description,
     event_types: rule.eventTypes?.length ? rule.eventTypes : [rule.code],
+    count_strategy: rule.countStrategy,
     enabled: rule.enabled,
     window_seconds: rule.windowSeconds,
     threshold: rule.threshold,
@@ -317,11 +319,11 @@ async function createRule(rule: RuleCreateInput): Promise<Rule> {
     revision: rule.revision || 1,
     reason: rule.reason,
   })
-  return { id: Number(data.id), code: String(data.code || rule.code), name: String(data.name || rule.name || rule.code), description: String(data.description || rule.description || ''), eventTypes: Array.isArray(data.event_types) ? data.event_types.map(String) : rule.eventTypes, enabled: Boolean(data.enabled ?? rule.enabled), windowSeconds: Number(data.window_seconds ?? rule.windowSeconds), threshold: Number(data.threshold ?? rule.threshold), score: Number(data.score ?? rule.score), riskLevel: String(data.risk_level || rule.riskLevel) as RiskLevel, action: String(data.action || rule.action) as RiskAction, revision: Number(data.revision || 1) }
+  return { id: Number(data.id), code: String(data.code || rule.code), name: String(data.name || rule.name || rule.code), description: String(data.description || rule.description || ''), eventTypes: Array.isArray(data.event_types) ? data.event_types.map(String) : rule.eventTypes, countStrategy: String(data.count_strategy || rule.countStrategy || 'associated_events') as Rule['countStrategy'], enabled: Boolean(data.enabled ?? rule.enabled), windowSeconds: Number(data.window_seconds ?? rule.windowSeconds), threshold: Number(data.threshold ?? rule.threshold), score: Number(data.score ?? rule.score), riskLevel: String(data.risk_level || rule.riskLevel) as RiskLevel, action: String(data.action || rule.action) as RiskAction, revision: Number(data.revision || 1) }
 }
 
 async function testRule(rule: Rule, input: Record<string, unknown>) {
-  const { data } = await mainAdminClient.post<{ matched: boolean; score?: number; decision?: { score?: number; risk_level?: string; action?: string; rule_codes?: string[]; reason?: string } }>('/admin/user-risk-control/rules/test', { ...input, rule: { code: rule.code, enabled: rule.enabled, threshold: rule.threshold, score: rule.score, risk_level: rule.riskLevel, action: rule.action, event_types: [String(input.event_type || rule.code)] } })
+  const { data } = await mainAdminClient.post<{ matched: boolean; score?: number; decision?: { score?: number; risk_level?: string; action?: string; rule_codes?: string[]; reason?: string } }>('/admin/user-risk-control/rules/test', { ...input, rule: { code: rule.code, enabled: rule.enabled, threshold: rule.threshold, score: rule.score, risk_level: rule.riskLevel, action: rule.action, event_types: [String(input.event_type || rule.code)], count_strategy: rule.countStrategy } })
   return { matched: data.matched, score: data.score ?? data.decision?.score ?? 0, riskLevel: data.decision?.risk_level || rule.riskLevel, action: data.decision?.action || rule.action, conditions: data.decision?.rule_codes || [], reason: data.decision?.reason || '' }
 }
 

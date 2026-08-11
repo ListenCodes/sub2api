@@ -20,6 +20,7 @@ type Rule struct {
 	Name          string   `json:"name"`
 	Description   string   `json:"description"`
 	EventTypes    []string `json:"event_types"`
+	CountStrategy string   `json:"count_strategy"`
 	Enabled       bool     `json:"enabled"`
 	WindowSeconds int      `json:"window_seconds"`
 	Threshold     int      `json:"threshold"`
@@ -112,7 +113,7 @@ type RiskOverview struct {
 type RiskRepository interface {
 	InsertEvent(context.Context, EventRecord) (EventRecord, bool, error)
 	GetEventByKey(context.Context, string) (EventRecord, bool, error)
-	CountRecent(context.Context, int64, string, string, string, string, time.Time) (int, error)
+	CountRecent(context.Context, int64, string, string, string, string, string, time.Time) (int, error)
 	ListRules(context.Context) ([]Rule, error)
 	CreateRule(context.Context, Rule) (Rule, error)
 	UpdateRule(context.Context, string, int, Rule) (Rule, error)
@@ -150,6 +151,7 @@ func (s *MemoryRuleStore) UpdateRule(code string, expectedRevision int, update R
 	update.ID = current.ID
 	update.Code = code
 	update.Revision = current.Revision + 1
+	update.CountStrategy = normalizeCountStrategy(current.CountStrategy)
 	s.rules[code] = update
 	return update, nil
 }
@@ -209,22 +211,37 @@ func (r *MemoryRepository) GetEventByKey(_ context.Context, key string) (EventRe
 	return event, ok, nil
 }
 
-func (r *MemoryRepository) CountRecent(_ context.Context, userID int64, subjectID, ipHash, deviceHash, eventType string, since time.Time) (int, error) {
+func (r *MemoryRepository) CountRecent(_ context.Context, userID int64, subjectID, ipHash, deviceHash, eventType, countStrategy string, since time.Time) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	count := 0
+	distinctSubjects := make(map[string]struct{})
 	for _, event := range r.events {
 		occurred, err := parseTime(event.OccurredAt)
 		if event.EventType != eventType || err != nil || occurred.Before(since) {
 			continue
 		}
-		matchesUser := userID > 0 && event.UserID == userID
-		matchesSubject := subjectID != "" && event.SubjectID == subjectID
-		matchesIP := ipHash != "" && event.IPHash == ipHash
-		matchesDevice := deviceHash != "" && event.DeviceHash == deviceHash
-		if matchesUser || matchesSubject || matchesIP || matchesDevice {
-			count++
+		switch normalizeCountStrategy(countStrategy) {
+		case countStrategySubjectDeviceEvents:
+			if (subjectID != "" && event.SubjectID == subjectID) || (deviceHash != "" && event.DeviceHash == deviceHash) {
+				count++
+			}
+		case countStrategyIPDistinctSubjects:
+			if ipHash != "" && event.IPHash == ipHash && event.SubjectID != "" && event.SubjectID != subjectID {
+				distinctSubjects[event.SubjectID] = struct{}{}
+			}
+		default:
+			matchesUser := userID > 0 && event.UserID == userID
+			matchesSubject := subjectID != "" && event.SubjectID == subjectID
+			matchesIP := ipHash != "" && event.IPHash == ipHash
+			matchesDevice := deviceHash != "" && event.DeviceHash == deviceHash
+			if matchesUser || matchesSubject || matchesIP || matchesDevice {
+				count++
+			}
 		}
+	}
+	if normalizeCountStrategy(countStrategy) == countStrategyIPDistinctSubjects {
+		return len(distinctSubjects), nil
 	}
 	return count, nil
 }
@@ -249,6 +266,7 @@ func (r *MemoryRepository) CreateRule(_ context.Context, rule Rule) (Rule, error
 	rule.ID = r.nextRuleID
 	r.nextRuleID++
 	rule.Revision = 1
+	rule.CountStrategy = normalizeCountStrategy(rule.CountStrategy)
 	r.rules[rule.Code] = rule
 	return rule, nil
 }
@@ -261,6 +279,7 @@ func (r *MemoryRepository) UpdateRule(_ context.Context, code string, expectedRe
 		return Rule{}, ErrRuleRevisionConflict
 	}
 	update.ID, update.Code, update.Revision = current.ID, code, current.Revision+1
+	update.CountStrategy = normalizeCountStrategy(current.CountStrategy)
 	r.rules[code] = update
 	return update, nil
 }

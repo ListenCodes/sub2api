@@ -36,6 +36,7 @@ func TestValidateRuleConfigRejectsUnsafeAndInvalidValues(t *testing.T) {
 		{name: "unsafe code", rule: Rule{Code: "../rules", Name: "名称", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "code"},
 		{name: "missing name", rule: Rule{Code: "safe_code", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "name"},
 		{name: "unknown event", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"unknown"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "event type"},
+		{name: "unknown count strategy", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, CountStrategy: "global_magic", WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "count strategy"},
 		{name: "invalid score", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 101, RiskLevel: "low", Action: "observe"}, want: "score"},
 	}
 	for _, tc := range cases {

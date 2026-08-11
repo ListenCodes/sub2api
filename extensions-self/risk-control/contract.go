@@ -76,6 +76,12 @@ var validRiskEventTypes = map[string]struct{}{
 	"api_request":          {},
 }
 
+var validRuleCountStrategies = map[string]struct{}{
+	countStrategyAssociatedEvents:    {},
+	countStrategySubjectDeviceEvents: {},
+	countStrategyIPDistinctSubjects:  {},
+}
+
 func validRuleAction(action string) bool {
 	switch action {
 	case "observe", "review", "ban", "reject_candidate", "auto_ban":
@@ -99,6 +105,11 @@ func validateRuleConfig(rule Rule) error {
 	for _, eventType := range rule.EventTypes {
 		if _, ok := validRiskEventTypes[strings.TrimSpace(eventType)]; !ok {
 			return fmt.Errorf("invalid event type: %s", eventType)
+		}
+	}
+	if strategy := strings.TrimSpace(rule.CountStrategy); strategy != "" {
+		if _, ok := validRuleCountStrategies[strategy]; !ok {
+			return fmt.Errorf("invalid count strategy: %s", strategy)
 		}
 	}
 	return validateRuleFields(rule)
