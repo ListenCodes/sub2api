@@ -301,6 +301,30 @@ restore_base_runtime() {
   rm -f "$rendered"
 }
 
+restore_base_before_main_switch() {
+  local source_head="$1" source_ref="$2" rendered=''
+  release_restore_source_snapshot "$source_head" "$source_ref" >> "$LOG" 2>&1 || return 1
+  release_install_snapshot_artifacts "$BACKUP_DIR" || return 1
+  release_env_matches_digest_pair "$ENV_FILE" "$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" "$EXTENSIONS_REPOSITORY@$CURRENT_EXTENSIONS_DIGEST" || return 1
+  release_verify_local_image_identity "$MAIN_REPOSITORY" "$CURRENT_MAIN_DIGEST" "$SOURCE_COMMIT" "${CURRENT_OFFICIAL_VERSION#v}" || return 1
+  release_verify_local_image_identity "$EXTENSIONS_REPOSITORY" "$CURRENT_EXTENSIONS_DIGEST" "$SOURCE_COMMIT" "${CURRENT_OFFICIAL_VERSION#v}" || return 1
+  release_running_container_matches_image sub2api "$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" || return 1
+  wait_container_healthy sub2api || return 1
+  rendered="$(mktemp "$DATA_DIR/.rollback-compose-$JOB_ID.XXXXXX")" || return 1
+  if ! release_render_explicit_compose "$COMPOSE_BASE" "$COMPOSE_CUSTOM" "$ENV_FILE" "$rendered" "$LOG" \
+    || ! release_validate_rendered_compose "$rendered" "$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" "$EXTENSIONS_REPOSITORY@$CURRENT_EXTENSIONS_DIGEST" \
+    || [[ "$(sha256sum "$rendered" | awk '{print $1}')" != "$(jq -r '.rendered_compose_sha256' <<< "$BASE_RECORD")" ]] \
+    || ! SUB2API_IMAGE="$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$CURRENT_EXTENSIONS_DIGEST" \
+      docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" \
+      up -d --pull never --no-deps --force-recreate extensions-self >> "$LOG" 2>&1 \
+    || ! wait_container_healthy extensions-self \
+    || ! run_complete_health "$rendered"; then
+    rm -f "$rendered"
+    return 1
+  fi
+  rm -f "$rendered"
+}
+
 expected_high_water="$BASE_CUSTOM_HIGH_WATER"
 [[ "$ADVANCES_CUSTOM_VERSION" != true ]] || expected_high_water="$PROPOSED_CUSTOM_SEQUENCE"
 advance_flag=0
@@ -456,6 +480,7 @@ wait_container_healthy sub2api || fail_before_mutation 'running main container i
 wait_container_healthy extensions-self || fail_before_mutation 'running extensions container is not healthy' CURRENT_RUNTIME_DRIFT
 
 rollback_started=false
+main_switch_started=false
 apply_failure_message=''
 apply_failure_code=''
 
@@ -465,7 +490,11 @@ rollback_on_error() {
   if [[ "$rollback_started" == true ]]; then
     release_job_update "$JOB_ID" rolling_back 'Production switch failed; restoring the prepared base snapshot' \
       "$(jq -n --arg cause "${apply_failure_code:-APPLY_FAILED}" '{cause_error_code:$cause,production_changed:true,rollback:{attempted:true,succeeded:false,message:"automatic restoration started"}}')" || true
-    restore_base_runtime "$SOURCE_HEAD" "$SOURCE_REF" || rollback_ok=false
+    if [[ "$main_switch_started" == true ]]; then
+      restore_base_runtime "$SOURCE_HEAD" "$SOURCE_REF" || rollback_ok=false
+    else
+      restore_base_before_main_switch "$SOURCE_HEAD" "$SOURCE_REF" || rollback_ok=false
+    fi
     [[ "$rollback_ok" != true ]] || ledger_restore_failed_apply "$BASE_RELEASE_ID" "$BASE_CUSTOM_HIGH_WATER" "$JOB_ID" "$BASE_PROJECTION" || rollback_ok=false
     if [[ "$rollback_ok" == true ]]; then
       release_job_update "$JOB_ID" failed_rolled_back "${apply_failure_message:-production switch failed}; base snapshot restored" \
@@ -501,6 +530,7 @@ SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS
 wait_container_healthy extensions-self || abort_apply 'extensions health check failed' EXTENSIONS_HEALTH_FAILED
 
 release_job_update "$JOB_ID" switching_main "Switching main application to $MAIN_DIGEST" '{}'
+main_switch_started=true
 SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \
   docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" \
   up -d --pull never --no-deps --force-recreate sub2api >> "$LOG" 2>&1 \
