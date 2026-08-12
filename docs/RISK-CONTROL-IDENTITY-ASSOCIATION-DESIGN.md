@@ -593,6 +593,8 @@ V2 上线后执行一次全量重算，之后支持增量和可重复全量重�
 - `POST /api/v1/admin/risk-rebuilds`
 - `GET /api/v1/admin/risk-rebuilds/{id}`
 
+`identity-health` 同时承担管理能力发现：即使 `RISK_IDENTITY_ADMIN_ENABLED=false` 也返回 `200`，并明确给出 `admin_enabled=false` 及三个域的 `disabled` 状态。只有扩展不可达、签名失败、数据库或健康计算故障才返回错误；前端必须把“未启用”和“服务不可用”分开展示。其他身份详情、关联和重算端点在管理开关关闭时继续拒绝访问。
+
 主后端 `CustomUserHandler` 增加组合查询：
 
 - 调用扩展服务获取关联用户 ID 和证据。

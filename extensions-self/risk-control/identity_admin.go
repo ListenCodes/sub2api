@@ -135,8 +135,33 @@ func identityPaged(items any, total, limit, offset int) map[string]any {
 }
 
 func (s *HTTPServer) handleIdentityHealth(w http.ResponseWriter, r *http.Request) {
-	if s.identity == nil || !s.cfg.Identity.AdminEnabled {
-		writeError(w, http.StatusServiceUnavailable, errors.New("identity admin is disabled"))
+	if !s.cfg.Identity.AdminEnabled {
+		if s.identity != nil {
+			health, err := s.identity.Health(r.Context())
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, health)
+			return
+		}
+		if s.cfg.Identity.active() {
+			writeError(w, http.StatusServiceUnavailable, errors.New("identity service unavailable"))
+			return
+		}
+		writeJSON(w, http.StatusOK, IdentityHealth{
+			Enabled:      s.cfg.Identity.Enabled,
+			AdminEnabled: false,
+			Mode:         "shadow",
+			Schema:       "v2",
+			GeoSource:    s.cfg.Identity.GeoSource,
+			Domains:      map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"},
+			Quality24H:   map[string]any{},
+		})
+		return
+	}
+	if s.identity == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("identity service unavailable"))
 		return
 	}
 	health, err := s.identity.Health(r.Context())

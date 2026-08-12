@@ -655,7 +655,7 @@ func maskIdentityIP(raw string) string {
 }
 
 func (r *SQLIdentityRepository) Health(ctx context.Context, cfg IdentityConfig) (IdentityHealth, error) {
-	result := IdentityHealth{Enabled: cfg.Enabled, Mode: "shadow", Schema: "v2", KeyID: cfg.EncryptionKeyID, GeoSource: cfg.GeoSource, Domains: map[string]string{}, Quality24H: map[string]any{}}
+	result := IdentityHealth{Enabled: cfg.Enabled, AdminEnabled: cfg.AdminEnabled, Mode: "shadow", Schema: "v2", KeyID: cfg.EncryptionKeyID, GeoSource: cfg.GeoSource, Domains: map[string]string{}, Quality24H: map[string]any{}}
 	if !cfg.ShadowUntil.IsZero() {
 		result.ShadowUntil = cfg.ShadowUntil.Format(time.RFC3339)
 	}

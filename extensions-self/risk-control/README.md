@@ -23,6 +23,7 @@ Optional variables:
 - `EXTENSIONS_SELF_HOMEPAGE_DIR`, default `/app/homepage`.
 - `RISK_IDENTITY_V2_ENABLED`, master V2 ingest switch, default `false`.
 - `RISK_IDENTITY_IP_COLLECTION_ENABLED` and `RISK_IDENTITY_DEVICE_COLLECTION_ENABLED`, independent collection switches, default `false`.
+- `RISK_IDENTITY_ADMIN_ENABLED`, administrator evidence access switch, default `false`. The signed identity health endpoint remains available for capability discovery and reports `admin_enabled=false`; evidence and rebuild endpoints remain unavailable.
 - `RISK_IDENTITY_IP_RULES_ENABLED`, `RISK_IDENTITY_DEVICE_RULES_ENABLED`, and `RISK_IDENTITY_COMPOSITE_RULES_ENABLED`, independent Shadow rule switches, default `false`.
 
 Identity V2 rules are permanently constrained to Shadow observation. They have

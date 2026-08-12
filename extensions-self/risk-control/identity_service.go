@@ -130,7 +130,7 @@ func (s *IdentityService) Summary(ctx context.Context, userID int64) (IdentitySu
 
 func (s *IdentityService) Health(ctx context.Context) (IdentityHealth, error) {
 	if s == nil || s.repo == nil {
-		return IdentityHealth{Enabled: false, Mode: "shadow", Schema: "v2", Domains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, Quality24H: map[string]any{}}, nil
+		return IdentityHealth{Enabled: false, AdminEnabled: false, Mode: "shadow", Schema: "v2", Domains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, Quality24H: map[string]any{}}, nil
 	}
 	return s.repo.Health(ctx, s.cfg)
 }

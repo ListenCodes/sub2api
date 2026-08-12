@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -64,14 +65,39 @@ func TestUniqueIdentityUserIDsDeduplicatesAndBoundsInput(t *testing.T) {
 	}
 }
 
-func TestIdentityAdminHealthAndRebuildStatusAreUnavailableWhenDisabled(t *testing.T) {
+func TestIdentityAdminHealthReportsDisabledWithoutServiceFailure(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret}, NewMemoryRepository(nil))
-	for _, path := range []string{"/api/v1/admin/identity-health", "/api/v1/admin/risk-rebuilds/1"} {
-		request := signedRequest(http.MethodGet, path, nil, testSecret, "nonce-"+path, time.Now())
-		request.Header.Set("X-Risk-Actor-ID", "7")
-		response := serveJSON(server, request)
-		if response.Code != http.StatusServiceUnavailable {
-			t.Fatalf("%s status = %d, body = %s", path, response.Code, response.Body.String())
-		}
+	request := signedRequest(http.MethodGet, "/api/v1/admin/identity-health", nil, testSecret, "nonce-disabled-health", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var health IdentityHealth
+	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	if health.AdminEnabled || health.Enabled || health.Schema != "v2" {
+		t.Fatalf("unexpected disabled health: %+v", health)
+	}
+}
+
+func TestIdentityAdminHealthReportsUnavailableWhenCollectionCannotInitialize(t *testing.T) {
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Identity: IdentityConfig{Enabled: true}}, NewMemoryRepository(nil))
+	request := signedRequest(http.MethodGet, "/api/v1/admin/identity-health", nil, testSecret, "nonce-unavailable-health", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestIdentityRebuildStatusRemainsUnavailableWhenAdminDisabled(t *testing.T) {
+	server := NewHTTPServer(Config{InternalSecret: testSecret}, NewMemoryRepository(nil))
+	request := signedRequest(http.MethodGet, "/api/v1/admin/risk-rebuilds/1", nil, testSecret, "nonce-disabled-rebuild", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }

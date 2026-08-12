@@ -6,16 +6,22 @@
       <span v-for="domain in domainOrder" :key="domain" :class="healthClass(health.domains[domain])">{{ domainLabel(domain) }} · {{ stateLabel(health.domains[domain]) }}</span>
     </div>
 
-    <nav class="mt-4 grid grid-cols-4 border-b border-gray-200 dark:border-dark-700" role="tablist" :aria-label="t('admin.userRiskControl.drawer.identityTabs')">
-      <button v-for="tab in tabs" :key="tab.id" type="button" role="tab" :aria-selected="activeTab === tab.id" :class="['min-h-11 border-b-2 px-2 py-2 text-sm font-medium', activeTab === tab.id ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200']" @click="activate(tab.id)">
-        {{ tab.label }}
-      </button>
-    </nav>
-
-    <div v-if="activeState.loading" class="space-y-3 py-5" role="status" :aria-label="t('common.loading')"><div v-for="index in 4" :key="index" class="h-16 animate-pulse rounded bg-gray-100 dark:bg-dark-700" /></div>
-    <div v-else-if="activeState.error" class="mt-4 border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/20 dark:text-red-300">
-      <p>{{ activeState.error }}</p><button type="button" class="mt-2 text-sm font-medium underline" @click="reloadActive">{{ t('common.retry') }}</button>
+    <div v-if="health && !health.admin_enabled" class="mt-4 border-y border-gray-200 py-5 text-sm text-gray-600 dark:border-dark-700 dark:text-gray-300">
+      <p class="font-medium text-gray-900 dark:text-white">{{ t('admin.userRiskControl.identityDisabled') }}</p>
+      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.identityDisabledHint') }}</p>
     </div>
+
+    <template v-else>
+      <nav class="mt-4 grid grid-cols-4 border-b border-gray-200 dark:border-dark-700" role="tablist" :aria-label="t('admin.userRiskControl.drawer.identityTabs')">
+        <button v-for="tab in tabs" :key="tab.id" type="button" role="tab" :aria-selected="activeTab === tab.id" :class="['min-h-11 border-b-2 px-2 py-2 text-sm font-medium', activeTab === tab.id ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200']" @click="activate(tab.id)">
+          {{ tab.label }}
+        </button>
+      </nav>
+
+      <div v-if="activeState.loading" class="space-y-3 py-5" role="status" :aria-label="t('common.loading')"><div v-for="index in 4" :key="index" class="h-16 animate-pulse rounded bg-gray-100 dark:bg-dark-700" /></div>
+      <div v-else-if="activeState.error" class="mt-4 border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/20 dark:text-red-300">
+        <p>{{ activeState.error }}</p><button type="button" class="mt-2 text-sm font-medium underline" @click="reloadActive">{{ t('admin.userRiskControl.retry') }}</button>
+      </div>
 
     <section v-else-if="activeTab === 'summary' && summary" class="py-5">
       <div class="grid grid-cols-2 gap-3">
@@ -57,12 +63,13 @@
       <Pagination v-if="deviceTotal" :page="states.device.page" :total="deviceTotal" :page-size="states.device.pageSize" :show-page-size-selector="false" @update:page="changePage('device', $event)" />
     </section>
 
-    <section v-else class="py-4">
-      <div v-if="associatedItems.length" class="divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-700">
-        <article v-for="item in associatedItems" :key="item.user_id" class="py-3"><div class="flex items-start justify-between gap-3"><div><p class="text-sm font-semibold text-gray-900 dark:text-white">{{ item.account?.email || `#${item.user_id}` }}</p><p class="mt-1 text-xs text-gray-500"><span v-if="item.account?.username">{{ item.account.username }} · </span>{{ item.account?.deleted ? t('admin.userRiskControl.drawer.deletedAccount') : item.account?.status || '-' }}</p></div><span class="text-xs font-medium text-gray-600 dark:text-gray-300">{{ relationLabel(item.relation) }} · {{ t(`admin.userRiskControl.identityStrength.${item.evidence_strength}`) }}</span></div><p class="mt-2 text-xs text-gray-500">IP {{ item.shared_network_count }} · {{ t('admin.userRiskControl.drawer.browserOrClient') }} {{ item.shared_device_count }} · {{ t('admin.userRiskControl.drawer.cooccurrence') }} {{ item.cooccurring_evidence_count }}<span v-if="item.evidence_window_seconds"> · {{ item.evidence_window_seconds }}s</span> · {{ formatDate(item.first_seen_at) }} - {{ formatDate(item.last_seen_at) }}</p></article>
-      </div><p v-else class="py-8 text-center text-sm text-gray-500">{{ t('admin.userRiskControl.drawer.noAssociated') }}</p>
-      <Pagination v-if="associatedTotal" :page="states.associated.page" :total="associatedTotal" :page-size="states.associated.pageSize" :show-page-size-selector="false" @update:page="changePage('associated', $event)" />
-    </section>
+      <section v-else class="py-4">
+        <div v-if="associatedItems.length" class="divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-700">
+          <article v-for="item in associatedItems" :key="item.user_id" class="py-3"><div class="flex items-start justify-between gap-3"><div><p class="text-sm font-semibold text-gray-900 dark:text-white">{{ item.account?.email || `#${item.user_id}` }}</p><p class="mt-1 text-xs text-gray-500"><span v-if="item.account?.username">{{ item.account.username }} · </span>{{ item.account?.deleted ? t('admin.userRiskControl.drawer.deletedAccount') : item.account?.status || '-' }}</p></div><span class="text-xs font-medium text-gray-600 dark:text-gray-300">{{ relationLabel(item.relation) }} · {{ t(`admin.userRiskControl.identityStrength.${item.evidence_strength}`) }}</span></div><p class="mt-2 text-xs text-gray-500">IP {{ item.shared_network_count }} · {{ t('admin.userRiskControl.drawer.browserOrClient') }} {{ item.shared_device_count }} · {{ t('admin.userRiskControl.drawer.cooccurrence') }} {{ item.cooccurring_evidence_count }}<span v-if="item.evidence_window_seconds"> · {{ item.evidence_window_seconds }}s</span> · {{ formatDate(item.first_seen_at) }} - {{ formatDate(item.last_seen_at) }}</p></article>
+        </div><p v-else class="py-8 text-center text-sm text-gray-500">{{ t('admin.userRiskControl.drawer.noAssociated') }}</p>
+        <Pagination v-if="associatedTotal" :page="states.associated.page" :total="associatedTotal" :page-size="states.associated.pageSize" :show-page-size-selector="false" @update:page="changePage('associated', $event)" />
+      </section>
+    </template>
   </div>
 </template>
 
@@ -87,7 +94,7 @@ const domainOrder: IdentityDomain[] = ['ip', 'device', 'composite']
 const activeState = computed(() => states[activeTab.value])
 const qualityIncomplete = computed(() => health.value ? domainOrder.some((domain) => health.value?.domains[domain] !== 'healthy') || (health.value.ingest_queue?.dropped || 0) > 0 || (health.value.ingest_queue?.failed || 0) > 0 : false)
 
-async function load(tab: TabID, force = false) { const state = states[tab]; if ((state.loaded && !force) || state.loading) return; const api = userRiskControlV2API as Partial<typeof userRiskControlV2API>; if (tab === 'summary' && (!api.getUserIdentitySummary || !api.getIdentityHealth)) { state.loaded = true; return } const request = ++state.request; state.loading = true; state.error = ''; try { if (tab === 'summary') { const [summaryData, healthData] = await Promise.all([userRiskControlV2API.getUserIdentitySummary(props.userId), userRiskControlV2API.getIdentityHealth()]); if (request !== state.request) return; summary.value = summaryData; health.value = healthData } else if (tab === 'ip') { const data = await userRiskControlV2API.listUserIPIdentities(props.userId, state.page, state.pageSize, appliedIPQuery.value); if (request !== state.request) return; ipItems.value = data.items; ipTotal.value = data.total } else if (tab === 'device') { const data = await userRiskControlV2API.listUserDeviceIdentities(props.userId, state.page, state.pageSize); if (request !== state.request) return; deviceItems.value = data.items; deviceTotal.value = data.total } else { const data = await userRiskControlV2API.listAssociatedUsers(props.userId, state.page, state.pageSize); if (request !== state.request) return; associatedItems.value = data.items; associatedTotal.value = data.total } state.loaded = true } catch (error) { if (request === state.request) state.error = error instanceof Error ? error.message : t('admin.userRiskControl.loadFailed') } finally { if (request === state.request) state.loading = false } }
+async function load(tab: TabID, force = false) { const state = states[tab]; if ((state.loaded && !force) || state.loading) return; const api = userRiskControlV2API as Partial<typeof userRiskControlV2API>; if (tab === 'summary' && (!api.getUserIdentitySummary || !api.getIdentityHealth)) { state.loaded = true; return } const request = ++state.request; state.loading = true; state.error = ''; try { if (tab === 'summary') { const healthData = await userRiskControlV2API.getIdentityHealth(); if (request !== state.request) return; health.value = healthData; if (!healthData.admin_enabled) { state.loaded = true; return } const summaryData = await userRiskControlV2API.getUserIdentitySummary(props.userId); if (request !== state.request) return; summary.value = summaryData } else if (health.value && !health.value.admin_enabled) { state.loaded = true; return } else if (tab === 'ip') { const data = await userRiskControlV2API.listUserIPIdentities(props.userId, state.page, state.pageSize, appliedIPQuery.value); if (request !== state.request) return; ipItems.value = data.items; ipTotal.value = data.total } else if (tab === 'device') { const data = await userRiskControlV2API.listUserDeviceIdentities(props.userId, state.page, state.pageSize); if (request !== state.request) return; deviceItems.value = data.items; deviceTotal.value = data.total } else { const data = await userRiskControlV2API.listAssociatedUsers(props.userId, state.page, state.pageSize); if (request !== state.request) return; associatedItems.value = data.items; associatedTotal.value = data.total } state.loaded = true } catch (error) { if (request === state.request) state.error = error instanceof Error ? error.message : t('admin.userRiskControl.loadFailed') } finally { if (request === state.request) state.loading = false } }
 function activate(tab: TabID) { activeTab.value = tab; emit('tab-change', tab); void load(tab) }
 function reloadActive() { states[activeTab.value].loaded = false; void load(activeTab.value, true) }
 function changePage(tab: Exclude<TabID, 'summary'>, page: number) { states[tab].page = page; states[tab].loaded = false; void load(tab, true) }

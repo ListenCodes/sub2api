@@ -192,14 +192,15 @@ type IdentityListSummary struct {
 }
 
 type IdentityHealth struct {
-	Enabled     bool              `json:"enabled"`
-	Mode        string            `json:"mode"`
-	ShadowUntil string            `json:"shadow_until,omitempty"`
-	Schema      string            `json:"schema"`
-	KeyID       string            `json:"key_id,omitempty"`
-	GeoSource   string            `json:"geo_source"`
-	Domains     map[string]string `json:"domains"`
-	Quality24H  map[string]any    `json:"quality_24h"`
+	Enabled      bool              `json:"enabled"`
+	AdminEnabled bool              `json:"admin_enabled"`
+	Mode         string            `json:"mode"`
+	ShadowUntil  string            `json:"shadow_until,omitempty"`
+	Schema       string            `json:"schema"`
+	KeyID        string            `json:"key_id,omitempty"`
+	GeoSource    string            `json:"geo_source"`
+	Domains      map[string]string `json:"domains"`
+	Quality24H   map[string]any    `json:"quality_24h"`
 }
 
 type RebuildResult struct {

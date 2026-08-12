@@ -17,7 +17,7 @@ describe('UserRiskIdentityDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(userRiskControlV2API.getUserIdentitySummary).mockResolvedValue({ user_id: 7, identity_version: 'v2', mode: 'shadow', overall_score: 60, legacy_notice: 'legacy', domains: [{ domain: 'ip', state: 'healthy', score: 60, signal_count: 1, associated_account_count: 2, signals: [{ rule_code: 'v2_registration_ip_accounts', score: 60, evidence_count: 2, occurred_at: '2026-08-12T00:00:00Z' }] }] })
-    vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: true, mode: 'shadow', schema: 'v2', geo_source: 'cloudflare_or_local', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' }, quality_24h: {} })
+    vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: true, admin_enabled: true, mode: 'shadow', schema: 'v2', geo_source: 'cloudflare_or_local', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' }, quality_24h: {} })
     vi.mocked(userRiskControlV2API.listUserIPIdentities).mockResolvedValue({ items: [], total: 0 })
     vi.mocked(userRiskControlV2API.listUserDeviceIdentities).mockResolvedValue({ items: [], total: 0 })
     vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({ items: [], total: 0 })
@@ -58,5 +58,27 @@ describe('UserRiskIdentityDetail', () => {
     expect(wrapper.text()).toContain('v2_registration_ip_accounts')
     expect(wrapper.text()).toContain('admin.userRiskControl.identityDataQuality')
     expect(userRiskControlV2API.listUserIPIdentities).not.toHaveBeenCalled()
+  })
+
+  it('renders the Stage 0 disabled state without requesting identity evidence', async () => {
+    vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: false, admin_enabled: false, mode: 'shadow', schema: 'v2', geo_source: 'cloudflare_or_local', domains: { ip: 'disabled', device: 'disabled', composite: 'disabled' }, quality_24h: {} })
+
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.userRiskControl.identityDisabled')
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false)
+    expect(userRiskControlV2API.getUserIdentitySummary).not.toHaveBeenCalled()
+    expect(userRiskControlV2API.listUserIPIdentities).not.toHaveBeenCalled()
+  })
+
+  it('keeps a real health failure as a retryable service error', async () => {
+    vi.mocked(userRiskControlV2API.getIdentityHealth).mockRejectedValue(new Error('risk identity service unavailable'))
+
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('risk identity service unavailable')
+    expect(wrapper.text()).toContain('admin.userRiskControl.retry')
   })
 })
