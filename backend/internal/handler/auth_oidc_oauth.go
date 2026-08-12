@@ -712,6 +712,7 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		return
 	}
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportIdentityLoginSuccess(c, user, "oauth")
 	h.reportOAuthRegistrationRisk(c, user, "oidc", email)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
@@ -1276,7 +1277,7 @@ func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 		AvatarURL:        pendingSessionStringValue(upstreamClaims, "suggested_avatar_url"),
 		UpstreamMetadata: upstreamMetadata,
 	}
-	tokenPair, _, err := h.authService.LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(
+	tokenPair, user, err := h.authService.LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(
 		ctx,
 		input,
 		"",
@@ -1287,6 +1288,7 @@ func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 		log.Printf("[OIDC OAuth] verified-email fast path skipped: reason=%s", infraerrors.Reason(err))
 		return false
 	}
+	h.reportIdentityLoginSuccess(c, user, "oauth")
 
 	fragment := url.Values{}
 	fragment.Set("access_token", tokenPair.AccessToken)

@@ -11,7 +11,7 @@ type CustomExtensions struct {
 }
 
 func NewCustomExtensions(h *Handlers) *CustomExtensions {
-	client := service.NewRiskControlClientFromEnv()
+	var client *service.RiskControlClient
 	var base *admin.UserHandler
 	var authService *service.AuthService
 	if h != nil {
@@ -20,7 +20,11 @@ func NewCustomExtensions(h *Handlers) *CustomExtensions {
 		}
 		if h.Auth != nil {
 			authService = h.Auth.AuthServiceForCustomExtensions()
+			client = h.Auth.RiskControlClientForCustomExtensions()
 		}
+	}
+	if client == nil {
+		client = service.NewRiskControlClientFromEnv()
 	}
 	return &CustomExtensions{
 		RiskControlClient: client,

@@ -82,6 +82,9 @@
             <template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /></template>
             <template #cell-riskLevel="{ row: user }">{{ formatRiskLevel(user.risk_level) }}</template>
             <template #cell-eventCount="{ row: user }"><span>{{ user.event_count ?? 0 }}</span><span class="block text-xs text-gray-400 dark:text-gray-500">IP {{ user.ip_count ?? 0 }} / 设备 {{ user.device_count ?? 0 }}</span></template>
+            <template #cell-identityNetwork="{ row: user }"><div class="whitespace-nowrap text-left"><span class="font-mono text-xs text-gray-800 dark:text-gray-200">{{ user.identity?.latest_ip || '-' }}</span><span v-if="user.identity?.country_code || user.identity?.region" class="mt-0.5 block text-xs text-gray-500">{{ [user.identity.country_code, user.identity.region].filter(Boolean).join(' · ') }}</span></div></template>
+            <template #cell-identitySources="{ row: user }"><div class="whitespace-nowrap text-left text-xs"><span>{{ t('admin.userRiskControl.identityBrowserCount', { count: user.identity?.browser_instance_count || 0 }) }}</span><span class="mt-0.5 block text-gray-500">{{ t('admin.userRiskControl.identityAPIClientCount', { count: user.identity?.api_client_count || 0 }) }}</span></div></template>
+            <template #cell-identityAssociation="{ row: user }"><div class="whitespace-nowrap text-left text-xs"><span>{{ t('admin.userRiskControl.identityAssociatedCount', { count: user.identity?.associated_account_count || 0 }) }}</span><span class="mt-0.5 block text-gray-500">{{ t('admin.userRiskControl.identityRuleCount', { count: user.identity?.active_rule_count || 0 }) }}</span><span v-if="user.identity" class="mt-1 inline-block rounded px-1.5 py-0.5 font-medium" :class="identityQualityClass(user.identity.quality_state)">{{ t(`admin.userRiskControl.drawer.state.${user.identity.quality_state}`) }}</span><span v-else class="mt-1 block text-gray-400">-</span></div></template>
             <template #cell-lastEvent="{ row: user }">{{ formatDate(user.last_event_at) }}</template>
             <template #cell-reason="{ row: user }"><p class="max-w-xl whitespace-normal break-words text-left leading-5">{{ displayReason(user) }}</p></template>
             <template #cell-processing="{ row: user }">{{ formatProcessingStatus(user.processing_status || (user.pending ? 'pending' : user.last_action ? 'observed' : '')) }}</template>
@@ -151,6 +154,9 @@ const columns: Column[] = [
   { key: 'riskScore', label: '风险分', sortable: true },
   { key: 'riskLevel', label: t('admin.userRiskControl.level'), sortable: true },
   { key: 'eventCount', label: '事件次数', sortable: true },
+  { key: 'identityNetwork', label: t('admin.userRiskControl.identityNetwork') },
+  { key: 'identitySources', label: t('admin.userRiskControl.identitySources') },
+  { key: 'identityAssociation', label: t('admin.userRiskControl.identityAssociation') },
   { key: 'lastEvent', label: '最近事件', sortable: true },
   { key: 'reason', label: t('admin.userRiskControl.table.reason') },
   { key: 'processing', label: '处理状态' },
@@ -198,6 +204,12 @@ const allSelected = computed({
 const batchSuccessCount = computed(() => batchResults.value.filter((result) => result.status === 'success').length)
 const batchSummary = computed(() => batchSuccessCount.value === batchResults.value.length ? 'success' : batchSuccessCount.value === 0 ? 'failed' : 'partial')
 const batchDialogTitle = computed(() => batchAction.value === 'disabled' ? '确认批量封禁' : batchAction.value === 'active' ? '确认批量解封' : '确认批量标记已处理')
+
+function identityQualityClass(state?: string) {
+  if (state === 'healthy') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+  if (state === 'disabled') return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
+  return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+}
 
 function errorMessage(err: unknown) {
   return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed')

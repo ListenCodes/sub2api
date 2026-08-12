@@ -202,6 +202,33 @@ func (r *userRepository) GetByIDIncludeDeleted(ctx context.Context, id int64) (*
 	return out, nil
 }
 
+func (r *userRepository) GetByIDsIncludeDeleted(ctx context.Context, ids []int64) ([]service.User, error) {
+	seen := make(map[int64]struct{}, len(ids))
+	cleaned := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || len(cleaned) >= 100 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		cleaned = append(cleaned, id)
+	}
+	if len(cleaned) == 0 {
+		return []service.User{}, nil
+	}
+	models, err := r.client.User.Query().Where(dbuser.IDIn(cleaned...)).All(mixins.SkipSoftDelete(ctx))
+	if err != nil {
+		return nil, err
+	}
+	users := make([]service.User, 0, len(models))
+	for _, model := range models {
+		users = append(users, *userEntityToService(model))
+	}
+	return users, nil
+}
+
 func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service.User, error) {
 	matches, err := r.client.User.Query().
 		Where(userEmailLookupPredicate(email)).

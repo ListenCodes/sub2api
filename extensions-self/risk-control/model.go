@@ -34,6 +34,7 @@ type EventRecord struct {
 	ID                    int64          `json:"id"`
 	EventKey              string         `json:"event_key"`
 	EventType             string         `json:"event_type"`
+	IdentityVersion       string         `json:"identity_version"`
 	UserID                int64          `json:"user_id,omitempty"`
 	SubjectID             string         `json:"subject_id,omitempty"`
 	UsernameSnapshot      string         `json:"username,omitempty"`

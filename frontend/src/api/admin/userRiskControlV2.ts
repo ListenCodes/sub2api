@@ -27,6 +27,7 @@ export interface RiskUserRow {
   last_event_at?: string | null
   last_risk_at?: string | null
   created_at?: string
+  identity?: IdentityListSummary
 }
 
 export interface MainAdminUser {
@@ -84,6 +85,16 @@ export interface RiskAuditRecord {
 }
 
 export interface RiskListResponse<T> { items: T[]; total: number; page?: number; page_size?: number }
+export type IdentityDomain = 'ip' | 'device' | 'composite'
+export type IdentityDomainState = 'healthy' | 'degraded' | 'paused' | 'disabled'
+export interface IdentitySignalSummary { rule_code: string; score: number; evidence_count: number; occurred_at: string }
+export interface IdentityDomainSummary { domain: IdentityDomain; state: IdentityDomainState; score: number; signal_count: number; associated_account_count: number; signals: IdentitySignalSummary[] }
+export interface IdentitySummary { user_id: number; identity_version: 'v2'; mode: 'shadow'; overall_score: number; legacy_notice: string; domains: IdentityDomainSummary[] }
+export interface IdentityHealth { enabled: boolean; mode: 'shadow'; shadow_until?: string; schema: string; key_id?: string; geo_source: string; domains: Record<IdentityDomain, IdentityDomainState>; quality_24h: { events?: number; valid_ip?: number; valid_device?: number; linked_users?: number; max_network_users?: number; minimum_events?: number; minimum_coverage_percent?: number; maximum_ip_share_percent?: number }; ingest_queue?: { state?: string; queued?: number; capacity?: number; enqueued?: number; succeeded?: number; failed?: number; dropped?: number; average_latency_ms?: number } }
+export interface IPIdentity { id: number; ip: string; ip_family: 4 | 6; ip_source: string; is_public: boolean; country_code: string; region: string; city: string; asn: number; geo_source: string; geo_verified: boolean; first_seen_at: string; last_seen_at: string; registration_success_count: number; login_success_count: number; api_success_count: number; associated_account_count: number }
+export interface DeviceIdentity { id: number; identity_kind: 'browser_instance' | 'browser_profile' | 'api_client'; display_code: string; confidence: 'low' | 'medium_high' | 'high'; browser_family: string; os_family: string; device_class: string; language_family: string; cookie_status: string; first_seen_at: string; last_seen_at: string; registration_success_count: number; login_success_count: number; api_success_count: number; network_count: number; associated_account_count: number }
+export interface AssociatedRiskUser { user_id: number; relation: 'ip' | 'device' | 'multi_domain' | 'composite'; shared_network_count: number; shared_device_count: number; cooccurring_evidence_count: number; evidence_strength: 'weak' | 'medium_high' | 'high'; evidence_window_seconds: number; first_seen_at: string; last_seen_at: string; account?: { id: number; email: string; username: string; status: string; deleted: boolean; created_at: string } }
+export interface IdentityListSummary { user_id: number; latest_ip: string; country_code: string; region: string; browser_instance_count: number; api_client_count: number; associated_account_count: number; active_rule_count: number; quality_state: IdentityDomainState }
 export interface AuditFilters {
   action?: string
   targetUserId?: number
@@ -165,6 +176,16 @@ async function fetchAllMainUsers(params: Record<string, unknown>) {
   return { items, total }
 }
 
+async function fetchIdentityListSummaries(userIDs: number[]): Promise<IdentityListSummary[]> {
+  if (!userIDs.length) return []
+  try {
+    const { data } = await mainAdminClient.get<{ items: IdentityListSummary[] }>('/admin/identity-summaries', { params: { user_ids: userIDs.slice(0, 100).join(',') } })
+    return data.items
+  } catch {
+    return []
+  }
+}
+
 async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListResponse<RiskUserRow>> {
   const params = compactParams({ search: filters.search, status: filters.status, sort_by: filters.sortBy === 'created_at' ? 'created_at' : undefined, sort_order: filters.sortBy === 'created_at' ? filters.sortOrder : undefined })
   const riskSort = filters.sortBy && filters.sortBy !== 'created_at'
@@ -174,7 +195,7 @@ async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListRespons
     : await mainAdminClient.get<{ items: MainAdminUser[]; total: number }>('/admin/users', { params: { ...params, page: filters.page || 1, page_size: filters.pageSize || 20 } }).then(({ data }) => data)
   const riskItems = await fetchAllRiskSignals(filters, filteringRisk ? undefined : main.items.map((user) => user.id))
   const riskByID = new Map(riskItems.map((item) => [item.id, item]))
-  const items = main.items.map((user) => {
+  const items: RiskUserRow[] = main.items.map((user) => {
     const signal = riskByID.get(user.id)
     const riskReason = formatRiskReason(signal?.reason, { eventType: signal?.risk_type, count: signal?.event_count })
     return { ...user, risk_type: signal?.risk_type || null, risk_level: signal?.risk_level || null, risk_score: signal?.score || 0, risk_reason: signal?.reason ? riskReason : null, last_action: signal?.last_action || null, pending: Boolean(signal?.pending), processing_status: signal?.pending ? 'pending' : signal?.last_action === 'review' ? 'reviewed' : signal?.last_action === 'ban' || signal?.last_action === 'auto_ban' ? 'banned' : signal?.last_action === 'unban' ? 'unbanned' : signal ? 'observed' : null, event_count: signal?.event_count || 0, ip_count: signal?.ip_count || 0, device_count: signal?.device_count || 0, last_event_at: signal?.last_event_at || null, last_risk_at: signal?.last_event_at || null } satisfies RiskUserRow
@@ -192,6 +213,9 @@ async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListRespons
   const currentPage = filters.page || 1
   const currentPageSize = filters.pageSize || 20
   const visibleItems = filteringRisk ? items.slice((currentPage - 1) * currentPageSize, currentPage * currentPageSize) : items
+  const identityItems = await fetchIdentityListSummaries(visibleItems.map((user) => user.id))
+  const identityByID = new Map(identityItems.map((item) => [item.user_id, item]))
+  for (const user of visibleItems) user.identity = identityByID.get(user.id)
   return { items: visibleItems, total: filteringRisk ? items.length : main.total, page: currentPage, page_size: currentPageSize }
 }
 
@@ -224,6 +248,31 @@ async function getUserDetail(id: number): Promise<RiskUserDetail> {
     summary: { score: data.score, level: data.risk_level, reason: events[0]?.reason || '', event_count: data.event_count },
     events, audit: audit.items, associations: { ip_count: Number(data.ip_count || 0), device_count: Number(data.device_count || 0) },
   }
+}
+
+async function getUserIdentitySummary(id: number): Promise<IdentitySummary> {
+  const { data } = await mainAdminClient.get<IdentitySummary>(`/admin/users/${id}/identity-summary`)
+  return data
+}
+
+async function listUserIPIdentities(id: number, page = 1, pageSize = 20, exactIP = ''): Promise<RiskListResponse<IPIdentity>> {
+  const { data } = await mainAdminClient.get<RiskListResponse<IPIdentity>>(`/admin/users/${id}/ip-identities`, { params: compactParams({ page, limit: pageSize, q: exactIP.trim() }) })
+  return data
+}
+
+async function listUserDeviceIdentities(id: number, page = 1, pageSize = 20): Promise<RiskListResponse<DeviceIdentity>> {
+  const { data } = await mainAdminClient.get<RiskListResponse<DeviceIdentity>>(`/admin/users/${id}/device-identities`, { params: { page, limit: pageSize } })
+  return data
+}
+
+async function listAssociatedUsers(id: number, page = 1, pageSize = 20): Promise<RiskListResponse<AssociatedRiskUser>> {
+  const { data } = await mainAdminClient.get<RiskListResponse<AssociatedRiskUser>>(`/admin/users/${id}/associated-users`, { params: { page, limit: pageSize } })
+  return data
+}
+
+async function getIdentityHealth(): Promise<IdentityHealth> {
+  const { data } = await mainAdminClient.get<IdentityHealth>('/admin/identity-health')
+  return data
 }
 
 async function setUserStatus(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskUserRow> {
@@ -360,5 +409,5 @@ async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<R
   }) }
 }
 
-export const userRiskControlV2API = { listUsers, getUserDetail, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
+export const userRiskControlV2API = { listUsers, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
 export default userRiskControlV2API

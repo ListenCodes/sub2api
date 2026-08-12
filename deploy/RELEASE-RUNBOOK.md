@@ -389,6 +389,17 @@ stop and preserve the diff before proceeding.
 
 ## Extensions-Self Release
 
+### V2 Identity Risk Stages
+
+Identity V2 must advance in order. A failure rolls back only the current identity switch and must not interrupt registration, login, or API traffic.
+
+1. Stage 0 applies additive schema with every `RISK_IDENTITY_*_ENABLED=false`.
+2. Stage 1 enables `RISK_IDENTITY_V2_ENABLED`, then separately enables `RISK_IDENTITY_IP_COLLECTION_ENABLED` and `RISK_IDENTITY_DEVICE_COLLECTION_ENABLED` while verifying queue drops, encryption keys, trusted client IPs, browser identity quality, and geo source health.
+3. Stage 2 enables `RISK_IDENTITY_ADMIN_ENABLED` for administrator sampling of full IP, browser instance, API client, and associated-account evidence. The extension never receives main-user-table credentials.
+4. Stage 3 sets `RISK_IDENTITY_SHADOW_UNTIL` at least 14 days ahead on initial activation, then enables the global, IP, device, and composite rule switches. Every V2 signal remains Shadow; registration rejection and automatic bans are forbidden.
+
+After the full 14-day Shadow period, run `POST /api/v1/admin/risk-rebuilds/dry-run` and manually sample the reconciliation output before any write rebuild. Applying the rebuild, entering review mode, or any enforcement requires separate approval. This runbook has no automatic enforce step. Missing keys, failed identity migration, unavailable geo data, or a data-quality circuit breaker must remain fail-open for the main application.
+
 The unified extension service is sourced from the approved main repository checkout:
 
 ```text

@@ -23,6 +23,7 @@ type HTTPServer struct {
 	homeReady    bool
 	monitor      *accountmonitor.Handler
 	publicGroups publicGroupReader
+	identity     *IdentityService
 }
 
 func NewHTTPServer(cfg Config, repo RiskRepository, monitors ...*accountmonitor.Handler) *HTTPServer {
@@ -39,7 +40,7 @@ func NewHTTPServer(cfg Config, repo RiskRepository, monitors ...*accountmonitor.
 	if len(monitors) > 0 {
 		monitor = monitors[0]
 	}
-	return &HTTPServer{
+	server := &HTTPServer{
 		service:   NewRiskService(cfg, repo),
 		repo:      repo,
 		cfg:       cfg,
@@ -48,6 +49,10 @@ func NewHTTPServer(cfg Config, repo RiskRepository, monitors ...*accountmonitor.
 		homeReady: homeReady,
 		monitor:   monitor,
 	}
+	if sqlRepo, ok := repo.(*SQLRepository); ok {
+		server.identity, _ = NewIdentityService(cfg.Identity, NewSQLIdentityRepository(sqlRepo.db))
+	}
+	return server
 }
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +94,20 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "service": "extensions-self"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "extensions-self"})
+		payload := map[string]any{"status": "ok", "service": "extensions-self"}
+		if s.identity != nil {
+			if health, err := s.identity.Health(r.Context()); err == nil {
+				payload["identity"] = health
+			} else {
+				payload["identity"] = map[string]string{"schema": "unavailable"}
+				if s.cfg.Identity.Enabled {
+					payload["status"] = "degraded"
+					writeJSON(w, http.StatusServiceUnavailable, payload)
+					return
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, payload)
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
@@ -106,7 +124,30 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
-	if err := verifyInternalSignature(r, body, s.cfg.InternalSecret, s.nonces, time.Now().UTC()); err != nil {
+	if r.URL.Path == "/api/v1/internal/identity-events" {
+		if int64(len(body)) > s.cfg.Identity.MaxBodyBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, errors.New("identity request body too large"))
+			return
+		}
+		nonce, err := verifyIdentitySignature(r, body, s.cfg.InternalSecret, time.Now().UTC())
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, err)
+			return
+		}
+		if s.identity == nil || s.identity.repo == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("identity service unavailable"))
+			return
+		}
+		used, err := s.identity.repo.UseNonce(r.Context(), nonce, time.Now().UTC())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("identity replay protection unavailable"))
+			return
+		}
+		if !used {
+			writeError(w, http.StatusUnauthorized, ErrReplaySignature)
+			return
+		}
+	} else if err := verifyInternalSignature(r, body, s.cfg.InternalSecret, s.nonces, time.Now().UTC()); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
@@ -141,14 +182,22 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleEvaluateEvent(w, r, body, true)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/events":
 		s.handleEvaluateEvent(w, r, body, false)
+	case r.Method == http.MethodPost && path == "/api/v1/internal/identity-events":
+		s.handleIdentityEvent(w, r, body)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/audit":
 		s.handleAuditIngest(w, r, body)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/overview":
 		s.handleOverview(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/users":
 		s.handleUsers(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-summaries":
+		s.handleIdentitySummaries(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/users/"):
-		s.handleUserByPath(w, r, path)
+		if userID, section, ok := identityUserRoute(path); ok {
+			s.handleIdentityUser(w, r, userID, section)
+		} else {
+			s.handleUserByPath(w, r, path)
+		}
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/users/") && strings.HasSuffix(path, "/processed"):
 		s.handleMarkUserProcessedByPath(w, r, path)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/rules":
@@ -161,9 +210,41 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleRuleTest(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/audit":
 		s.handleAudit(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-health":
+		s.handleIdentityHealth(w, r)
+	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds/dry-run":
+		s.handleIdentityRebuild(w, r, true)
+	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds":
+		s.handleIdentityRebuild(w, r, false)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/risk-rebuilds/"):
+		s.handleIdentityRebuildStatus(w, r, path)
 	default:
 		writeError(w, http.StatusNotFound, errors.New("not found"))
 	}
+}
+
+func (s *HTTPServer) handleIdentityEvent(w http.ResponseWriter, r *http.Request, body []byte) {
+	if s.identity == nil || !s.cfg.Identity.Enabled {
+		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": false, "disabled": true})
+		return
+	}
+	var input IdentityEventReport
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, errors.New("identity request must contain one JSON object"))
+		return
+	}
+	duplicate, err := s.identity.Ingest(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "duplicate": duplicate, "mode": "shadow"})
 }
 
 func (s *HTTPServer) handleEvaluateEvent(w http.ResponseWriter, r *http.Request, body []byte, includeDecision bool) {

@@ -152,6 +152,5 @@ func defaultRules() []Rule {
 		{ID: 5, Code: "content_risk", Name: "内容风险", EventTypes: []string{"content_risk"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 86400, Threshold: 1, Score: 85, RiskLevel: "high", Action: "review", Revision: 1},
 		{ID: 6, Code: "quota_abuse", Name: "配额滥用", EventTypes: []string{"quota_exceeded"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 3600, Threshold: 5, Score: 55, RiskLevel: "medium", Action: "review", Revision: 1},
 		{ID: 7, Code: "upstream_error", Name: "上游错误", EventTypes: []string{"upstream_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 8, Score: 25, RiskLevel: "low", Action: "observe", Revision: 1},
-		{ID: 8, Code: "api_request_observation", Name: "API 请求观察", EventTypes: []string{"api_request"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 86400, Threshold: 1, Score: 0, RiskLevel: "low", Action: "observe", Revision: 1},
 	}
 }

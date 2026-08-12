@@ -1,6 +1,9 @@
 # 风控管理台产品与实现规格
 
-状态：开发规格，作为后续风控功能开发和验收的唯一产品参考。
+状态：开发规格，作为风控管理台通用功能和验收的产品参考。
+
+真实 IP、IP 地区、浏览器实例、关联账号、身份数据保留、Shadow 规则和风险摘要重算的完整设计，见
+[`RISK-CONTROL-IDENTITY-ASSOCIATION-DESIGN.md`](RISK-CONTROL-IDENTITY-ASSOCIATION-DESIGN.md)。身份关联功能与本文冲突时，以该专项设计中已经确认的产品决策和安全边界为准。
 
 ## 1. 背景与当前事实
 

@@ -30,6 +30,15 @@ func main() {
 	if err := ApplySchema(ctx, db); err != nil {
 		log.Fatal(err)
 	}
+	if cfg.Identity.RulesEnabled {
+		identityRepo := NewSQLIdentityRepository(db)
+		if err := identityRepo.EnsureShadowActivation(ctx, cfg.Identity, time.Now().UTC()); err != nil {
+			log.Fatal(err)
+		}
+		if err := identityRepo.ActivateShadowRules(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}
 	monitorRuntime, err := newAccountMonitorRuntime(ctx, cfg, db)
 	if err != nil {
 		log.Fatal(err)

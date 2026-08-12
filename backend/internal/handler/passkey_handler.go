@@ -18,9 +18,10 @@ import (
 )
 
 type PasskeyHandler struct {
-	passkeys    *service.PasskeyService
-	authService *service.AuthService
-	settingSvc  *service.SettingService
+	passkeys          *service.PasskeyService
+	authService       *service.AuthService
+	settingSvc        *service.SettingService
+	riskControlClient *service.RiskControlClient
 }
 
 func NewPasskeyHandler(
@@ -29,9 +30,10 @@ func NewPasskeyHandler(
 	settingService *service.SettingService,
 ) *PasskeyHandler {
 	return &PasskeyHandler{
-		passkeys:    passkeys,
-		authService: authService,
-		settingSvc:  settingService,
+		passkeys:          passkeys,
+		authService:       authService,
+		settingSvc:        settingService,
+		riskControlClient: service.NewRiskControlClientFromEnv(),
 	}
 }
 
@@ -121,6 +123,7 @@ func (h *PasskeyHandler) FinishLogin(c *gin.Context) {
 	middleware2.SetAuditActor(c, user.ID, user.Email)
 	c.Set("auth_method", service.AuditAuthMethodPasskey)
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	enqueueRiskIdentity(c, h.riskControlClient, "passkey_login_success", "login", "success", user.Email, user.ID, 0)
 	respondWithTokenPair(c, h.authService, user)
 }
 

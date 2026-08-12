@@ -76,6 +76,7 @@ func SetupCustomRouter(
 		},
 		customHandlers.AdminUser.ApplyRiskBan,
 	))
+	r.Use(handler.RiskIdentityAuthLifecycleMiddleware(customHandlers.RiskControlClient))
 
 	SetupRouter(
 		r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog,

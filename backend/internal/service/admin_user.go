@@ -105,6 +105,17 @@ func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) 
 	return s.userRepo.GetByIDIncludeDeleted(ctx, id)
 }
 
+func (s *adminServiceImpl) GetUsersForRiskIdentity(ctx context.Context, userIDs []int64) ([]User, error) {
+	type batchReader interface {
+		GetByIDsIncludeDeleted(context.Context, []int64) ([]User, error)
+	}
+	reader, ok := s.userRepo.(batchReader)
+	if !ok {
+		return nil, errors.New("batch user identity lookup is unavailable")
+	}
+	return reader.GetByIDsIncludeDeleted(ctx, userIDs)
+}
+
 // normalizeUserRole 校验并归一化角色输入。
 // 空字符串返回 fallback(未提供时的默认角色);非法值返回错误。
 func normalizeUserRole(role, fallback string) (string, error) {

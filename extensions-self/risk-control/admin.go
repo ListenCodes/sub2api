@@ -176,7 +176,24 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		writeError(w, http.StatusBadRequest, errors.New("revision is required"))
 		return
 	}
+	for index := range input.EventTypes {
+		input.EventTypes[index] = strings.TrimSpace(input.EventTypes[index])
+	}
 	if err := validateRuleFields(input.Rule); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
+		return
+	}
+	legacyAPIObservation := strings.TrimSpace(code) == "api_request_observation"
+	if legacyAPIObservation && input.Enabled {
+		writeError(w, http.StatusBadRequest, errors.New("api request observation cannot be enabled"))
+		return
+	}
+	if s.cfg.Identity.Enabled && input.Enabled && isRetiredV1IdentityRule(code) {
+		writeError(w, http.StatusBadRequest, errors.New("V1 identity rule cannot be enabled while identity V2 is active"))
+		return
+	}
+	allowLegacyAPIObservation := legacyAPIObservation && !input.Enabled
+	if err := validateRuleEventTypes(input.EventTypes, allowLegacyAPIObservation); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
 		return
 	}
@@ -192,6 +209,15 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 	actor, _ := actorID(r)
 	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"revision": updated.Revision}})
 	writeJSON(w, http.StatusOK, map[string]any{"id": updated.ID, "revision": updated.Revision})
+}
+
+func isRetiredV1IdentityRule(code string) bool {
+	switch strings.TrimSpace(code) {
+	case "registration_identity_abuse", "registration_ip_multi_account", "api_request_observation":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {

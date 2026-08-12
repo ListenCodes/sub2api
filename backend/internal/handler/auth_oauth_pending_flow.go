@@ -1681,6 +1681,7 @@ func (h *AuthHandler) bindPendingOAuthLogin(c *gin.Context, provider string) {
 	}
 
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportIdentityLoginSuccess(c, user, "oauth")
 	// bindPendingOAuthLogin = 绑定已有账户登录，不动 users.username（用户已有自己的名字）
 	h.maybeSyncDingTalkAfterLogin(c.Request.Context(), session, user.ID)
 	tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), user, "")
@@ -1891,6 +1892,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 
 	h.authService.ApplyOAuthSignupPromoCode(c.Request.Context(), user.ID, pendingOAuthPromoCode(session))
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportIdentityLoginSuccess(c, user, "oauth")
 	h.reportOAuthRegistrationRisk(c, user, session.ProviderType, email)
 	// createPendingOAuthAccount = 注册新账户，需要把钉钉昵称同步到 users.username 作为初始值
 	h.maybeSyncDingTalkAfterRegistration(c.Request.Context(), session, user.ID)
@@ -2060,6 +2062,7 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 			return
 		}
 		h.authService.RecordSuccessfulLogin(c.Request.Context(), loginUser.ID)
+		h.reportIdentityLoginSuccess(c, loginUser, "oauth")
 		payload["access_token"] = tokenPair.AccessToken
 		payload["refresh_token"] = tokenPair.RefreshToken
 		payload["expires_in"] = tokenPair.ExpiresIn

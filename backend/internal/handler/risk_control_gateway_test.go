@@ -87,11 +87,14 @@ func TestRiskEventMiddlewareReportsAuthenticatedReadRequests(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	request.RemoteAddr = "203.0.113.10:4321"
+	request.Header.Set("X-Request-ID", "attacker-controlled")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 
+	firstEventKey := ""
 	select {
 	case report := <-reports:
+		firstEventKey = report.EventKey
 		if report.IPHash != service.HashRiskValue("203.0.113.10") {
 			t.Fatalf("ip_hash = %q, want trusted client IP hash", report.IPHash)
 		}
@@ -100,6 +103,19 @@ func TestRiskEventMiddlewareReportsAuthenticatedReadRequests(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for risk event report")
+	}
+
+	repeated := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	repeated.RemoteAddr = request.RemoteAddr
+	repeated.Header.Set("X-Request-ID", "attacker-controlled")
+	engine.ServeHTTP(httptest.NewRecorder(), repeated)
+	select {
+	case report := <-reports:
+		if report.EventKey == firstEventKey {
+			t.Fatalf("repeated client request ID reused server event key %q", report.EventKey)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for repeated risk event report")
 	}
 }
 

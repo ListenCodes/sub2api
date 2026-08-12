@@ -811,6 +811,7 @@ func (h *AuthHandler) CompleteDingTalkOAuthRegistration(c *gin.Context) {
 		})
 	}
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportOAuthRegistrationRisk(c, user, "dingtalk", user.Email)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
 

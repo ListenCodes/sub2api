@@ -2,15 +2,12 @@ package handler
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -177,20 +174,31 @@ func reportRiskEventFromContext(c *gin.Context, client *service.RiskControlClien
 	if endpoint == "" {
 		endpoint = c.Request.URL.Path
 	}
-	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
-	if requestID == "" {
-		if value, ok := c.Request.Context().Value(ctxkey.RequestID).(string); ok {
-			requestID = strings.TrimSpace(value)
-		}
+	requestID := requestRiskIdentity(c, false).EventRoot
+	apiKeyID := int64(0)
+	if apiKey != nil && apiKey.ID > 0 {
+		apiKeyID = apiKey.ID
 	}
-	if requestID == "" {
-		requestID = randomRiskEventID()
+	email := ""
+	if apiKey != nil && apiKey.User != nil {
+		email = apiKey.User.Email
+	}
+	outcome := "failure"
+	if status < http.StatusBadRequest {
+		outcome = "success"
+	}
+	enqueueRiskIdentity(c, client, eventType, identityEventClass(eventType), outcome, email, subject.UserID, apiKeyID)
+	if client.IdentityEnabled() && eventType == "api_request" {
+		return
 	}
 	fallbackDevice := ""
 	if apiKey != nil && apiKey.ID > 0 {
 		fallbackDevice = "api-key:" + strconv.FormatInt(apiKey.ID, 10)
 	}
 	ipHash, deviceHash := riskAssociationHashes(c, fallbackDevice)
+	if client.IdentityEnabled() {
+		ipHash, deviceHash = "", ""
+	}
 	input := service.RiskEventReport{
 		EventKey:  requestID + ":risk:" + endpoint,
 		EventType: eventType, RiskType: eventType, UserID: subject.UserID,
@@ -215,6 +223,13 @@ func reportRiskEventFromContext(c *gin.Context, client *service.RiskControlClien
 			slog.Warn("risk control auto-ban failed", "error", err, "user_id", subject.UserID)
 		}
 	}
+}
+
+func identityEventClass(eventType string) string {
+	if eventType == "api_request" {
+		return "api_success"
+	}
+	return "security"
 }
 
 func shouldReportRiskMethod(method string) bool {
@@ -254,12 +269,4 @@ func reportRiskEvent(client *service.RiskControlClient, input service.RiskEventR
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	_ = client.ReportEvent(ctx, input)
-}
-
-func randomRiskEventID() string {
-	var buf [12]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 10)
-	}
-	return hex.EncodeToString(buf[:])
 }

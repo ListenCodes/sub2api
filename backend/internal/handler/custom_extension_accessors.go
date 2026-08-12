@@ -8,3 +8,10 @@ func (h *AuthHandler) AuthServiceForCustomExtensions() *service.AuthService {
 	}
 	return h.authService
 }
+
+func (h *AuthHandler) RiskControlClientForCustomExtensions() *service.RiskControlClient {
+	if h == nil {
+		return nil
+	}
+	return h.riskControlClient
+}

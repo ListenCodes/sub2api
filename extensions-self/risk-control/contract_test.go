@@ -74,3 +74,12 @@ func TestSchemaMigratesLegacyRegistrationRuleToSplitStrategies(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentitySchemaStageZeroDoesNotMutateExistingV1Rules(t *testing.T) {
+	if strings.Contains(schemaSQL, "WHERE code = 'api_request_observation'") {
+		t.Fatal("Stage 0 schema must not mutate an existing V1 API observation rule")
+	}
+	if !strings.Contains(schemaSQL, "risk_identity_shadow_activation") {
+		t.Fatal("schema does not persist the initial 14-day Shadow activation")
+	}
+}

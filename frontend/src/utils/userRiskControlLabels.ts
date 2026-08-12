@@ -63,7 +63,7 @@ const legacyRuleReasons: Record<string, string> = {
   content_risk: '内容风险：请求内容命中安全策略，需要人工核查。',
   quota_abuse: '配额滥用：配额超限行为达到规则阈值，需要检查调用量。',
   upstream_error_burst: '上游错误爆发：短时间内上游服务错误明显增多。',
-  api_request_observation: 'API 请求观察：请求达到观察记录条件，仅用于行为观察，不代表账号异常。',
+  api_request_observation: 'V1 历史正常 API 流量记录：该规则已停用，不再计入账号风险摘要。',
 }
 
 const legacyRuleNames: Record<string, string> = {
@@ -76,7 +76,7 @@ const legacyRuleNames: Record<string, string> = {
   quota_abuse: '配额滥用',
   upstream_error: '上游错误',
   upstream_error_burst: '上游错误爆发',
-  api_request_observation: 'API 请求观察',
+  api_request_observation: 'V1 历史正常 API 流量记录',
 }
 
 export const riskTypeOptions: RiskLabelOption[] = Object.entries(riskTypes).map(([value, label]) => ({ value, label }))

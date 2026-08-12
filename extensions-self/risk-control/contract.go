@@ -73,7 +73,6 @@ var validRiskEventTypes = map[string]struct{}{
 	"content_risk":         {},
 	"quota_exceeded":       {},
 	"upstream_error":       {},
-	"api_request":          {},
 }
 
 var validRuleCountStrategies = map[string]struct{}{
@@ -102,10 +101,8 @@ func validateRuleConfig(rule Rule) error {
 	if len(rule.EventTypes) == 0 {
 		return errors.New("event type is required")
 	}
-	for _, eventType := range rule.EventTypes {
-		if _, ok := validRiskEventTypes[strings.TrimSpace(eventType)]; !ok {
-			return fmt.Errorf("invalid event type: %s", eventType)
-		}
+	if err := validateRuleEventTypes(rule.EventTypes, false); err != nil {
+		return err
 	}
 	if strategy := strings.TrimSpace(rule.CountStrategy); strategy != "" {
 		if _, ok := validRuleCountStrategies[strategy]; !ok {
@@ -113,6 +110,19 @@ func validateRuleConfig(rule Rule) error {
 		}
 	}
 	return validateRuleFields(rule)
+}
+
+func validateRuleEventTypes(eventTypes []string, allowLegacyAPIObservation bool) error {
+	for _, eventType := range eventTypes {
+		eventType = strings.TrimSpace(eventType)
+		if allowLegacyAPIObservation && eventType == "api_request" {
+			continue
+		}
+		if _, ok := validRiskEventTypes[eventType]; !ok {
+			return fmt.Errorf("invalid event type: %s", eventType)
+		}
+	}
+	return nil
 }
 
 func validateRuleFields(rule Rule) error {

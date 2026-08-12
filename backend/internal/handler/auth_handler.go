@@ -418,6 +418,7 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 		clearOAuthPendingSessionCookie(c, secureCookie)
 		clearOAuthPendingBrowserCookie(c, secureCookie)
 		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+		h.reportIdentityLoginSuccess(c, user, "oauth")
 
 		user, err = h.userService.GetByID(c.Request.Context(), session.UserID)
 		if err != nil {
@@ -432,6 +433,7 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 	if session.PendingOAuthBind == nil {
 		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	}
+	h.reportIdentityLoginSuccess(c, user, "login")
 
 	h.respondWithTokenPair(c, user)
 }

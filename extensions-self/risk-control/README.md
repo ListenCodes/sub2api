@@ -15,10 +15,24 @@ Required variables:
 
 Optional variables:
 
+- `RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY` and `RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY_ID` keep retained IP rows readable during an online encryption-key rotation; remove them only after those rows have been re-encrypted.
+
 - `RISK_CONTROL_LISTEN`, default `:8090`.
 - `RISK_CONTROL_MODE`, default `shadow`; use `review` before `enforce`.
 - `RISK_CONTROL_DECISION_FAIL_MODE`, default `open` in the main service.
 - `EXTENSIONS_SELF_HOMEPAGE_DIR`, default `/app/homepage`.
+- `RISK_IDENTITY_V2_ENABLED`, master V2 ingest switch, default `false`.
+- `RISK_IDENTITY_IP_COLLECTION_ENABLED` and `RISK_IDENTITY_DEVICE_COLLECTION_ENABLED`, independent collection switches, default `false`.
+- `RISK_IDENTITY_IP_RULES_ENABLED`, `RISK_IDENTITY_DEVICE_RULES_ENABLED`, and `RISK_IDENTITY_COMPOSITE_RULES_ENABLED`, independent Shadow rule switches, default `false`.
+
+Identity V2 rules are permanently constrained to Shadow observation. They have
+no review or enforcement mode, do not reject registration, and do not ban or
+change an account. The generic `RISK_CONTROL_MODE` rollout below applies only
+to the pre-existing non-identity rules.
+
+Repeated registration attempts for one normalized email create a zero-score
+`account` observation keyed only by the email HMAC. It never enters the user
+risk summary, and IP/device/composite rebuilds do not remove that evidence.
 
 Account-monitor variables and source DB permissions belong to the sibling
 [`../account-monitor`](../account-monitor/README.md) module. Both modules share
@@ -37,6 +51,24 @@ secret shorter than 32 bytes and health fails if the homepage is missing.
 The Sub2API admin UI exposes exactly three risk-control pages. Their behavior,
 Chinese labels, API contract, batch actions, rule creation, sorting and audit
 requirements are defined in [`../../docs/RISK-CONTROL-ADMIN-SPEC.md`](../../docs/RISK-CONTROL-ADMIN-SPEC.md).
+The V2 identity-association design for encrypted raw IP display, geolocation,
+browser-instance identity, associated accounts, permanent retention, Shadow
+rules, summary rebuilds, and main-service isolation is defined in
+[`../../docs/RISK-CONTROL-IDENTITY-ASSOCIATION-DESIGN.md`](../../docs/RISK-CONTROL-IDENTITY-ASSOCIATION-DESIGN.md).
+The reviewed authentication lifecycle seams cover password, 2FA, Passkey,
+verified-email OAuth, pending OAuth binding/exchange, and each supported provider's successful account resolution. They
+only enqueue V2 Shadow facts and do not alter authentication or token issuance.
+
+Normal successful API requests are kept only in the daily activity aggregate. A
+short-lived event-key ledger prevents retry double-counting but contains no raw
+or derived IP/device identity and is not part of the permanent evidence record.
+API success reports older than the ledger coverage window are discarded rather
+than counted again after their event key expires.
+Write-mode summary rebuilds remain unavailable until the persisted 14-day
+Shadow deadline has passed and the same administrator has completed a matching
+Dry Run within the preceding 30 minutes without intervening evidence or rule changes.
+That approval check, the evidence/rule snapshot, and the write run share one
+serializable transaction that locks both source tables until commit.
 The risk service remains responsible for risk events, subjects, rules and
 audit data; Sub2API remains authoritative for administrator authentication and
 the final user account status.

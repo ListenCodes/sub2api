@@ -40,10 +40,11 @@ describe('userRiskControlV2API', () => {
     const mainGet = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({
       data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1 },
     } as never).mockResolvedValueOnce({ data: { items: [{ id: 7, risk_type: 'login_failure', risk_level: 'high', score: 80 }], total: 1 } } as never)
+      .mockResolvedValueOnce({ data: { items: [] } } as never)
 
     await userRiskControlV2API.listUsers({ page: 1, pageSize: 20 })
 
-    expect(mainGet).toHaveBeenLastCalledWith('/admin/user-risk-control/users', expect.objectContaining({
+    expect(mainGet).toHaveBeenCalledWith('/admin/user-risk-control/users', expect.objectContaining({
       params: expect.objectContaining({ user_ids: '7' }),
     }))
   })
@@ -167,6 +168,7 @@ describe('userRiskControlV2API', () => {
           total: 2,
         },
       } as never)
+      .mockResolvedValueOnce({ data: { items: [] } } as never)
 
     const result = await userRiskControlV2API.listUsers({ sortBy: 'risk_score', sortOrder: 'desc', page: 1, pageSize: 20 })
 

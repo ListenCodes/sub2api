@@ -35,6 +35,9 @@ func ApplySchema(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_schema_migrations(version) VALUES (1) ON CONFLICT (version) DO NOTHING`); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_schema_migrations(version) VALUES (2) ON CONFLICT (version) DO NOTHING`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -355,7 +358,7 @@ func (r *SQLRepository) Overview(ctx context.Context, since time.Time) (RiskOver
 	return result, nil
 }
 
-const eventSelect = `SELECT id,event_key,event_type,user_id,subject_id,username_snapshot,account_status_snapshot,email_hash,ip_hash,device_hash,risk_type,error_code,reason,endpoint,model,http_status,evidence,decision,score,risk_level,rule_codes,to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM risk_events`
+const eventSelect = `SELECT id,event_key,event_type,identity_version,user_id,subject_id,username_snapshot,account_status_snapshot,email_hash,ip_hash,device_hash,risk_type,error_code,reason,endpoint,model,http_status,evidence,decision,score,risk_level,rule_codes,to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM risk_events`
 
 type scanner interface{ Scan(...any) error }
 
@@ -364,7 +367,7 @@ func scanEventRows(row scanner) (EventRecord, error) { return scanEventValues(ro
 func scanEventValues(row scanner) (EventRecord, error) {
 	var event EventRecord
 	var evidence, rules []byte
-	err := row.Scan(&event.ID, &event.EventKey, &event.EventType, &event.UserID, &event.SubjectID, &event.UsernameSnapshot, &event.AccountStatusSnapshot, &event.EmailHash, &event.IPHash, &event.DeviceHash, &event.RiskType, &event.ErrorCode, &event.Reason, &event.Endpoint, &event.Model, &event.HTTPStatus, &evidence, &event.Decision, &event.Score, &event.RiskLevel, &rules, &event.OccurredAt)
+	err := row.Scan(&event.ID, &event.EventKey, &event.EventType, &event.IdentityVersion, &event.UserID, &event.SubjectID, &event.UsernameSnapshot, &event.AccountStatusSnapshot, &event.EmailHash, &event.IPHash, &event.DeviceHash, &event.RiskType, &event.ErrorCode, &event.Reason, &event.Endpoint, &event.Model, &event.HTTPStatus, &evidence, &event.Decision, &event.Score, &event.RiskLevel, &rules, &event.OccurredAt)
 	if err != nil {
 		return event, err
 	}

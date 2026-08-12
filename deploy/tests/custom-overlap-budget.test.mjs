@@ -58,10 +58,14 @@ test('legacy release safety routes stay within the reviewed three-line budget', 
 
 test('authentication and content-risk lifecycle hooks do not grow silently', () => {
   const budgets = new Map([
-    ['backend/internal/handler/auth_handler.go', { added: 19, markers: 12 }],
-    ['backend/internal/handler/auth_email_oauth.go', { added: 5, markers: 2 }],
-    ['backend/internal/handler/auth_oauth_pending_flow.go', { added: 5, markers: 2 }],
-    ['backend/internal/handler/auth_oidc_oauth.go', { added: 5, markers: 2 }],
+    ['backend/internal/handler/auth_handler.go', { added: 21, markers: 12 }],
+    ['backend/internal/handler/auth_email_oauth.go', { added: 7, markers: 2 }],
+    ['backend/internal/handler/auth_oauth_pending_flow.go', { added: 8, markers: 2 }],
+    ['backend/internal/handler/auth_oidc_oauth.go', { added: 8, markers: 2 }],
+    ['backend/internal/handler/auth_linuxdo_oauth.go', { added: 2, markers: 1 }],
+    ['backend/internal/handler/auth_wechat_oauth.go', { added: 1, markers: 1 }],
+    ['backend/internal/handler/auth_dingtalk_oauth.go', { added: 1, markers: 1 }],
+    ['backend/internal/handler/passkey_handler.go', { added: 9, markers: 3 }],
     ['backend/internal/handler/content_moderation_helper.go', { added: 3, markers: 1 }]
   ])
   const markerPattern = /riskControl|RiskBan|RegistrationRisk|LoginRisk|preflightRegistrationRisk|preflightLoginRisk|SetRiskEventContext|GetTrustedClientIP/g

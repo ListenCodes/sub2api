@@ -672,6 +672,12 @@ type userGroupRateBatchReader interface {
 	GetByUserIDs(ctx context.Context, userIDs []int64) (map[int64]map[int64]float64, error)
 }
 
+// RiskIdentityUserBatchReader is a narrow CustomUserHandler seam. The risk
+// extension supplies IDs only; the main backend remains authoritative for PII.
+type RiskIdentityUserBatchReader interface {
+	GetUsersForRiskIdentity(ctx context.Context, userIDs []int64) ([]User, error)
+}
+
 // NewAdminService creates a new AdminService
 func NewAdminService(
 	userRepo UserRepository,

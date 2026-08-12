@@ -366,6 +366,7 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 				return
 			}
 			h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+			h.reportIdentityLoginSuccess(c, user, "oauth")
 			clearOAuthPendingSessionCookie(c, secureCookie)
 			clearOAuthPendingBrowserCookie(c, secureCookie)
 			redirectOAuthTokenPair(c, frontendCallback, tokenPair, redirectTo)
@@ -605,6 +606,7 @@ func (h *AuthHandler) CompleteLinuxDoOAuthRegistration(c *gin.Context) {
 		return
 	}
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	h.reportOAuthRegistrationRisk(c, user, "linuxdo", user.Email)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
 

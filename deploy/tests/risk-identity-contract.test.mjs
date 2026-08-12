@@ -40,8 +40,8 @@ test('identity V2 is additive, default-off, and permanently Shadow', { skip: !id
 test('compose passes independent identity secrets without weak defaults', { skip: !identityImplementationPresent }, () => {
   const compose = `${read('deploy/docker-compose.custom.yml')}\n${read('deploy/docker-compose.custom.local.yml')}`
   for (const key of ['RISK_IDENTITY_V2_ENABLED', 'RISK_IDENTITY_IP_COLLECTION_ENABLED', 'RISK_IDENTITY_DEVICE_COLLECTION_ENABLED', 'RISK_IDENTITY_ADMIN_ENABLED', 'RISK_IDENTITY_RULES_ENABLED', 'RISK_IDENTITY_IP_RULES_ENABLED', 'RISK_IDENTITY_DEVICE_RULES_ENABLED', 'RISK_IDENTITY_COMPOSITE_RULES_ENABLED']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-false\\}`))
-  for (const key of ['RISK_IDENTITY_HMAC_KEY', 'RISK_IDENTITY_ENCRYPTION_KEY', 'RISK_DEVICE_COOKIE_SIGNING_KEY', 'RISK_DEVICE_COOKIE_SIGNING_PREVIOUS_KEY']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-\\}`))
-  for (const key of ['RISK_DEVICE_COOKIE_SIGNING_KEY_ID', 'RISK_DEVICE_COOKIE_SIGNING_PREVIOUS_KEY_ID']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-\\}`))
+  for (const key of ['RISK_IDENTITY_HMAC_KEY', 'RISK_IDENTITY_ENCRYPTION_KEY', 'RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY', 'RISK_DEVICE_COOKIE_SIGNING_KEY', 'RISK_DEVICE_COOKIE_SIGNING_PREVIOUS_KEY']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-\\}`))
+  for (const key of ['RISK_IDENTITY_ENCRYPTION_KEY_ID', 'RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY_ID', 'RISK_DEVICE_COOKIE_SIGNING_KEY_ID', 'RISK_DEVICE_COOKIE_SIGNING_PREVIOUS_KEY_ID']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-\\}`))
   assert.doesNotMatch(compose, /RISK_IDENTITY_(?:HMAC|ENCRYPTION)_KEY:.*change_this/)
 })
 
@@ -97,6 +97,56 @@ test('custom router observes verification and OAuth stages without provider-file
   assert.match(identity, /oauth_start/)
   assert.match(identity, /oauth_callback/)
   assert.match(identity, /oauth_completion/)
+})
+
+test('successful authentication paths report resolved V2 identity facts', { skip: !identityImplementationPresent }, () => {
+  const paths = {
+    'backend/internal/handler/auth_handler.go': /reportIdentityLoginSuccess/,
+    'backend/internal/handler/auth_email_oauth.go': /reportIdentityLoginSuccess[\s\S]*reportOAuthRegistrationRisk/,
+    'backend/internal/handler/auth_oidc_oauth.go': /reportIdentityLoginSuccess[\s\S]*reportOAuthRegistrationRisk/,
+    'backend/internal/handler/auth_oauth_pending_flow.go': /reportIdentityLoginSuccess[\s\S]*reportOAuthRegistrationRisk/,
+    'backend/internal/handler/auth_linuxdo_oauth.go': /reportIdentityLoginSuccess[\s\S]*reportOAuthRegistrationRisk/,
+    'backend/internal/handler/auth_wechat_oauth.go': /reportOAuthRegistrationRisk/,
+    'backend/internal/handler/auth_dingtalk_oauth.go': /reportOAuthRegistrationRisk/,
+    'backend/internal/handler/passkey_handler.go': /enqueueRiskIdentity\([\s\S]*"passkey_login_success"/,
+  }
+  for (const [path, contract] of Object.entries(paths)) assert.match(read(path), contract, path)
+})
+
+test('V1 login event keys ignore caller-controlled request IDs', { skip: !identityImplementationPresent }, () => {
+  const registration = read('backend/internal/handler/risk_control_registration.go')
+  assert.equal((registration.match(/requestRiskIdentity\(c, false\)\.EventRoot/g) ?? []).length, 4)
+  assert.doesNotMatch(registration, /GetHeader\("X-Request-ID"\)/)
+})
+
+test('V1 gateway event keys ignore caller-controlled request IDs', { skip: !identityImplementationPresent }, () => {
+  const gateway = read('backend/internal/handler/risk_control_gateway.go')
+  assert.match(gateway, /requestID := requestRiskIdentity\(c, false\)\.EventRoot/)
+  assert.doesNotMatch(gateway, /GetHeader\("X-Request-ID"\)/)
+})
+
+test('API retry dedup and rebuild approval remain atomic for their retention windows', { skip: !identityImplementationPresent }, () => {
+  const identityService = read('extensions-self/risk-control/identity_service.go')
+  const repository = read('extensions-self/risk-control/identity_db.go')
+  assert.match(identityService, /maximumAPISuccessDeliveryAge/)
+  assert.match(repository, /BeginTx\(ctx, &sql\.TxOptions\{Isolation: sql\.LevelSerializable\}\)/)
+  assert.match(repository, /LOCK TABLE risk_identity_events, risk_identity_rules IN SHARE MODE/)
+  const begin = repository.indexOf('BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})')
+  const approval = repository.indexOf('a completed Dry Run by the same administrator is required')
+  const candidates = repository.indexOf('CREATE TEMP TABLE identity_rebuild_candidates')
+  assert.ok(begin >= 0 && begin < approval && approval < candidates)
+})
+
+test('admin identity signatures bind method, request target, actor, and body', { skip: !identityImplementationPresent }, () => {
+  const client = read('backend/internal/service/risk_control_client.go')
+  const verifier = read('extensions-self/risk-control/auth.go')
+  for (const source of [client, verifier]) {
+    assert.match(source, /admin-v2/)
+    assert.match(source, /RequestURI\(\)/)
+  }
+  assert.match(client, /strings\.ToUpper\(method\)/)
+  assert.match(verifier, /strings\.ToUpper\(r\.Method\)/)
+  assert.match(verifier, /actor[\s\S]*bodyDigest/)
 })
 
 test('composite admin evidence matches successful quality-valid V2 facts', { skip: !identityImplementationPresent }, () => {

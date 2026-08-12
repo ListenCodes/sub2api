@@ -15,10 +15,15 @@ import (
 	"os"
 	pathpkg "path"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-const maxHomepageProxyBody = 1 << 20
+const (
+	maxHomepageProxyBody  = 1 << 20
+	riskIdentityQueueSize = 1024
+	riskIdentityWorkers   = 2
+)
 
 var (
 	ErrInvalidHomepageRequest   = errors.New("invalid homepage request")
@@ -33,9 +38,18 @@ type HomepageAsset struct {
 }
 
 type RiskControlClient struct {
-	baseURL string
-	secret  []byte
-	http    *http.Client
+	baseURL               string
+	secret                []byte
+	http                  *http.Client
+	identityEnabled       bool
+	identityIPEnabled     bool
+	identityDeviceEnabled bool
+	identityQueue         chan RiskIdentityReport
+	identityEnqueued      atomic.Uint64
+	identitySucceeded     atomic.Uint64
+	identityFailed        atomic.Uint64
+	identityLatencyNanos  atomic.Uint64
+	identityDropped       atomic.Uint64
 }
 
 // RiskEventReport is the redacted event contract sent to the standalone risk service.
@@ -72,6 +86,34 @@ type RiskAuditReport struct {
 	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
+// RiskIdentityReport is the only internal contract allowed to carry raw identity
+// material. It is sent exclusively over the V2 method/path-bound signed endpoint.
+type RiskIdentityReport struct {
+	EventKey            string    `json:"event_key"`
+	EventType           string    `json:"event_type"`
+	EventClass          string    `json:"event_class"`
+	Outcome             string    `json:"outcome"`
+	OccurredAt          time.Time `json:"occurred_at"`
+	UserID              int64     `json:"user_id,omitempty"`
+	Email               string    `json:"email,omitempty"`
+	ClientIP            string    `json:"client_ip,omitempty"`
+	IPSource            string    `json:"ip_source,omitempty"`
+	ProxyChainValid     bool      `json:"proxy_chain_valid"`
+	CountryCode         string    `json:"country_code,omitempty"`
+	Region              string    `json:"region,omitempty"`
+	City                string    `json:"city,omitempty"`
+	ASN                 int64     `json:"asn,omitempty"`
+	GeoSource           string    `json:"geo_source,omitempty"`
+	GeoVerified         bool      `json:"geo_verified"`
+	BrowserInstanceID   string    `json:"browser_instance_id,omitempty"`
+	BrowserCookieStatus string    `json:"browser_cookie_status,omitempty"`
+	BrowserFamily       string    `json:"browser_family,omitempty"`
+	OSFamily            string    `json:"os_family,omitempty"`
+	DeviceClass         string    `json:"device_class,omitempty"`
+	LanguageFamily      string    `json:"language_family,omitempty"`
+	APIKeyID            int64     `json:"api_key_id,omitempty"`
+}
+
 type RiskDecision struct {
 	Action    string   `json:"decision"`
 	Score     int      `json:"score"`
@@ -88,7 +130,89 @@ func NewRiskControlClientFromEnv() *RiskControlClient {
 	if baseURL == "" || secret == "" {
 		return nil
 	}
-	return &RiskControlClient{baseURL: baseURL, secret: []byte(secret), http: &http.Client{Timeout: 800 * time.Millisecond}}
+	client := &RiskControlClient{baseURL: baseURL, secret: []byte(secret), http: &http.Client{Timeout: 800 * time.Millisecond}}
+	client.identityEnabled = envBoolValue("RISK_IDENTITY_V2_ENABLED")
+	client.identityIPEnabled = envBoolValue("RISK_IDENTITY_IP_COLLECTION_ENABLED")
+	client.identityDeviceEnabled = envBoolValue("RISK_IDENTITY_DEVICE_COLLECTION_ENABLED")
+	if client.identityEnabled {
+		client.identityQueue = make(chan RiskIdentityReport, riskIdentityQueueSize)
+		for range riskIdentityWorkers {
+			go client.runIdentityWorker()
+		}
+	}
+	return client
+}
+
+func envBoolValue(key string) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func (c *RiskControlClient) IdentityEnabled() bool { return c != nil && c.identityEnabled }
+func (c *RiskControlClient) IdentityIPEnabled() bool {
+	return c != nil && c.identityEnabled && c.identityIPEnabled
+}
+func (c *RiskControlClient) IdentityDeviceEnabled() bool {
+	return c != nil && c.identityEnabled && c.identityDeviceEnabled
+}
+
+func (c *RiskControlClient) EnqueueIdentity(input RiskIdentityReport) bool {
+	if c == nil || !c.identityEnabled || c.identityQueue == nil {
+		return false
+	}
+	if input.OccurredAt.IsZero() {
+		input.OccurredAt = time.Now().UTC()
+	}
+	select {
+	case c.identityQueue <- input:
+		c.identityEnqueued.Add(1)
+		return true
+	default:
+		c.identityDropped.Add(1)
+		return false
+	}
+}
+
+func (c *RiskControlClient) IdentityDropped() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.identityDropped.Load()
+}
+
+func (c *RiskControlClient) IdentityQueueHealth() map[string]any {
+	if c == nil || !c.identityEnabled || c.identityQueue == nil {
+		return map[string]any{"state": "disabled", "dropped": uint64(0)}
+	}
+	state := "healthy"
+	if len(c.identityQueue) == cap(c.identityQueue) || c.identityDropped.Load() > 0 || c.identityFailed.Load() > 0 {
+		state = "degraded"
+	}
+	processed := c.identitySucceeded.Load() + c.identityFailed.Load()
+	averageLatencyMS := float64(0)
+	if processed > 0 {
+		averageLatencyMS = float64(c.identityLatencyNanos.Load()) / float64(processed) / float64(time.Millisecond)
+	}
+	return map[string]any{"state": state, "queued": len(c.identityQueue), "capacity": cap(c.identityQueue), "enqueued": c.identityEnqueued.Load(), "succeeded": c.identitySucceeded.Load(), "failed": c.identityFailed.Load(), "dropped": c.identityDropped.Load(), "average_latency_ms": averageLatencyMS}
+}
+
+func (c *RiskControlClient) runIdentityWorker() {
+	for input := range c.identityQueue {
+		body, err := json.Marshal(input)
+		if err != nil {
+			continue
+		}
+		started := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		_, status, _, requestErr := c.identitySignedRequestOnce(ctx, http.MethodPost, "/api/v1/internal/identity-events", body)
+		cancel()
+		c.identityLatencyNanos.Add(uint64(time.Since(started)))
+		if requestErr == nil && status >= 200 && status < 300 {
+			c.identitySucceeded.Add(1)
+		} else {
+			c.identityFailed.Add(1)
+		}
+	}
 }
 
 func (c *RiskControlClient) ProxyHomepage(ctx context.Context, method, assetPath string) (*HomepageAsset, error) {
@@ -276,14 +400,17 @@ func (c *RiskControlClient) signedRequestOnce(ctx context.Context, method, path 
 		return nil, 0, false, err
 	}
 	ts := time.Now().Unix()
-	mac := hmac.New(sha256.New, c.secret)
-	_, _ = fmt.Fprintf(mac, "%d\n%s\n", ts, nonce)
-	_, _ = mac.Write(body)
+	actor := fmt.Sprint(actorID)
+	bodyDigest := sha256.Sum256(body)
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, false, err
 	}
+	canonical := fmt.Sprintf("admin-v2\n%s\n%s\n%s\n%d\n%s\n%s", strings.ToUpper(method), req.URL.RequestURI(), actor, ts, nonce, hex.EncodeToString(bodyDigest[:]))
+	mac := hmac.New(sha256.New, c.secret)
+	_, _ = mac.Write([]byte(canonical))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Risk-Signature-Version", "admin-v2")
 	if actorID > 0 {
 		req.Header.Set("X-Risk-Actor-ID", fmt.Sprint(actorID))
 	}
@@ -301,6 +428,43 @@ func (c *RiskControlClient) signedRequestOnce(ctx context.Context, method, path 
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return responseBody, resp.StatusCode, resp.StatusCode >= 500, fmt.Errorf("risk control returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+	}
+	return responseBody, resp.StatusCode, false, nil
+}
+
+func (c *RiskControlClient) identitySignedRequestOnce(ctx context.Context, method, path string, body []byte) ([]byte, int, bool, error) {
+	if c == nil || c.http == nil || !c.identityEnabled {
+		return nil, 0, false, errors.New("risk identity client is not configured")
+	}
+	nonce, err := randomToken(18)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	ts := time.Now().Unix()
+	bodyDigest := sha256.Sum256(body)
+	canonical := fmt.Sprintf("v2\n%s\n%s\n%d\n%s\n%s", strings.ToUpper(method), path, ts, nonce, hex.EncodeToString(bodyDigest[:]))
+	mac := hmac.New(sha256.New, c.secret)
+	_, _ = mac.Write([]byte(canonical))
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Risk-Signature-Version", "v2")
+	req.Header.Set("X-Risk-Timestamp", fmt.Sprint(ts))
+	req.Header.Set("X-Risk-Nonce", nonce)
+	req.Header.Set("X-Risk-Signature", hex.EncodeToString(mac.Sum(nil)))
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, true, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return nil, resp.StatusCode, resp.StatusCode >= 500, readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return responseBody, resp.StatusCode, resp.StatusCode >= 500, fmt.Errorf("risk identity returned HTTP %d", resp.StatusCode)
 	}
 	return responseBody, resp.StatusCode, false, nil
 }

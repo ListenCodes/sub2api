@@ -103,7 +103,7 @@
             <div class="sm:col-span-2"><label for="rule-description-input" class="input-label">规则说明</label><input id="rule-description-input" v-model="draft.description" class="input w-full" data-testid="rule-description-input" /></div>
             <div>
               <label class="input-label">事件类型 <span class="text-red-500">*</span></label>
-              <Select v-model="draft.eventTypes[0]" data-testid="rule-event-type" :options="riskTypeOptions" />
+              <Select v-model="draft.eventTypes[0]" data-testid="rule-event-type" :options="ruleEventTypeOptions" />
             </div>
           </div>
         </section>
@@ -208,6 +208,7 @@ const enabledFilter = ref('')
 const levelFilter = ref('')
 const enabledFilterOptions = [{ value: '', label: '全部启用状态' }, { value: 'enabled', label: '已启用' }, { value: 'disabled', label: '已停用' }]
 const levelFilterOptions = [{ value: '', label: '全部风险等级' }, ...riskLevelOptions]
+const ruleEventTypeOptions = riskTypeOptions.filter((option) => option.value !== 'api_request')
 const filteredRules = computed(() => {
   const search = ruleSearch.value.trim().toLocaleLowerCase()
   return rules.value
@@ -225,7 +226,6 @@ const ruleTemplates: RuleCreateInput[] = [
   { code: 'content_risk', name: '内容风险', description: '命中内容安全策略', eventTypes: ['content_risk'], enabled: true, windowSeconds: 86400, threshold: 1, score: 85, riskLevel: 'high', action: 'review' },
   { code: 'quota_abuse', name: '配额滥用', description: '持续触发配额或计费限制', eventTypes: ['quota_exceeded'], enabled: true, windowSeconds: 3600, threshold: 5, score: 55, riskLevel: 'medium', action: 'review' },
   { code: 'upstream_error', name: '上游错误', description: '持续触发上游错误', eventTypes: ['upstream_error'], enabled: true, windowSeconds: 600, threshold: 8, score: 25, riskLevel: 'low', action: 'observe' },
-  { code: 'api_request_observation', name: 'API 请求观察', description: '保留正常请求基线', eventTypes: ['api_request'], enabled: true, windowSeconds: 86400, threshold: 1, score: 0, riskLevel: 'low', action: 'observe' },
 ]
 const draft = reactive<RuleCreateInput>({ ...ruleTemplates[0], eventTypes: [...ruleTemplates[0].eventTypes] })
 

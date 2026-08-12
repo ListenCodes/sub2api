@@ -2,14 +2,10 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
-
-	_ "github.com/lib/pq"
 )
 
 func validTestRule() Rule {
@@ -36,6 +32,7 @@ func TestValidateRuleConfigRejectsUnsafeAndInvalidValues(t *testing.T) {
 		{name: "unsafe code", rule: Rule{Code: "../rules", Name: "名称", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "code"},
 		{name: "missing name", rule: Rule{Code: "safe_code", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "name"},
 		{name: "unknown event", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"unknown"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "event type"},
+		{name: "normal api observation", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"api_request"}, WindowSeconds: 1, Threshold: 1, Score: 0, RiskLevel: "low", Action: "observe"}, want: "event type"},
 		{name: "unknown count strategy", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, CountStrategy: "global_magic", WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "count strategy"},
 		{name: "invalid score", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 101, RiskLevel: "low", Action: "observe"}, want: "score"},
 	}
@@ -46,6 +43,33 @@ func TestValidateRuleConfigRejectsUnsafeAndInvalidValues(t *testing.T) {
 				t.Fatalf("validateRuleConfig() error = %v, want text %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsRetiredV1IdentityRule(t *testing.T) {
+	for _, code := range []string{
+		"registration_identity_abuse",
+		"registration_ip_multi_account",
+		"api_request_observation",
+	} {
+		if !isRetiredV1IdentityRule(code) {
+			t.Fatalf("isRetiredV1IdentityRule(%q) = false", code)
+		}
+	}
+	if isRetiredV1IdentityRule("login_failure_burst") {
+		t.Fatal("login_failure_burst must remain available as a non-identity rule")
+	}
+}
+
+func TestAdminRejectsEnablingRetiredV1IdentityRuleWhenV2IsActive(t *testing.T) {
+	repo := NewMemoryRepository(defaultRules())
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "shadow", Identity: IdentityConfig{Enabled: true}}, repo)
+	body := []byte(`{"code":"registration_identity_abuse","name":"V1 identity","event_types":["registration_attempt"],"enabled":true,"window_seconds":600,"threshold":3,"score":80,"risk_level":"critical","action":"observe","revision":1}`)
+	request := signedRequest(http.MethodPut, "/api/v1/admin/rules/registration_identity_abuse", body, testSecret, "nonce-retired-v1-rule", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
@@ -64,15 +88,7 @@ func TestMemoryRepositoryCreatesUniqueRuleWithInitialRevision(t *testing.T) {
 }
 
 func TestSQLRepositoryCreatesRule(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("RISK_CONTROL_TEST_DATABASE_URL"))
-	if dsn == "" {
-		t.Skip("RISK_CONTROL_TEST_DATABASE_URL is not configured")
-	}
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open() error = %v", err)
-	}
-	defer db.Close()
+	db := openIsolatedRiskTestDB(t)
 	if err := ApplySchema(context.Background(), db); err != nil {
 		t.Fatalf("ApplySchema() error = %v", err)
 	}
@@ -83,7 +99,7 @@ func TestSQLRepositoryCreatesRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRule() error = %v", err)
 	}
-	if created.ID != 12 || created.Revision != 1 || len(created.EventTypes) != 1 || created.EventTypes[0] != "login_failure" {
+	if created.ID <= 0 || created.Revision != 1 || len(created.EventTypes) != 1 || created.EventTypes[0] != "login_failure" {
 		t.Fatalf("created rule = %+v", created)
 	}
 }

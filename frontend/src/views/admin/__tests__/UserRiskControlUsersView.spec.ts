@@ -100,7 +100,7 @@ describe('UserRiskControlUsersView', () => {
   })
 
   it('prioritizes the account identifier and fills the available table width', async () => {
-    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1, page: 1, page_size: 20 })
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', identity: { user_id: 7, latest_ip: '203.0.113.0/24', country_code: 'US', region: 'CA', browser_instance_count: 2, api_client_count: 1, associated_account_count: 3, active_rule_count: 1, quality_state: 'healthy' } }], total: 1, page: 1, page_size: 20 })
 
     const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
@@ -110,6 +110,9 @@ describe('UserRiskControlUsersView', () => {
     expect(wrapper.get('[data-testid="user-row-7"]').classes()).toEqual(expect.arrayContaining(['max-w-[50vw]', 'sm:max-w-none']))
     expect(wrapper.get('[data-testid="risk-users-table"]').classes()).toContain('w-full')
     expect(wrapper.findComponent(DataTable).props('stickyFirstColumn')).toBe(true)
+    expect(wrapper.text()).toContain('203.0.113.0/24')
+    expect(wrapper.text()).toContain('admin.userRiskControl.identityBrowserCount')
+    expect(wrapper.text()).toContain('admin.userRiskControl.drawer.state.healthy')
   })
 
   it('resets to the first page when the page size changes', async () => {
