@@ -89,12 +89,18 @@ Do not move custom services back into `docker-compose.local.yml`.
   and returns immediately.
 - `sub2api-release.path` watches that file and starts the one-shot
   `sub2api-release.service`.
-- `sync-and-publish.sh` claims the trigger under `flock` and dispatches only
-  `prepare-release.sh` or `apply-release.sh`; it never calls a publisher.
+- `sync-and-publish.sh` claims the trigger under `flock` and dispatches the
+  matching prepare/apply executor; it never calls a publisher.
 - `prepare-release.sh` performs remote gates, digest pulls, explicit Compose
   rendering and complete backup validation, then stops at `prepared` with a
   signed-by-SHA256 60-minute manifest. It must not run Compose lifecycle
   commands or write production state.
+- `prepare-identity-rollout.sh` prepares only the six fixed, ordered identity
+  transitions. It preserves commit, digest, version, and high-water identity,
+  generates three pairwise-independent identity keys only in the root-owned
+  mode `0600` host secret file under a root-owned mode `0700` directory, and
+  creates the same complete backup under root-only
+  `/var/lib/sub2api-release/backups` and a 60-minute immutable manifest.
 - `apply-release.sh` consumes only that manifest, rejects expiry and drift,
   performs local `--pull never` extensions-first/main-second switching and
   health checks, then atomically writes production state or rolls back.

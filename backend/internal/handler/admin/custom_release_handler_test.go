@@ -31,6 +31,9 @@ type customReleaseHandlerServiceStub struct {
 	releases             []service.ReleaseRecord
 	rollbackPrepareCall  int
 	rollbackApplyCall    int
+	identityPrepareCall  int
+	identityApplyCall    int
+	identityTransition   string
 	noticeUnread         bool
 	noticeReadErr        error
 	markNoticeReadErr    error
@@ -63,6 +66,17 @@ func (s *customReleaseHandlerServiceStub) PrepareUpdate(context.Context) (*servi
 
 func (s *customReleaseHandlerServiceStub) ApplyUpdate(context.Context, string) (*service.UpdateJob, error) {
 	s.applyCall++
+	return s.job, nil
+}
+
+func (s *customReleaseHandlerServiceStub) PrepareIdentityRollout(_ context.Context, transition string) (*service.UpdateJob, error) {
+	s.identityPrepareCall++
+	s.identityTransition = transition
+	return s.job, nil
+}
+
+func (s *customReleaseHandlerServiceStub) ApplyIdentityRollout(context.Context, string) (*service.UpdateJob, error) {
+	s.identityApplyCall++
 	return s.job, nil
 }
 
@@ -110,6 +124,8 @@ func TestCustomReleaseHandlerRequiresIdempotencyAndUsesDistinctActions(t *testin
 		{path: "/api/v1/admin/system/update", body: `{}`, key: "update-legacy-route-prepare"},
 		{path: "/api/v1/admin/system/update/prepare", body: `{}`, key: "update-prepare"},
 		{path: "/api/v1/admin/system/update/apply", body: `{"job_id":"update-prepared"}`, key: "update-apply"},
+		{path: "/api/v1/admin/system/identity-rollout/prepare", body: `{"transition":"stage1-v2"}`, key: "identity-prepare"},
+		{path: "/api/v1/admin/system/identity-rollout/apply", body: `{"job_id":"update-prepared"}`, key: "identity-apply"},
 		{path: "/api/v1/admin/system/rollback/prepare", body: `{"release_id":"release-v101"}`, key: "rollback-prepare"},
 		{path: "/api/v1/admin/system/rollback/apply", body: `{"job_id":"rollback-prepared"}`, key: "rollback-apply"},
 	}
@@ -139,6 +155,8 @@ func TestCustomReleaseHandlerRequiresIdempotencyAndUsesDistinctActions(t *testin
 	for _, scope := range []string{
 		"admin.system.update.prepare",
 		"admin.system.update.apply",
+		"admin.system.identity-rollout.prepare",
+		"admin.system.identity-rollout.apply",
 		"admin.system.rollback.prepare",
 		"admin.system.rollback.apply",
 	} {
@@ -146,6 +164,9 @@ func TestCustomReleaseHandlerRequiresIdempotencyAndUsesDistinctActions(t *testin
 	}
 	require.Equal(t, 2, stub.prepareCall, "/system/update must remain prepare-only")
 	require.Equal(t, 1, stub.applyCall)
+	require.Equal(t, 1, stub.identityPrepareCall)
+	require.Equal(t, 1, stub.identityApplyCall)
+	require.Equal(t, service.IdentityTransitionStage1V2, stub.identityTransition)
 	require.Equal(t, 1, stub.rollbackPrepareCall)
 	require.Equal(t, 1, stub.rollbackApplyCall)
 }
@@ -339,6 +360,8 @@ func newCustomReleaseHandlerTestRouter(stub *customReleaseHandlerServiceStub, re
 	router.POST("/api/v1/admin/system/update", handler.PrepareUpdate)
 	router.POST("/api/v1/admin/system/update/prepare", handler.PrepareUpdate)
 	router.POST("/api/v1/admin/system/update/apply", handler.ApplyUpdate)
+	router.POST("/api/v1/admin/system/identity-rollout/prepare", handler.PrepareIdentityRollout)
+	router.POST("/api/v1/admin/system/identity-rollout/apply", handler.ApplyIdentityRollout)
 	router.GET("/api/v1/admin/system/update/status", handler.GetUpdateStatus)
 	router.POST("/api/v1/admin/system/rollback/prepare", handler.PrepareRollback)
 	router.POST("/api/v1/admin/system/rollback/apply", handler.ApplyRollback)

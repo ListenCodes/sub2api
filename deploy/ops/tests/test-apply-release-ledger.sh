@@ -424,7 +424,8 @@ invoke_apply() {
     SUB2API_DATA_DIR="$root/data" SUB2API_REPO="$root/repo" SUB2API_ENV_FILE="$root/repo/deploy/.env" \
     SUB2API_COMPOSE_BASE="$root/repo/deploy/docker-compose.yml" SUB2API_COMPOSE_CUSTOM="$root/repo/deploy/docker-compose.custom.yml" \
     SUB2API_RELEASE_BACKUP_ROOT="$root/data/release-backups" SUB2API_RELEASE_LEDGER_ROOT="$root/data/release-ledger" \
-    SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" SUB2API_PREPARED_ROOT="$root/data/release-prepared" \
+    SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" \
+    SUB2API_LEGACY_RELEASE_BACKUP_ROOT="$root/data/legacy-release-backups" SUB2API_PREPARED_ROOT="$root/data/release-prepared" \
     SUB2API_CURRENT_RELEASE_JOB_FILE="$root/data/release-current-job-id" SUB2API_RELEASE_STATE_FILE="$root/data/release-state.json" \
     SUB2API_RELEASE_LEDGER_LOCK_FILE="$root/data/release.lock" SUB2API_LEDGER_COMMIT_FAILPOINT="$failpoint" \
     SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" SUB2API_RELEASE_COMMON_HELPER="$ROOT_DIR/deploy/ops/release-common.sh" \

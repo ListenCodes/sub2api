@@ -326,6 +326,45 @@ func TestCustomReleasePrepareAndApplyUseTheSameDurableJob(t *testing.T) {
 	require.Equal(t, float64(4), queuedJob["base_custom_high_water"])
 }
 
+func TestIdentityRolloutPrepareBypassesGitHubAndPreservesReleaseIdentity(t *testing.T) {
+	runtimeRoot := configureCustomReleaseTestRuntime(t)
+	ledgerRoot := t.TempDir()
+	current := releaseLedgerTestRecord(ledgerRoot, "release-current", 4, "2026-07-23T08:00:00Z")
+	writeReleaseLedgerFixture(t, ledgerRoot, ReleaseLedgerState{
+		SchemaVersion: 1, CurrentReleaseID: current.ReleaseID, CustomVersionHighWater: 9, UpdatedAt: "2026-07-23T08:00:00Z",
+	}, current)
+	configureCustomReleaseLedgerTestRoot(t, ledgerRoot)
+	svc := NewUpdateService(nil, nil, "0.1.163", "release")
+
+	job, err := svc.PrepareIdentityRollout(context.Background(), IdentityTransitionStage1V2)
+	require.NoError(t, err)
+	require.Equal(t, UpdateKindIdentityConfig, job.UpdateKind)
+	require.Equal(t, IdentityTransitionStage1V2, job.IdentityTransition)
+	require.Equal(t, current.OfficialVersion, job.TargetOfficialVersion)
+	require.Equal(t, current.CustomVersion, job.TargetCustomVersion)
+	require.Equal(t, current.CustomCommit, job.TargetCustomCommit)
+	require.Equal(t, current.MainDigest, job.MainDigest)
+	require.Equal(t, current.ExtensionsDigest, job.ExtensionsDigest)
+	require.NotNil(t, job.ProposedCustomSequence)
+	require.Equal(t, current.CustomVersionSequence, *job.ProposedCustomSequence)
+	require.False(t, job.AdvancesCustomVersion)
+
+	path := filepath.Join(runtimeRoot, "release-ledger", "operations", job.JobID+".json")
+	job.Status = ReleaseStatusPrepared
+	job.ExpiresAt = time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	require.NoError(t, writeUpdateStatus(path, job))
+	_, err = svc.ApplyUpdate(context.Background(), job.JobID)
+	require.ErrorIs(t, err, ErrUpdateNotPrepared)
+	applied, err := svc.ApplyIdentityRollout(context.Background(), job.JobID)
+	require.NoError(t, err)
+	require.Equal(t, ReleasePhaseApply, applied.Action)
+}
+
+func TestIdentityRolloutRejectsUnknownTransition(t *testing.T) {
+	_, err := NewUpdateService(nil, nil, "0.1.163", "release").PrepareIdentityRollout(context.Background(), "stage4-enforce")
+	require.ErrorIs(t, err, ErrIdentityTransitionInvalid)
+}
+
 func TestCustomReleaseRollbackPrepareAndApplyUseCompleteSnapshot(t *testing.T) {
 	runtimeRoot := configureCustomReleaseTestRuntime(t)
 	ledgerRoot := t.TempDir()

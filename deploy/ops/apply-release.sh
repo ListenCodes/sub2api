@@ -78,6 +78,7 @@ SOURCE_COMMIT="$(jq -r '.source_commit' "$manifest")"
 TARGET_COMMIT="$(jq -r '.target_commit' "$manifest")"
 TARGET_CUSTOM_COMMIT="$(jq -r '.target_custom_commit' "$manifest")"
 UPDATE_KIND="$(jq -r '.update_kind' "$manifest")"
+IDENTITY_TRANSITION="$(jq -r '.identity_transition // empty' "$manifest")"
 CURRENT_OFFICIAL_VERSION="$(jq -r '.current_official_version' "$manifest")"
 TARGET_OFFICIAL_VERSION="$(jq -r '.target_official_version' "$manifest")"
 TARGET_CUSTOM_VERSION="$(jq -r '.target_custom_version' "$manifest")"
@@ -166,6 +167,42 @@ run_complete_health() {
   fi
 }
 
+container_env_value() {
+  local container="$1" key="$2"
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" \
+    | awk -v key="$key" 'index($0,key "=")==1 {count++; value=substr($0,length(key)+2)} END {if (count!=1) exit 1; print value}'
+}
+
+validate_identity_runtime() {
+  local key expected actual health expected_enabled expected_admin
+  [[ "$UPDATE_KIND" == identity-config ]] || return 0
+	expected="$(awk -F= '$1=="SERVER_TRUSTED_PROXIES" {value=substr($0,length($1)+2)} END {print value}' "$TARGET_DIR/.env")"
+	[[ "$expected" =~ ^[^,]+/(32|128),173\.245\.48\.0/20, ]] || return 1
+	actual="$(container_env_value sub2api SERVER_TRUSTED_PROXIES)" || return 1
+	[[ "$actual" == "$expected" ]] || return 1
+  for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
+    expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
+    [[ "$expected" == true || "$expected" == false ]] || return 1
+    actual="$(container_env_value sub2api "$key")" || return 1
+    [[ "$actual" == "$expected" ]] || return 1
+  done
+  for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED \
+    RISK_IDENTITY_ADMIN_ENABLED RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
+    RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED; do
+    expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
+    [[ "$expected" == true || "$expected" == false ]] || return 1
+    actual="$(container_env_value extensions-self "$key")" || return 1
+    [[ "$actual" == "$expected" ]] || return 1
+  done
+  health="$(docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz)" || return 1
+  expected_enabled="$(awk -F= '$1=="RISK_IDENTITY_V2_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
+  expected_admin="$(awk -F= '$1=="RISK_IDENTITY_ADMIN_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
+  jq -e --argjson enabled "$expected_enabled" --argjson admin "$expected_admin" '
+    .identity.enabled == $enabled and .identity.admin_enabled == $admin
+    and .identity.mode == "shadow" and .identity.schema == "v2"
+  ' <<< "$health" >/dev/null
+}
+
 render_and_match() {
   local base="$1" custom="$2" env="$3" expected_hash="$4" expected_main="$5" expected_extensions="$6"
   local rendered
@@ -198,6 +235,7 @@ record_matches_manifest() {
     and .backup_manifest_sha256 == $manifest.backup_manifest_sha256
     and .source_kind == $manifest.update_kind
     and .operation_id == $operation
+	and (.identity_transition // "") == ($manifest.identity_transition // "")
   ' <<< "$record" >/dev/null
 }
 
@@ -218,7 +256,8 @@ live_target_identity_matches() {
   release_running_container_matches_image sub2api "$MAIN_REPOSITORY@$MAIN_DIGEST" || return 1
   release_running_container_matches_image extensions-self "$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" || return 1
   wait_container_healthy sub2api || return 1
-  wait_container_healthy extensions-self
+	wait_container_healthy extensions-self || return 1
+	validate_identity_runtime
 }
 
 validate_update_identity_contract() {
@@ -228,7 +267,21 @@ validate_update_identity_contract() {
     and $manifest.current_custom_version == $base.custom_version
     and $manifest.source_commit == $base.custom_commit
     and $manifest.stable_release_tag == $manifest.target_official_version
-    and (if $manifest.update_kind == "official" then
+	and (if $manifest.update_kind == "identity-config" then
+	  $manifest.custom_docs_only == false
+	  and $manifest.advances_custom_version == false
+	  and $manifest.proposed_custom_sequence == $base.custom_version_sequence
+	  and $manifest.target_official_version == $base.official_version
+	  and $manifest.stable_release_commit == $base.official_commit
+	  and $manifest.target_custom_version == $base.custom_version
+	  and $manifest.target_custom_commit == $base.custom_commit
+	  and $manifest.target_commit == $base.custom_commit
+	  and $manifest.main_digest == $base.main_digest
+	  and $manifest.extensions_digest == $base.extensions_digest
+	  and $manifest.current_env_sha256 == $base.env_sha256
+	  and $manifest.target_env_sha256 != $base.env_sha256
+	  and ($manifest.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules"))
+	elif $manifest.update_kind == "official" then
       $manifest.advances_custom_version == false
       and $manifest.proposed_custom_sequence == $base.custom_version_sequence
       and $manifest.target_custom_version == $base.custom_version
@@ -266,12 +319,13 @@ build_release_record() {
     --arg rendered_sha "$(jq -r '.target_rendered_compose_sha256' "$manifest")" \
     --arg env_sha "$(jq -r '.target_env_sha256' "$manifest")" --arg backup "$BACKUP_DIR" \
     --arg backup_sha "$(jq -r '.backup_manifest_sha256' "$manifest")" --arg published "$published_at" \
-    --arg source_kind "$UPDATE_KIND" --arg operation "$JOB_ID" '
+	--arg source_kind "$UPDATE_KIND" --arg operation "$JOB_ID" --arg identity_transition "$IDENTITY_TRANSITION" '
       {schema_version:1,release_id:$release,official_version:$official_version,official_commit:$official_commit,
       custom_version:$custom_version,custom_version_sequence:$custom_sequence,custom_commit:$custom_commit,
       main_digest:$main,extensions_digest:$extensions,base_compose_sha256:$base_sha,custom_compose_sha256:$custom_sha,
       rendered_compose_sha256:$rendered_sha,env_sha256:$env_sha,backup_dir:$backup,
-      backup_manifest_sha256:$backup_sha,published_at:$published,source_kind:$source_kind,operation_id:$operation}
+	  backup_manifest_sha256:$backup_sha,published_at:$published,source_kind:$source_kind,operation_id:$operation}
+	  + (if $identity_transition == "" then {} else {identity_transition:$identity_transition} end)
     '
 }
 
@@ -325,6 +379,16 @@ restore_base_before_main_switch() {
   rm -f "$rendered"
 }
 
+restore_interrupted_base_runtime() {
+  local source_head="$1" source_ref="$2"
+  if [[ "$operation_status" == switching_extensions \
+    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage1-*) ]]; then
+    restore_base_before_main_switch "$source_head" "$source_ref"
+  else
+    restore_base_runtime "$source_head" "$source_ref"
+  fi
+}
+
 expected_high_water="$BASE_CUSTOM_HIGH_WATER"
 [[ "$ADVANCES_CUSTOM_VERSION" != true ]] || expected_high_water="$PROPOSED_CUSTOM_SEQUENCE"
 advance_flag=0
@@ -343,7 +407,7 @@ if [[ -e "$TARGET_RECORD_PATH" || -L "$TARGET_RECORD_PATH" ]]; then
   TARGET_PROJECTION="$(ledger_projection_for_release "$TARGET_RECORD")" \
     || fail_before_mutation 'target projection cannot be reconstructed' LEDGER_INCONSISTENT failed
   if [[ "$operation_status" == health_checking ]]; then
-    run_complete_health "$TARGET_DIR/rendered-compose.json" \
+	  run_complete_health "$TARGET_DIR/rendered-compose.json" && validate_identity_runtime \
       || fail_before_mutation 'partial ledger recovery failed the complete health suite' LEDGER_INCONSISTENT failed
   elif [[ "$operation_status" != success ]]; then
     fail_before_mutation 'partial ledger recovery has an invalid operation phase' LEDGER_INCONSISTENT failed
@@ -380,7 +444,7 @@ if [[ "$state_release_id" == "$BASE_RELEASE_ID" && "$state_high_water" -eq "$BAS
   && "$state_operation_id" == "$JOB_ID" && "$operation_status" == health_checking \
   && "$(jq -cS . "$PRODUCTION_RELEASE_STATE_FILE")" == "$(jq -cS . <<< "$BASE_PROJECTION")" ]] \
   && live_target_identity_matches; then
-  run_complete_health "$TARGET_DIR/rendered-compose.json" \
+	run_complete_health "$TARGET_DIR/rendered-compose.json" && validate_identity_runtime \
     || fail_before_mutation 'interrupted target runtime failed the complete health suite' LEDGER_INCONSISTENT failed
   release_attach_source_branch "$TARGET_COMMIT" "$BRANCH" \
     || fail_before_mutation 'interrupted target source could not be attached to the production branch' SOURCE_BRANCH_ATTACH_FAILED failed
@@ -408,7 +472,7 @@ if [[ "$interrupted_mutation" == true && "$state_release_id" == "$BASE_RELEASE_I
   && "$(jq -cS . "$PRODUCTION_RELEASE_STATE_FILE")" == "$(jq -cS . <<< "$BASE_PROJECTION")" ]]; then
   release_job_update "$JOB_ID" rolling_back 'Interrupted production switch detected; restoring the prepared base snapshot' \
     '{"cause_error_code":"INTERRUPTED_APPLY","production_changed":true,"rollback":{"attempted":true,"succeeded":false,"message":"automatic restoration resumed"}}' || true
-  if restore_base_runtime "$SOURCE_COMMIT" "$BRANCH" \
+  if restore_interrupted_base_runtime "$SOURCE_COMMIT" "$BRANCH" \
     && ledger_restore_failed_apply "$BASE_RELEASE_ID" "$BASE_CUSTOM_HIGH_WATER" "$JOB_ID" "$BASE_PROJECTION"; then
     release_job_update "$JOB_ID" failed_rolled_back 'Interrupted production switch restored to the base snapshot' \
       "$(jq -n --arg artifact "$BACKUP_DIR" '{error_code:"APPLY_FAILED_ROLLED_BACK",cause_error_code:"INTERRUPTED_APPLY",artifact_path:$artifact,published:false,production_changed:false,rollback:{attempted:true,succeeded:true,message:"automatic restoration completed"}}')" || true
@@ -529,16 +593,19 @@ SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS
   || abort_apply 'extensions switch failed' EXTENSIONS_SWITCH_FAILED
 wait_container_healthy extensions-self || abort_apply 'extensions health check failed' EXTENSIONS_HEALTH_FAILED
 
-release_job_update "$JOB_ID" switching_main "Switching main application to $MAIN_DIGEST" '{}'
-main_switch_started=true
-SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \
-  docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" \
-  up -d --pull never --no-deps --force-recreate sub2api >> "$LOG" 2>&1 \
-  || abort_apply 'main application switch failed' MAIN_SWITCH_FAILED
-wait_container_healthy sub2api || abort_apply 'main application health check failed' MAIN_HEALTH_FAILED
+if [[ "$UPDATE_KIND" != identity-config || "$IDENTITY_TRANSITION" == stage1-* ]]; then
+  release_job_update "$JOB_ID" switching_main "Switching main application to $MAIN_DIGEST" '{}'
+  main_switch_started=true
+  SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \
+    docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" \
+    up -d --pull never --no-deps --force-recreate sub2api >> "$LOG" 2>&1 \
+    || abort_apply 'main application switch failed' MAIN_SWITCH_FAILED
+  wait_container_healthy sub2api || abort_apply 'main application health check failed' MAIN_HEALTH_FAILED
+fi
 
 release_job_update "$JOB_ID" health_checking 'Checking internal, public, native admin, extension, and data-quality health' '{}'
 run_complete_health "$TARGET_DIR/rendered-compose.json" || abort_apply 'complete production health suite failed' COMPLETE_HEALTH_FAILED
+validate_identity_runtime || abort_apply 'identity runtime does not match the prepared transition' IDENTITY_RUNTIME_DRIFT
 live_target_identity_matches || abort_apply 'running target identity failed exact validation' TARGET_RUNTIME_DRIFT
 release_attach_source_branch "$TARGET_COMMIT" "$BRANCH" >> "$LOG" 2>&1 \
   || abort_apply 'target source could not be attached to the production branch' SOURCE_BRANCH_ATTACH_FAILED

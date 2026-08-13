@@ -11,6 +11,7 @@ NGINX_VHOST="${SUB2API_NGINX_VHOST:-/etc/nginx/sites-available/sub.ailisten.top}
 ORIGIN_CERT="${SUB2API_ORIGIN_CERT:-/etc/nginx/ssl/ailisten.top.crt}"
 ORIGIN_KEY="${SUB2API_ORIGIN_KEY:-/etc/nginx/ssl/ailisten.top.key}"
 LEDGER_HELPER="${SUB2API_RELEASE_LEDGER_HELPER:-$SCRIPT_DIR/release-ledger.sh}"
+PROTECTED_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-/var/lib/sub2api-release/backups}"
 MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
 EXTENSIONS_REPOSITORY="${SUB2API_EXTENSIONS_REPOSITORY:-ghcr.io/listencodes/sub2api-extensions}"
 
@@ -80,8 +81,14 @@ ledger_validate_release_artifacts "$CURRENT_RELEASE_PATH" || fail 'current relea
 for source_path in "$ENV_FILE" "$COMPOSE_BASE" "$COMPOSE_CUSTOM" "$NGINX_VHOST" "$ORIGIN_CERT" "$ORIGIN_KEY"; do
   [[ -f "$source_path" && ! -L "$source_path" && -r "$source_path" ]] || fail "required source file is unavailable: $source_path"
 done
-[[ -d "$DATA_DIR/release-ledger" && -d "$DATA_DIR/release-backups" ]] || fail 'release-ledger or release-backups is missing'
-[[ -z "$(find "$DATA_DIR/release-ledger" "$DATA_DIR/release-backups" -type l -print -quit)" ]] || fail 'release artifacts may not contain symlinks'
+[[ -d "$DATA_DIR/release-ledger" && -d "$DATA_DIR/release-backups" ]] \
+  || fail 'release-ledger or the legacy release backup root is missing'
+[[ ! -e "$PROTECTED_BACKUP_ROOT" || (-d "$PROTECTED_BACKUP_ROOT" && ! -L "$PROTECTED_BACKUP_ROOT") ]] \
+  || fail 'protected release backup root is unsafe'
+ARTIFACT_ROOTS=("$DATA_DIR/release-ledger" "$DATA_DIR/release-backups")
+[[ ! -d "$PROTECTED_BACKUP_ROOT" ]] || ARTIFACT_ROOTS+=("$PROTECTED_BACKUP_ROOT")
+[[ -z "$(find "${ARTIFACT_ROOTS[@]}" -type l -print -quit)" ]] \
+  || fail 'release artifacts may not contain symlinks'
 
 MAIN_DIGEST="$(jq -r '.main_digest' "$PRODUCTION_RELEASE_STATE_FILE")"
 EXTENSIONS_DIGEST="$(jq -r '.extensions_digest' "$PRODUCTION_RELEASE_STATE_FILE")"
@@ -94,8 +101,10 @@ done
 
 WORK_DIR="$(mktemp -d "$OUTPUT_PARENT/.sub2api-site-export.XXXXXX")"
 mkdir -p "$WORK_DIR/config" "$WORK_DIR/nginx" "$WORK_DIR/metadata"
+mkdir -p "$WORK_DIR/protected-release-backups"
 cp -a "$DATA_DIR/release-ledger" "$WORK_DIR/release-ledger"
 cp -a "$DATA_DIR/release-backups" "$WORK_DIR/release-backups"
+[[ ! -d "$PROTECTED_BACKUP_ROOT" ]] || cp -a "$PROTECTED_BACKUP_ROOT/." "$WORK_DIR/protected-release-backups/"
 cp -p "$PRODUCTION_RELEASE_STATE_FILE" "$WORK_DIR/release-state.json"
 cp -p "$ENV_FILE" "$WORK_DIR/config/.env"
 chmod 0600 "$WORK_DIR/config/.env"

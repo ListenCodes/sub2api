@@ -6,6 +6,7 @@ services:
     volumes:
       - /opt/sub2api-custom/sync-trigger.sh:/app/scripts/sync-upstream.sh:ro
     environment:
+      SERVER_TRUSTED_PROXIES: ${SERVER_TRUSTED_PROXIES:-}
       RISK_CONTROL_URL: ${RISK_CONTROL_URL:-http://extensions-self:8090}
       RISK_CONTROL_INTERNAL_SECRET: ${RISK_CONTROL_INTERNAL_SECRET:?RISK_CONTROL_INTERNAL_SECRET is required}
       RISK_CONTROL_DECISION_FAIL_MODE: ${RISK_CONTROL_DECISION_FAIL_MODE:-open}

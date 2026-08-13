@@ -72,6 +72,13 @@ const (
 	UpdateStatusExpired             = ReleaseStatusExpired
 	UpdateStatusDrifted             = ReleaseStatusDrifted
 
+	IdentityTransitionStage1V2           = "stage1-v2"
+	IdentityTransitionStage1IP           = "stage1-ip"
+	IdentityTransitionStage1Device       = "stage1-device"
+	IdentityTransitionStage2Admin        = "stage2-admin"
+	IdentityTransitionStage3ShadowWindow = "stage3-shadow-window"
+	IdentityTransitionStage3Rules        = "stage3-rules"
+
 	defaultUpdateScriptPath = "/app/scripts/sync-upstream.sh"
 	defaultUpdateJobsDir    = "/app/data/release-jobs"
 	defaultUpdateJobIDPath  = "/app/data/release-current-job-id"
@@ -119,6 +126,7 @@ type UpdateJob struct {
 	TargetCustomCommit     string         `json:"target_custom_commit,omitempty"`
 	CustomDocsOnly         bool           `json:"custom_docs_only"`
 	UpdateKind             string         `json:"update_kind,omitempty"`
+	IdentityTransition     string         `json:"identity_transition,omitempty"`
 	ProductionCommit       string         `json:"production_commit,omitempty"`
 	StableReleaseTag       string         `json:"stable_release_tag,omitempty"`
 	StableReleaseCommit    string         `json:"stable_release_commit,omitempty"`
@@ -225,6 +233,13 @@ func readUpdateStatus(path, expectedJobID string) (*UpdateJob, error) {
 	if !isValidUpdateStatus(job.Status) {
 		return nil, fmt.Errorf("invalid update status %q", job.Status)
 	}
+	if job.UpdateKind == UpdateKindIdentityConfig {
+		if !ValidIdentityTransition(job.IdentityTransition) {
+			return nil, fmt.Errorf("invalid identity rollout transition")
+		}
+	} else if job.IdentityTransition != "" {
+		return nil, fmt.Errorf("identity transition requires an identity configuration operation")
+	}
 	if expectedJobID != "" && job.JobID != expectedJobID {
 		return nil, ErrUpdateJobNotFound
 	}
@@ -243,6 +258,13 @@ func writeUpdateStatus(path string, job *UpdateJob) error {
 	}
 	if !isValidUpdateStatus(job.Status) {
 		return fmt.Errorf("invalid update status %q", job.Status)
+	}
+	if job.UpdateKind == UpdateKindIdentityConfig {
+		if !ValidIdentityTransition(job.IdentityTransition) {
+			return fmt.Errorf("invalid identity rollout transition")
+		}
+	} else if job.IdentityTransition != "" {
+		return fmt.Errorf("identity transition requires an identity configuration operation")
 	}
 	now := time.Now().UTC()
 	if job.Timestamp.IsZero() {

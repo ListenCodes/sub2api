@@ -16,6 +16,7 @@ SYSTEMD_ROOT="${SUB2API_SYSTEMD_ROOT:-/etc/systemd/system}"
 NGINX_VHOST="${SUB2API_NGINX_VHOST:-/etc/nginx/sites-available/sub.ailisten.top}"
 ORIGIN_CERT="${SUB2API_ORIGIN_CERT:-/etc/nginx/ssl/ailisten.top.crt}"
 ORIGIN_KEY="${SUB2API_ORIGIN_KEY:-/etc/nginx/ssl/ailisten.top.key}"
+PROTECTED_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-/var/lib/sub2api-release/backups}"
 INTERNAL_HEALTH_URL="${SUB2API_INTERNAL_HEALTH_URL:-http://127.0.0.1:8081/health}"
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-}"
 MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
@@ -167,6 +168,7 @@ verify_bundle() {
       config/.env config/docker-compose.yml config/docker-compose.custom.yml nginx/origin-key.path release-ledger/state.json; do
       [[ -s "$BUNDLE_REAL/$required" && ! -L "$BUNDLE_REAL/$required" ]] || return 1
     done
+    [[ -d "$BUNDLE_REAL/release-backups" && -d "$BUNDLE_REAL/protected-release-backups" ]] || return 1
     secure_file "$BUNDLE_REAL/config/.env" || return 1
     bundled_key="$(head -n 1 "$BUNDLE_REAL/nginx/origin-key.path")"
     [[ "$bundled_key" == /* && "$bundled_key" != / ]] || return 1
@@ -176,7 +178,8 @@ verify_bundle() {
     [[ "$expected_commit" == "$HEAD_COMMIT" && "$state_commit" == "$HEAD_COMMIT" ]] || return 1
     RELEASE_LEDGER_ROOT="$BUNDLE_REAL/release-ledger"
     PRODUCTION_RELEASE_STATE_FILE="$BUNDLE_REAL/release-state.json"
-    RELEASE_BACKUP_ROOT="$BUNDLE_REAL/release-backups"
+    RELEASE_BACKUP_ROOT="$BUNDLE_REAL/protected-release-backups"
+    LEGACY_RELEASE_BACKUP_ROOT="$BUNDLE_REAL/release-backups"
     ledger_validate_state "$RELEASE_LEDGER_ROOT/state.json" || return 1
     [[ "$(jq -r '.active_operation_id // empty' "$RELEASE_LEDGER_ROOT/state.json")" == '' ]] || return 1
     current_release="$(jq -r '.current_release_id' "$RELEASE_LEDGER_ROOT/state.json")"
@@ -186,10 +189,16 @@ verify_bundle() {
     [[ "${#records[@]}" -gt 0 ]] || return 1
     for record in "${records[@]}"; do
       original_backup="$(jq -r '.backup_dir // empty' "$record")"
-      [[ "$original_backup" == "$DATA_DIR/release-backups/"* ]] || return 1
-      relative_backup="${original_backup#"$DATA_DIR/release-backups/"}"
+      if [[ "$original_backup" == "$DATA_DIR/release-backups/"* ]]; then
+        relative_backup="${original_backup#"$DATA_DIR/release-backups/"}"
+        mapped_backup="$BUNDLE_REAL/release-backups/$relative_backup"
+      elif [[ "$original_backup" == "/var/lib/sub2api-release/backups/"* ]]; then
+        relative_backup="${original_backup#"/var/lib/sub2api-release/backups/"}"
+        mapped_backup="$BUNDLE_REAL/protected-release-backups/$relative_backup"
+      else
+        return 1
+      fi
       [[ -n "$relative_backup" && "$relative_backup" != */../* && "$relative_backup" != ../* ]] || return 1
-      mapped_backup="$BUNDLE_REAL/release-backups/$relative_backup"
       record_tmp="$(mktemp "$BUNDLE_REAL/.mapped-release.XXXXXX")"
       jq --arg backup "$mapped_backup" '.backup_dir=$backup' "$record" > "$record_tmp"
       ledger_validate_release_artifacts "$record_tmp" || { rm -f -- "$record_tmp"; return 1; }
@@ -323,6 +332,9 @@ if [[ "$MODE" == migrate ]]; then
   docker exec -i sub2api-postgres pg_restore -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" --clean --if-exists < "$BUNDLE_REAL/sub2api_db.dump"
   docker exec -i risk-control-postgres pg_restore -U "$RISK_USER_VALUE" -d "$RISK_DB_VALUE" --clean --if-exists < "$BUNDLE_REAL/risk_control_db.dump"
   cp -a "$BUNDLE_REAL/release-backups" "$DATA_DIR/release-backups"
+  install -d -m 0700 "$PROTECTED_BACKUP_ROOT"
+  cp -a "$BUNDLE_REAL/protected-release-backups/." "$PROTECTED_BACKUP_ROOT/"
+  chmod -R go-rwx "$PROTECTED_BACKUP_ROOT"
   cp -a "$BUNDLE_REAL/release-ledger" "$DATA_DIR/release-ledger"
   cp -p "$BUNDLE_REAL/release-state.json" "$DATA_DIR/release-state.json"
 fi
@@ -336,9 +348,10 @@ docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >
 
 if [[ "$MODE" == fresh ]]; then
   mkdir -p "$DATA_DIR/release-backups" "$DATA_DIR/release-ledger/releases" "$DATA_DIR/release-ledger/operations"
+  install -d -m 0700 "$PROTECTED_BACKUP_ROOT"
   BOOTSTRAP_STAMP="$(date -u '+%Y%m%dT%H%M%S%NZ')"
   RELEASE_ID="release-bootstrap-$BOOTSTRAP_STAMP-${HEAD_COMMIT:0:9}"
-  BACKUP_DIR="$DATA_DIR/release-backups/bootstrap-$BOOTSTRAP_STAMP-${HEAD_COMMIT:0:9}"
+  BACKUP_DIR="$PROTECTED_BACKUP_ROOT/bootstrap-$BOOTSTRAP_STAMP-${HEAD_COMMIT:0:9}"
   mkdir -p "$BACKUP_DIR/target"
   cp -p "$COMPOSE_BASE" "$BACKUP_DIR/target/docker-compose.yml"
   cp -p "$COMPOSE_CUSTOM" "$BACKUP_DIR/target/docker-compose.custom.yml"
@@ -376,7 +389,8 @@ if [[ "$MODE" == fresh ]]; then
       custom_compose_sha256:$custom_hash,rendered_compose_sha256:$rendered_hash,env_sha256:$env_hash,
       backup_dir:$backup,backup_manifest_sha256:$backup_hash,published_at:$published,
       source_kind:"bootstrap",operation_id:"fresh-site-bootstrap"}')"
-  RELEASE_BACKUP_ROOT="$DATA_DIR/release-backups"
+  RELEASE_BACKUP_ROOT="$PROTECTED_BACKUP_ROOT"
+  LEGACY_RELEASE_BACKUP_ROOT="$DATA_DIR/release-backups"
   ledger_create_release "$RECORD" || fail 'fresh release record creation failed'
   PRODUCTION_RELEASE_STATE_FILE="$OLD_STATE_FILE"
   ledger_write_projection "$(cat "$PROJECTION_TMP")" || fail 'fresh release projection write failed'
@@ -386,7 +400,8 @@ if [[ "$MODE" == fresh ]]; then
   ledger_atomic_write "$DATA_DIR/release-ledger/state.json" "$LEDGER_STATE" || fail 'fresh ledger state write failed'
 else
   RELEASE_LEDGER_ROOT="$DATA_DIR/release-ledger"
-  RELEASE_BACKUP_ROOT="$DATA_DIR/release-backups"
+  RELEASE_BACKUP_ROOT="$PROTECTED_BACKUP_ROOT"
+  LEGACY_RELEASE_BACKUP_ROOT="$DATA_DIR/release-backups"
   PRODUCTION_RELEASE_STATE_FILE="$DATA_DIR/release-state.json"
   ledger_validate_state "$RELEASE_LEDGER_ROOT/state.json" || fail 'restored ledger state is invalid'
   ledger_validate_projection "$(cat "$PRODUCTION_RELEASE_STATE_FILE")" || fail 'restored release projection is invalid'

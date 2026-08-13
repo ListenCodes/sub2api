@@ -6,6 +6,7 @@ DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}
 STATE_HELPER="${SUB2API_RELEASE_STATE_HELPER:-$SCRIPT_DIR/release-state.sh}"
 LEDGER_HELPER="${SUB2API_RELEASE_LEDGER_HELPER:-$SCRIPT_DIR/release-ledger.sh}"
 PREPARE_SCRIPT="${SUB2API_PREPARE_SCRIPT:-$SCRIPT_DIR/prepare-release.sh}"
+PREPARE_IDENTITY_SCRIPT="${SUB2API_PREPARE_IDENTITY_SCRIPT:-$SCRIPT_DIR/prepare-identity-rollout.sh}"
 APPLY_SCRIPT="${SUB2API_APPLY_SCRIPT:-$SCRIPT_DIR/apply-release.sh}"
 PREPARE_ROLLBACK_SCRIPT="${SUB2API_PREPARE_ROLLBACK_SCRIPT:-$SCRIPT_DIR/prepare-rollback.sh}"
 APPLY_ROLLBACK_SCRIPT="${SUB2API_APPLY_ROLLBACK_SCRIPT:-$SCRIPT_DIR/apply-rollback.sh}"
@@ -134,7 +135,13 @@ if [[ "$ACTION" == expire ]]; then
 fi
 
 case "$OPERATION_KIND:$ACTION" in
-  update:prepare) EXECUTOR="$PREPARE_SCRIPT" ;;
+  update:prepare)
+    if [[ "$(jq -r '.update_kind // empty' "$JOB_FILE")" == identity-config ]]; then
+      EXECUTOR="$PREPARE_IDENTITY_SCRIPT"
+    else
+      EXECUTOR="$PREPARE_SCRIPT"
+    fi
+    ;;
   update:apply) EXECUTOR="$APPLY_SCRIPT" ;;
   rollback:prepare) EXECUTOR="$PREPARE_ROLLBACK_SCRIPT" ;;
   rollback:apply) EXECUTOR="$APPLY_ROLLBACK_SCRIPT" ;;

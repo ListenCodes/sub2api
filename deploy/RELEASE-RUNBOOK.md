@@ -202,9 +202,10 @@ Use this retention contract:
 | Artifact | Retention |
 |---|---|
 | `release-ledger/` and compatible legacy `release-jobs/` | Keep the complete audit history. |
-| `release-backups/` | Keep the three backup directories referenced by the newest successful release records. Validate each retained `SHA256SUMS` before deleting an older directory. These directories are the three complete snapshots excluding current. |
+| `/var/lib/sub2api-release/backups/` | Root-owned mode `0700`; keep the three backup directories referenced by the newest successful release records. Validate each retained `SHA256SUMS` before deleting an older directory. These directories are the three complete snapshots excluding current. |
+| Legacy data-volume `release-backups/` | Read-only compatibility for releases created before the protected host backup root. Do not write new backups here and never store identity secrets here. |
 | Current and rollback images | Keep the current main/extensions digest pair plus every pair and rollback tag recorded by the three retained backups. Also protect every image ID used by any running container. |
-| `release-prepared/` | Never remove an active or confirmable manifest. With no active operation, keep the directories associated with the three retained successful release records. |
+| `/var/lib/sub2api-release/prepared/` | Root-owned mode `0700`; never remove an active or confirmable manifest. With no active operation, keep the directories associated with the three retained successful release records. |
 | `sync-conflicts/` | Keep the newest three diagnostic snapshots; the ledger remains the permanent operation audit. |
 | `release-host-backups/` | Keep the newest three verified host-script backups. |
 | `/root/backups/sub2api/` | Keep the newest three superseded manual backups plus every explicitly pinned, unique migration, or emergency backup. Delete only after confirming the retained release backups cover current rollback needs. |
@@ -397,6 +398,37 @@ Identity V2 must advance in order. A failure rolls back only the current identit
 2. Stage 1 enables `RISK_IDENTITY_V2_ENABLED`, then separately enables `RISK_IDENTITY_IP_COLLECTION_ENABLED` and `RISK_IDENTITY_DEVICE_COLLECTION_ENABLED` while verifying queue drops, encryption keys, trusted client IPs, browser identity quality, and geo source health.
 3. Stage 2 enables `RISK_IDENTITY_ADMIN_ENABLED` for administrator sampling of full IP, browser instance, API client, and associated-account evidence. The extension never receives main-user-table credentials.
 4. Stage 3 sets `RISK_IDENTITY_SHADOW_UNTIL` at least 14 days ahead on initial activation, then enables the global, IP, device, and composite rule switches. Every V2 signal remains Shadow; registration rejection and automatic bans are forbidden.
+
+Do not edit the production `.env` directly for these transitions. Use the
+administrator-only `POST /api/v1/admin/system/identity-rollout/prepare` and
+`POST /api/v1/admin/system/identity-rollout/apply` two-phase endpoints. Prepare
+accepts exactly one transition name: `stage1-v2`, `stage1-ip`,
+`stage1-device`, `stage2-admin`, `stage3-shadow-window`, or `stage3-rules`.
+The host rejects skipped, repeated, or reversed transitions, produces the same
+complete paired backup as a code release, and records `source_kind` as
+`identity-config` without increasing the custom version high-water.
+
+The first `stage1-v2` prepare creates three pairwise-independent 32-byte identity HMAC,
+encryption, and browser-cookie signing keys in
+`/etc/sub2api/identity-secrets.env` with root ownership and mode `0600`, inside
+a root-owned mode `0700` directory, when
+the file is absent. Secret values never enter the request, operation JSON, or
+release log. Preserve that file separately from database backups. Stage 1
+recreates `extensions-self` before `sub2api`; Stage 2 and Stage 3 recreate only
+`extensions-self`. Every apply validates the exact expected identity flags and
+identity health before committing the ledger, and restores the prepared base
+snapshot on failure. Keep `RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS=false`
+unless the direct-origin Cloudflare trust boundary has been independently
+verified.
+
+During `stage1-v2`, prepare resolves the current `deploy_sub2api-network`
+gateway and builds `SERVER_TRUSTED_PROXIES` from that one `/32` or `/128` peer
+plus the reviewed Cloudflare IPv4 and IPv6 CIDRs. This lets Gin peel the Nginx
+and Cloudflare hops from the right side of `X-Forwarded-For` without trusting
+the whole Docker bridge subnet. Direct-origin traffic still stops at its
+untrusted public peer, so a caller-supplied prefix cannot replace the client
+address. Any missing or ambiguous gateway fails prepare. Update the pinned
+Cloudflare list from the official published ranges as a reviewed code change.
 
 After the full 14-day Shadow period, run `POST /api/v1/admin/risk-rebuilds/dry-run` and manually sample the reconciliation output before any write rebuild. Applying the rebuild, entering review mode, or any enforcement requires separate approval. This runbook has no automatic enforce step. Missing keys, failed identity migration, unavailable geo data, or a data-quality circuit breaker must remain fail-open for the main application.
 
@@ -683,7 +715,10 @@ check-updates (read-only)
 the production checkout, writes `.env` or `release-state.json`, or runs Compose
 `up`, `down`, `rm`, or `restart`. It backs up both databases, the matching
 Compose pair, environment, Nginx/certificates, old digests and metadata, then
-stores `release-prepared/<job-id>/manifest.json` and its SHA256. The manifest
+stores `/var/lib/sub2api-release/prepared/<job-id>/manifest.json` and its SHA256
+under a root-owned mode `0700` boundary. Complete release backups are stored in
+the separate root-owned mode `0700` `/var/lib/sub2api-release/backups/` root,
+outside the main application's writable data volume. The manifest
 contains the production and target commits, Stable identity, both immutable
 digests, Compose and environment hashes, backup directory, `prepared_at`, and
 `expires_at`. A retry after expiry may reuse verified image evidence but must

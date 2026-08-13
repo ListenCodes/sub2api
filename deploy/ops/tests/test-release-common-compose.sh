@@ -74,6 +74,8 @@ expect_invalid() {
 }
 
 export SUB2API_DATA_DIR="$TMP_DIR/data"
+export SUB2API_PREPARED_ROOT="$TMP_DIR/prepared"
+source "$ROOT_DIR/deploy/ops/release-state.sh"
 source "$ROOT_DIR/deploy/ops/release-common.sh"
 
 MAIN_IMAGE="ghcr.io/listencodes/sub2api-custom@sha256:$(printf '1%.0s' {1..64})"

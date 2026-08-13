@@ -2,7 +2,8 @@
 
 SUB2API_DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 RELEASE_LEDGER_ROOT="${SUB2API_RELEASE_LEDGER_ROOT:-$SUB2API_DATA_DIR/release-ledger}"
-RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-$SUB2API_DATA_DIR/release-backups}"
+RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-/var/lib/sub2api-release/backups}"
+LEGACY_RELEASE_BACKUP_ROOT="${SUB2API_LEGACY_RELEASE_BACKUP_ROOT:-$SUB2API_DATA_DIR/release-backups}"
 PRODUCTION_RELEASE_STATE_FILE="${SUB2API_RELEASE_STATE_FILE:-$SUB2API_DATA_DIR/release-state.json}"
 RELEASE_LEDGER_LOCK_FILE="${SUB2API_RELEASE_LEDGER_LOCK_FILE:-${SUB2API_SYNC_PUBLISH_LOCK:-/var/lock/sub2api-release.lock}}"
 RELEASE_REPO="${SUB2API_REPO:-/root/sub2api}"
@@ -27,7 +28,7 @@ ledger_validate_state() {
 ledger_validate_release() {
   local path="$1" backup_dir
   [[ -f "$path" && ! -L "$path" ]] || return 1
-  jq -e --arg artifact_root "$RELEASE_BACKUP_ROOT/" '
+  jq -e '
     type == "object"
     and .schema_version == 1
     and (.release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
@@ -43,23 +44,38 @@ ledger_validate_release() {
     and (.rendered_compose_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
     and (.env_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
     and (.backup_manifest_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
-    and (.backup_dir | type == "string" and startswith($artifact_root))
+    and (.backup_dir | type == "string" and length > 0)
     and (.published_at | fromdateiso8601 > 0)
-    and (.source_kind | IN("official", "custom", "combined", "bootstrap"))
+    and (.source_kind | IN("official", "custom", "combined", "bootstrap", "identity-config"))
+    and (if .source_kind == "identity-config" then
+      (.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules"))
+    else (.identity_transition // "") == "" end)
     and (.operation_id | type == "string" and length > 0)
   ' "$path" >/dev/null || return 1
   backup_dir="$(jq -er '.backup_dir' "$path")" || return 1
-  ledger_canonical_backup_path "$backup_dir" >/dev/null
+  backup_dir="$(ledger_canonical_backup_path "$backup_dir")" || return 1
+  if [[ "$(jq -r '.source_kind' "$path")" == identity-config ]]; then
+    ledger_backup_path_is_protected "$backup_dir" || return 1
+  fi
 }
 
 ledger_canonical_backup_path() {
+  local candidate="$1" root root_real candidate_real
+  candidate_real="$(cd "$candidate" 2>/dev/null && pwd -P)" || return 1
+  for root in "$RELEASE_BACKUP_ROOT" "$LEGACY_RELEASE_BACKUP_ROOT"; do
+    root_real="$(cd "$root" 2>/dev/null && pwd -P)" || continue
+    case "$candidate_real/" in
+      "$root_real/"*) printf '%s\n' "$candidate_real"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+ledger_backup_path_is_protected() {
   local candidate="$1" root_real candidate_real
   root_real="$(cd "$RELEASE_BACKUP_ROOT" 2>/dev/null && pwd -P)" || return 1
   candidate_real="$(cd "$candidate" 2>/dev/null && pwd -P)" || return 1
-  case "$candidate_real/" in
-    "$root_real/"*) printf '%s\n' "$candidate_real" ;;
-    *) return 1 ;;
-  esac
+  case "$candidate_real/" in "$root_real/"*) return 0 ;; *) return 1 ;; esac
 }
 
 ledger_validate_manifest_exact() {
@@ -456,7 +472,7 @@ _ledger_commit_release_unlocked() {
   local record_content="$1" advance_high_water="${2:-0}"
   local release_id sequence operation_id state_path state current_record current_sequence projection now
   local operation_path operation update_kind base_release_id base_high_water proposed_sequence advances source_kind
-  local stable_tag target_custom_commit custom_docs_only current_official_version current_official_commit current_custom_version current_custom_commit
+  local stable_tag target_custom_commit custom_docs_only current_official_version current_official_commit current_custom_version current_custom_commit identity_transition
   [[ "$advance_high_water" == 0 || "$advance_high_water" == 1 ]] || return 1
   release_id="$(jq -er '.release_id' <<< "$record_content")" || return 1
   sequence="$(jq -er '.custom_version_sequence' <<< "$record_content")" || return 1
@@ -489,6 +505,7 @@ _ledger_commit_release_unlocked() {
   stable_tag="$(jq -er '.stable_release_tag' <<< "$operation")" || return 1
   target_custom_commit="$(jq -er '.target_custom_commit' <<< "$operation")" || return 1
   custom_docs_only="$(jq -r '.custom_docs_only // false' <<< "$operation")" || return 1
+	identity_transition="$(jq -r '.identity_transition // empty' <<< "$operation")" || return 1
   [[ "$custom_docs_only" == true || "$custom_docs_only" == false ]] || return 1
   [[ "$target_custom_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
   current_official_version="$(jq -r '.official_version' "$current_record")"
@@ -534,13 +551,24 @@ _ledger_commit_release_unlocked() {
       [[ "$(jq -r '.official_commit' <<< "$record_content")" != "$current_official_commit" ]] || return 1
       [[ "$target_custom_commit" != "$current_custom_commit" ]] || return 1
       ;;
+	identity-config)
+	  [[ "$custom_docs_only" == false && "$advances" == false ]] || return 1
+	  [[ "$(jq -r '.base_release_id' <<< "$operation")" == "$(jq -r '.release_id' "$current_record")" ]] || return 1
+	  [[ "$identity_transition" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules))$ ]] || return 1
+	  [[ "$(jq -r '.identity_transition // empty' <<< "$record_content")" == "$identity_transition" ]] || return 1
+	  [[ "$(jq -r '.official_version' <<< "$record_content")" == "$current_official_version" ]] || return 1
+	  [[ "$(jq -r '.official_commit' <<< "$record_content")" == "$current_official_commit" ]] || return 1
+	  [[ "$(jq -r '.custom_version' <<< "$record_content")" == "$current_custom_version" ]] || return 1
+	  [[ "$(jq -r '.custom_commit' <<< "$record_content")" == "$current_custom_commit" ]] || return 1
+	  [[ "$target_custom_commit" == "$current_custom_commit" ]] || return 1
+	  ;;
     *) return 1 ;;
   esac
   if [[ "$advance_high_water" == 1 ]]; then
     [[ "$advances" == true && ("$source_kind" == custom || "$source_kind" == combined) ]] || return 1
     [[ "$sequence" -eq $(( $(jq -r '.custom_version_high_water' <<< "$state") + 1 )) ]] || return 1
   else
-    [[ "$advances" == false && "$source_kind" == official ]] || return 1
+	[[ "$advances" == false && ("$source_kind" == official || "$source_kind" == identity-config) ]] || return 1
     [[ "$sequence" -eq "$current_sequence" ]] || return 1
   fi
   ledger_create_release "$record_content" || return 1
@@ -791,10 +819,13 @@ _ledger_recover_or_refuse_unlocked() {
     update_kind="$(jq -er '.update_kind' <<< "$operation")" || return 2
     proposed_sequence="$(jq -er '.proposed_custom_sequence' <<< "$operation")" || return 2
     [[ "$update_kind" == "$source_kind" ]] || return 2
-    if [[ "$source_kind" == official ]]; then
+	if [[ "$source_kind" == official || "$source_kind" == identity-config ]]; then
       [[ "$advances_custom_version" == false ]] || return 2
       [[ "$target_sequence" -eq "$base_sequence" && "$proposed_sequence" -eq "$target_sequence" ]] || return 2
       [[ "$expected_high_water" -eq "$base_high_water" ]] || return 2
+	  if [[ "$source_kind" == identity-config ]]; then
+	    [[ "$(jq -r '.identity_transition // empty' <<< "$operation")" == "$(jq -r '.identity_transition // empty' <<< "$expected_record")" ]] || return 2
+	  fi
     elif [[ "$source_kind" == custom || "$source_kind" == combined ]]; then
       [[ "$advances_custom_version" == true ]] || return 2
       [[ "$target_sequence" -eq $((base_high_water + 1)) && "$proposed_sequence" -eq "$target_sequence" ]] || return 2

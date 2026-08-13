@@ -21,6 +21,8 @@ type customReleaseService interface {
 	ListRollbackReleases(context.Context) ([]service.ReleaseRecord, error)
 	PrepareUpdate(context.Context) (*service.UpdateJob, error)
 	ApplyUpdate(context.Context, string) (*service.UpdateJob, error)
+	PrepareIdentityRollout(context.Context, string) (*service.UpdateJob, error)
+	ApplyIdentityRollout(context.Context, string) (*service.UpdateJob, error)
 	PrepareRollback(context.Context, string) (*service.UpdateJob, error)
 	ApplyRollback(context.Context, string) (*service.UpdateJob, error)
 	GetUpdateStatus(context.Context, string) (*service.UpdateJob, error)
@@ -203,6 +205,86 @@ func (h *SystemHandler) ApplyUpdate(c *gin.Context) {
 	})
 }
 
+func (h *SystemHandler) PrepareIdentityRollout(c *gin.Context) {
+	if !requireCustomReleaseIdempotencyKey(c) {
+		return
+	}
+	custom, err := h.customReleaseService()
+	if err != nil {
+		response.Error(c, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	var request struct {
+		Transition string `json:"transition"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil || !service.ValidIdentityTransition(request.Transition) {
+		response.ErrorFrom(c, service.ErrIdentityTransitionInvalid)
+		return
+	}
+	transition := strings.TrimSpace(request.Transition)
+	operationID := buildSystemOperationID(c, "identity-rollout.prepare:"+transition)
+	payload := gin.H{"operation_id": operationID, "transition": transition}
+	updateCtx, cancel := systemUpdateContext(c.Request.Context())
+	defer cancel()
+	c.Request = c.Request.WithContext(updateCtx)
+	executeAdminIdempotentAcceptedJSON(c, "admin.system.identity-rollout.prepare", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		lock, release, err := h.acquireSystemLock(ctx, operationID)
+		if err != nil {
+			return nil, err
+		}
+		var releaseReason string
+		succeeded := false
+		defer func() { release(releaseReason, succeeded) }()
+		job, err := custom.PrepareIdentityRollout(ctx, transition)
+		if err != nil {
+			releaseReason = "IDENTITY_ROLLOUT_PREPARE_FAILED"
+			return nil, err
+		}
+		succeeded = true
+		return customReleaseJobResponse(job, lock.OperationID()), nil
+	})
+}
+
+func (h *SystemHandler) ApplyIdentityRollout(c *gin.Context) {
+	if !requireCustomReleaseIdempotencyKey(c) {
+		return
+	}
+	custom, err := h.customReleaseService()
+	if err != nil {
+		response.Error(c, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	var request struct {
+		JobID string `json:"job_id"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil || strings.TrimSpace(request.JobID) == "" {
+		response.ErrorFrom(c, service.ErrUpdateJobIDRequired)
+		return
+	}
+	jobID := strings.TrimSpace(request.JobID)
+	operationID := buildSystemOperationID(c, "identity-rollout.apply:"+jobID)
+	payload := gin.H{"operation_id": operationID, "job_id": jobID}
+	updateCtx, cancel := systemUpdateContext(c.Request.Context())
+	defer cancel()
+	c.Request = c.Request.WithContext(updateCtx)
+	executeAdminIdempotentAcceptedJSON(c, "admin.system.identity-rollout.apply", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		lock, release, err := h.acquireSystemLock(ctx, operationID)
+		if err != nil {
+			return nil, err
+		}
+		var releaseReason string
+		succeeded := false
+		defer func() { release(releaseReason, succeeded) }()
+		job, err := custom.ApplyIdentityRollout(ctx, jobID)
+		if err != nil {
+			releaseReason = "IDENTITY_ROLLOUT_APPLY_FAILED"
+			return nil, err
+		}
+		succeeded = true
+		return customReleaseJobResponse(job, lock.OperationID()), nil
+	})
+}
+
 func (h *SystemHandler) PrepareRollback(c *gin.Context) {
 	if !requireCustomReleaseIdempotencyKey(c) {
 		return
@@ -329,7 +411,8 @@ func customReleaseJobResponse(job *service.UpdateJob, operationID string) gin.H 
 		"current_official_version": job.CurrentOfficialVersion, "current_custom_version": job.CurrentCustomVersion,
 		"target_official_version": job.TargetOfficialVersion, "target_custom_version": job.TargetCustomVersion,
 		"proposed_custom_sequence": job.ProposedCustomSequence, "advances_custom_version": job.AdvancesCustomVersion,
-		"integration_branch": job.IntegrationBranch, "base_commit": job.BaseCommit, "target_commit": job.TargetCommit,
+		"identity_transition": job.IdentityTransition,
+		"integration_branch":  job.IntegrationBranch, "base_commit": job.BaseCommit, "target_commit": job.TargetCommit,
 		"target_custom_commit": job.TargetCustomCommit, "update_kind": job.UpdateKind, "production_commit": job.ProductionCommit,
 		"stable_release_tag": job.StableReleaseTag, "stable_release_commit": job.StableReleaseCommit,
 		"release_tag": job.ReleaseTag, "release_commit": job.ReleaseCommit, "release_published_at": job.ReleasePublishedAt,

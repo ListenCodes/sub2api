@@ -10,8 +10,9 @@ REPO="${SUB2API_REPO:-/root/sub2api}"
 ENV_FILE="${SUB2API_ENV_FILE:-$REPO/deploy/.env}"
 COMPOSE_BASE="${SUB2API_COMPOSE_BASE:-$REPO/deploy/docker-compose.yml}"
 COMPOSE_CUSTOM="${SUB2API_COMPOSE_CUSTOM:-$REPO/deploy/docker-compose.custom.yml}"
-BACKUP_ROOT="${SUB2API_BACKUP_ROOT:-$DATA_DIR/release-backups}"
-PREPARED_ROOT="${SUB2API_PREPARED_ROOT:-$DATA_DIR/release-prepared}"
+BACKUP_ROOT="${SUB2API_BACKUP_ROOT:-/var/lib/sub2api-release/backups}"
+export SUB2API_RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-$BACKUP_ROOT}"
+PREPARED_ROOT="${SUB2API_PREPARED_ROOT:-/var/lib/sub2api-release/prepared}"
 MAIN_REPOSITORY="${SUB2API_MAIN_REPOSITORY:-ghcr.io/listencodes/sub2api-custom}"
 EXTENSIONS_REPOSITORY="${SUB2API_EXTENSIONS_REPOSITORY:-ghcr.io/listencodes/sub2api-extensions}"
 NGINX_VHOST="${SUB2API_NGINX_VHOST:-/etc/nginx/sites-available/sub.ailisten.top}"
@@ -40,10 +41,15 @@ fail_prepare() {
 }
 trap 'fail_prepare "unexpected rollback prepare failure at line $LINENO" UNEXPECTED_ROLLBACK_PREPARE_ERROR' ERR
 
-mkdir -p "$DATA_DIR" "$BACKUP_ROOT" "$PREPARED_ROOT" "$(dirname "$LOG")"
+mkdir -p "$DATA_DIR" "$(dirname "$LOG")"
+release_ensure_backup_root || fail_prepare 'root-owned rollback backup directory is unsafe' BACKUP_PATH_UNSAFE
 touch "$LOG"
 RENDERED=''
-cleanup() { [[ -z "$RENDERED" ]] || rm -f "$RENDERED"; }
+MANIFEST_SOURCE=''
+cleanup() {
+  [[ -z "$RENDERED" ]] || rm -f "$RENDERED"
+  [[ -z "$MANIFEST_SOURCE" ]] || rm -f "$MANIFEST_SOURCE"
+}
 trap cleanup EXIT
 
 STATE_PATH="$(ledger_state_path)"
@@ -123,8 +129,12 @@ rm -f "$RENDERED"; RENDERED=''
 
 prepared_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 expires_at="$(date -u -d "$prepared_at +60 minutes" '+%Y-%m-%dT%H:%M:%SZ')"
-MANIFEST_DIR="$PREPARED_ROOT/$JOB_ID"
-mkdir -p "$MANIFEST_DIR"
+MANIFEST_DIR="$(release_prepare_manifest_dir "$JOB_ID")" \
+  || fail_prepare 'root-owned prepared manifest directory is unsafe' PREPARED_PATH_UNSAFE
+MANIFEST_SOURCE="$(mktemp "$MANIFEST_DIR/.rollback-manifest-source.XXXXXX")" \
+  || fail_prepare 'rollback manifest temporary file could not be created' PREPARED_MANIFEST_INVALID
+chmod 0600 "$MANIFEST_SOURCE" \
+  || fail_prepare 'rollback manifest temporary file permissions could not be secured' PREPARED_MANIFEST_INVALID
 jq -n --arg operation rollback --arg base "$BASE_RELEASE_ID" --arg target "$TARGET_RELEASE_ID" --argjson high "$BASE_CUSTOM_HIGH_WATER" \
   --arg source "$(jq -r '.custom_commit' <<< "$BASE_RECORD")" --arg target_commit "$TARGET_COMMIT" \
   --arg official "$TARGET_OFFICIAL_VERSION" --arg custom "$TARGET_CUSTOM_VERSION" --arg main "$MAIN_DIGEST" --arg ext "$EXTENSIONS_DIGEST" \
@@ -141,8 +151,11 @@ jq -n --arg operation rollback --arg base "$BASE_RELEASE_ID" --arg target "$TARG
   target_custom_compose_sha256:$target_custom,target_rendered_compose_sha256:$target_rendered,target_env_sha256:$target_env,
   target_artifact_manifest_sha256:$target_manifest,backup_dir:$backup,backup_manifest_sha256:$backup_manifest,
   prepared_at:$prepared,expires_at:$expires,images_verified:true,compose_contract:"deploy-explicit-pair-v1",backup_contract:"complete-paired-snapshot-v1"}' \
-  > "$MANIFEST_DIR/manifest.json"
-sha256sum "$MANIFEST_DIR/manifest.json" > "$MANIFEST_DIR/manifest.sha256"
+  > "$MANIFEST_SOURCE"
+release_install_manifest_files "$MANIFEST_DIR" "$MANIFEST_SOURCE" \
+  || fail_prepare 'rollback manifest files could not be installed safely' PREPARED_PATH_UNSAFE
+rm -f "$MANIFEST_SOURCE"
+MANIFEST_SOURCE=''
 release_manifest_valid "$JOB_ID" || fail_prepare 'rollback prepared manifest failed validation' PREPARED_MANIFEST_INVALID
 manifest_sha="$(awk '{print $1}' "$MANIFEST_DIR/manifest.sha256")"
 metadata="$(jq --arg manifest "$MANIFEST_DIR/manifest.json" --arg sha "$manifest_sha" '. + {prepared_manifest:$manifest,prepared_manifest_sha256:$sha,published:false,production_changed:false}' "$MANIFEST_DIR/manifest.json")"

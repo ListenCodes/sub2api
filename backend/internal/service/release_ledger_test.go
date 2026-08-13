@@ -35,6 +35,38 @@ func TestReleaseLedgerCurrentReleaseReturnsVersionPair(t *testing.T) {
 	require.Equal(t, record.ReleaseID, current.ReleaseID)
 }
 
+func TestReleaseLedgerAcceptsIdentityConfigurationRelease(t *testing.T) {
+	root := t.TempDir()
+	record := releaseLedgerTestRecord(root, "release-config-current", 4, "2026-07-23T08:00:00Z")
+	record.SourceKind = UpdateKindIdentityConfig
+	record.IdentityTransition = IdentityTransitionStage2Admin
+	protectedRoot := filepath.Join(root, "protected-artifacts")
+	require.NoError(t, os.MkdirAll(protectedRoot, 0o700))
+	require.NoError(t, os.Rename(record.BackupDir, filepath.Join(protectedRoot, record.ReleaseID)))
+	record.BackupDir = filepath.Join(protectedRoot, record.ReleaseID)
+	writeReleaseLedgerFixture(t, root, ReleaseLedgerState{
+		SchemaVersion: 1, CurrentReleaseID: record.ReleaseID, CustomVersionHighWater: 9, UpdatedAt: "2026-07-23T08:00:00Z",
+	}, record)
+	artifactRoot := filepath.Join(root, "artifacts")
+	store := newReleaseLedgerStoreWithArtifactRoots(root, artifactRoot, artifactRoot)
+	store.protectedRecordArtifactRoot = protectedRoot
+	current, err := store.CurrentRelease()
+	require.NoError(t, err)
+	require.Equal(t, IdentityTransitionStage2Admin, current.IdentityTransition)
+	require.True(t, store.rollbackArtifactsAvailable(current))
+
+	record.BackupDir = filepath.Join(artifactRoot, record.ReleaseID)
+	writeReleaseLedgerJSON(t, filepath.Join(root, "releases", record.ReleaseID+".json"), record)
+	_, err = store.CurrentRelease()
+	require.Error(t, err)
+
+	record.BackupDir = filepath.Join(protectedRoot, record.ReleaseID)
+	record.IdentityTransition = ""
+	writeReleaseLedgerJSON(t, filepath.Join(root, "releases", record.ReleaseID+".json"), record)
+	_, err = store.CurrentRelease()
+	require.Error(t, err)
+}
+
 func TestReleaseLedgerListsLastThreeEligibleReleases(t *testing.T) {
 	root := t.TempDir()
 	current := releaseLedgerTestRecord(root, "release-current", 4, "2026-07-23T08:00:00Z")

@@ -59,6 +59,7 @@ printf 'POSTGRES_PASSWORD=test\nRISK_CONTROL_POSTGRES_PASSWORD=test\nRISK_CONTRO
 chmod 0600 "$SECRET_ENV"
 export SUB2API_REPO="$REPO"
 export SUB2API_DATA_DIR="$TMP/data"
+export SUB2API_RELEASE_BACKUP_ROOT="$TMP/protected-release-backups"
 export SUB2API_ENV_FILE="$REPO/deploy/.env"
 export SUB2API_COMPOSE_BASE="$REPO/deploy/docker-compose.yml"
 export SUB2API_COMPOSE_CUSTOM="$REPO/deploy/docker-compose.custom.yml"
@@ -112,6 +113,7 @@ make_backup_contract() {
 
 BUNDLE="$TMP/bundle"
 BACKUP="$BUNDLE/release-backups/backup-1"
+mkdir -p "$BUNDLE/protected-release-backups"
 export MSYS2_ARG_CONV_EXCL="$SUB2API_DATA_DIR/release-backups/;$BUNDLE/release-backups/"
 RELEASE_ID="release-bootstrap-fixture-${HEAD_COMMIT:0:9}"
 MAIN_DIGEST="sha256:$(printf '%064d' 1)"

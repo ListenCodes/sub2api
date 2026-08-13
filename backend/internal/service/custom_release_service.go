@@ -18,13 +18,15 @@ const (
 	defaultProductionReleaseStatePath = "/app/data/release-state.json"
 	defaultReleaseLedgerRoot          = "/app/data/release-ledger"
 	defaultReleaseRecordBackupRoot    = "/var/lib/docker/volumes/deploy_sub2api_data/_data/release-backups"
+	defaultProtectedRecordBackupRoot  = "/var/lib/sub2api-release/backups"
 	githubCustomRepo                  = "ListenCodes/sub2api"
 
-	UpdateKindNone     = "none"
-	UpdateKindOfficial = "official"
-	UpdateKindCustom   = "custom"
-	UpdateKindCombined = "combined"
-	UpdateKindDocsOnly = "docs-only"
+	UpdateKindNone           = "none"
+	UpdateKindOfficial       = "official"
+	UpdateKindCustom         = "custom"
+	UpdateKindCombined       = "combined"
+	UpdateKindDocsOnly       = "docs-only"
+	UpdateKindIdentityConfig = "identity-config"
 )
 
 type customReleaseGitHubClient interface {
@@ -86,6 +88,7 @@ var (
 	ErrGitHubCompareFilesTruncated  = errors.New("GitHub compare file list reached the 300-file safety limit")
 	ErrUpdateDetectionIncomplete    = infraerrors.Conflict("UPDATE_DETECTION_INCOMPLETE", "release detection is incomplete; retry before preparing")
 	ErrRollbackReleaseInvalid       = infraerrors.BadRequest("ROLLBACK_RELEASE_INVALID", "rollback release is not eligible")
+	ErrIdentityTransitionInvalid    = infraerrors.BadRequest("IDENTITY_TRANSITION_INVALID", "identity rollout transition is invalid")
 	ErrReleaseOperationInconsistent = infraerrors.InternalServer("RELEASE_OPERATION_INCONSISTENT", "release operation state is inconsistent")
 )
 
@@ -146,8 +149,14 @@ func customReleaseRecordBackupRoot() string {
 	return customReleaseEnv("SUB2API_RELEASE_RECORD_BACKUP_ROOT", defaultReleaseRecordBackupRoot)
 }
 
+func customReleaseProtectedRecordBackupRoot() string {
+	return customReleaseEnv("SUB2API_PROTECTED_RELEASE_RECORD_BACKUP_ROOT", defaultProtectedRecordBackupRoot)
+}
+
 func newCustomReleaseLedgerStore() *releaseLedgerStore {
-	return newReleaseLedgerStoreWithArtifactRoots(customReleaseLedgerRoot(), customReleaseBackupRoot(), customReleaseRecordBackupRoot())
+	store := newReleaseLedgerStoreWithArtifactRoots(customReleaseLedgerRoot(), customReleaseBackupRoot(), customReleaseRecordBackupRoot())
+	store.protectedRecordArtifactRoot = customReleaseProtectedRecordBackupRoot()
+	return store
 }
 
 func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*CustomReleaseInfo, error) {
@@ -292,11 +301,23 @@ func (s *UpdateService) CheckCustomRelease(ctx context.Context, force bool) (*Cu
 }
 
 func (s *UpdateService) PrepareUpdate(ctx context.Context) (*UpdateJob, error) {
-	return s.queueOperation(ctx, ReleaseOperationUpdate, ReleasePhasePrepare, "")
+	return s.queueOperation(ctx, ReleaseOperationUpdate, ReleasePhasePrepare, "", "", "")
 }
 
 func (s *UpdateService) ApplyUpdate(ctx context.Context, jobID string) (*UpdateJob, error) {
-	return s.queueOperation(ctx, ReleaseOperationUpdate, ReleasePhaseApply, jobID)
+	return s.queueOperation(ctx, ReleaseOperationUpdate, ReleasePhaseApply, jobID, "", "")
+}
+
+func (s *UpdateService) PrepareIdentityRollout(ctx context.Context, transition string) (*UpdateJob, error) {
+	transition = strings.TrimSpace(transition)
+	if !ValidIdentityTransition(transition) {
+		return nil, ErrIdentityTransitionInvalid
+	}
+	return s.queueOperation(ctx, ReleaseOperationUpdate, ReleasePhasePrepare, "", UpdateKindIdentityConfig, transition)
+}
+
+func (s *UpdateService) ApplyIdentityRollout(ctx context.Context, jobID string) (*UpdateJob, error) {
+	return s.queueOperation(ctx, ReleaseOperationUpdate, ReleasePhaseApply, strings.TrimSpace(jobID), UpdateKindIdentityConfig, "")
 }
 
 func (s *UpdateService) CurrentRelease(ctx context.Context) (*ReleaseRecord, error) {
@@ -314,14 +335,14 @@ func (s *UpdateService) ListRollbackReleases(ctx context.Context) ([]ReleaseReco
 }
 
 func (s *UpdateService) PrepareRollback(ctx context.Context, releaseID string) (*UpdateJob, error) {
-	return s.queueOperation(ctx, ReleaseOperationRollback, ReleasePhasePrepare, strings.TrimSpace(releaseID))
+	return s.queueOperation(ctx, ReleaseOperationRollback, ReleasePhasePrepare, strings.TrimSpace(releaseID), "", "")
 }
 
 func (s *UpdateService) ApplyRollback(ctx context.Context, jobID string) (*UpdateJob, error) {
-	return s.queueOperation(ctx, ReleaseOperationRollback, ReleasePhaseApply, strings.TrimSpace(jobID))
+	return s.queueOperation(ctx, ReleaseOperationRollback, ReleasePhaseApply, strings.TrimSpace(jobID), "", "")
 }
 
-func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, reference string) (*UpdateJob, error) {
+func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, reference, expectedUpdateKind, identityTransition string) (*UpdateJob, error) {
 	customReleaseMu.Lock()
 	defer customReleaseMu.Unlock()
 
@@ -332,7 +353,7 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 		return nil, fmt.Errorf("invalid release operation")
 	}
 	if phase == ReleasePhaseApply {
-		return s.applyOperation(ctx, kind, reference)
+		return s.applyOperation(ctx, kind, reference, expectedUpdateKind)
 	}
 	if kind == ReleaseOperationRollback && !validReleaseID(reference) {
 		return nil, ErrRollbackReleaseInvalid
@@ -362,7 +383,9 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 					return nil, err
 				}
 				return nil, ErrUpdateInProgress
-			} else if existing.OperationKind == kind && existing.Action == ReleasePhasePrepare && existing.TargetReleaseID == reference {
+			} else if existing.OperationKind == kind && existing.Action == ReleasePhasePrepare && existing.TargetReleaseID == reference &&
+				((expectedUpdateKind == "" && existing.UpdateKind != UpdateKindIdentityConfig) || existing.UpdateKind == expectedUpdateKind) &&
+				existing.IdentityTransition == identityTransition {
 				return existing, nil
 			} else {
 				return nil, ErrUpdateInProgress
@@ -372,7 +395,7 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 		return nil, fmt.Errorf("read current update job id: %w", readErr)
 	}
 
-	job, err := s.buildPreparedOperation(ctx, kind, reference)
+	job, err := s.buildPreparedOperation(ctx, kind, reference, expectedUpdateKind, identityTransition)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +434,7 @@ func (s *UpdateService) queueOperation(ctx context.Context, kind, phase, referen
 	return job, nil
 }
 
-func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, targetReleaseID string) (*UpdateJob, error) {
+func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, targetReleaseID, updateKind, identityTransition string) (*UpdateJob, error) {
 	ledger := newCustomReleaseLedgerStore()
 	state, err := ledger.ReadState()
 	if err != nil {
@@ -428,6 +451,26 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 		Message:                "release operation queued",
 	}
 	if kind == ReleaseOperationUpdate {
+		if updateKind == UpdateKindIdentityConfig {
+			if !ValidIdentityTransition(identityTransition) {
+				return nil, ErrIdentityTransitionInvalid
+			}
+			sequence := current.CustomVersionSequence
+			job.Status = ReleaseStatusResolvingTarget
+			job.TargetOfficialVersion = current.OfficialVersion
+			job.TargetCustomVersion = current.CustomVersion
+			job.ProposedCustomSequence = &sequence
+			job.TargetCustomCommit = current.CustomCommit
+			job.UpdateKind = UpdateKindIdentityConfig
+			job.IdentityTransition = identityTransition
+			job.ProductionCommit = current.CustomCommit
+			job.StableReleaseTag = current.OfficialVersion
+			job.StableReleaseCommit = current.OfficialCommit
+			job.MainDigest = current.MainDigest
+			job.ExtensionsDigest = current.ExtensionsDigest
+			job.AdvancesCustomVersion = false
+			return job, nil
+		}
 		info, err := s.CheckCustomRelease(ctx, true)
 		if err != nil {
 			return nil, err
@@ -475,7 +518,7 @@ func (s *UpdateService) buildPreparedOperation(ctx context.Context, kind, target
 	return nil, ErrRollbackReleaseInvalid
 }
 
-func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) (*UpdateJob, error) {
+func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID, expectedUpdateKind string) (*UpdateJob, error) {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
 		return nil, ErrUpdateJobIDRequired
@@ -502,6 +545,13 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 		return nil, err
 	}
 	if job.OperationKind != kind {
+		return nil, ErrUpdateNotPrepared
+	}
+	if expectedUpdateKind == UpdateKindIdentityConfig {
+		if job.UpdateKind != UpdateKindIdentityConfig || !ValidIdentityTransition(job.IdentityTransition) {
+			return nil, ErrUpdateNotPrepared
+		}
+	} else if job.UpdateKind == UpdateKindIdentityConfig {
 		return nil, ErrUpdateNotPrepared
 	}
 	if job.Status == ReleaseStatusPrepared {
@@ -540,6 +590,20 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID string) 
 		return job, nil
 	}
 	return nil, ErrUpdateNotPrepared
+}
+
+func ValidIdentityTransition(transition string) bool {
+	switch strings.TrimSpace(transition) {
+	case IdentityTransitionStage1V2,
+		IdentityTransitionStage1IP,
+		IdentityTransitionStage1Device,
+		IdentityTransitionStage2Admin,
+		IdentityTransitionStage3ShadowWindow,
+		IdentityTransitionStage3Rules:
+		return true
+	default:
+		return false
+	}
 }
 
 func queuePreparedOperationExpiration(job *UpdateJob) error {

@@ -58,20 +58,23 @@ type ReleaseRecord struct {
 	PublishedAt           string `json:"published_at"`
 	SourceKind            string `json:"source_kind"`
 	OperationID           string `json:"operation_id"`
+	IdentityTransition    string `json:"identity_transition,omitempty"`
 }
 
 type releaseLedgerStore struct {
-	root               string
-	artifactRoot       string
-	recordArtifactRoot string
+	root                        string
+	artifactRoot                string
+	recordArtifactRoot          string
+	protectedRecordArtifactRoot string
 }
 
 func newReleaseLedgerStoreWithArtifactRoots(root, artifactRoot, recordArtifactRoot string) *releaseLedgerStore {
 	cleanRoot := filepath.Clean(root)
 	return &releaseLedgerStore{
-		root:               cleanRoot,
-		artifactRoot:       filepath.Clean(artifactRoot),
-		recordArtifactRoot: filepath.Clean(recordArtifactRoot),
+		root:                        cleanRoot,
+		artifactRoot:                filepath.Clean(artifactRoot),
+		recordArtifactRoot:          filepath.Clean(recordArtifactRoot),
+		protectedRecordArtifactRoot: filepath.Clean(defaultProtectedRecordBackupRoot),
 	}
 }
 
@@ -208,10 +211,38 @@ func (s *releaseLedgerStore) validateRecord(record *ReleaseRecord, highWater int
 	if _, err := s.canonicalArtifactPath(record.BackupDir); err != nil {
 		return ledgerInconsistent("invalid backup path", err)
 	}
+	if record.SourceKind == UpdateKindIdentityConfig {
+		if !ValidIdentityTransition(record.IdentityTransition) {
+			return ledgerInconsistent("invalid identity transition", nil)
+		}
+		if !s.protectedRecordArtifactPath(record.BackupDir) {
+			return ledgerInconsistent("identity configuration backup is outside the protected root", nil)
+		}
+	} else if record.IdentityTransition != "" {
+		return ledgerInconsistent("identity transition is only valid for identity configuration releases", nil)
+	}
 	return nil
 }
 
+func (s *releaseLedgerStore) protectedRecordArtifactPath(candidate string) bool {
+	root, err := filepath.Abs(s.protectedRecordArtifactRoot)
+	if err != nil {
+		return false
+	}
+	path, err := filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	_, inside := releaseArtifactRelativePath(root, path)
+	return inside
+}
+
 func (s *releaseLedgerStore) rollbackArtifactsAvailable(record *ReleaseRecord) bool {
+	if s.protectedRecordArtifactPath(record.BackupDir) {
+		// The main service deliberately has no mount for protected backups. The
+		// root host executor revalidates their complete contract before rollback.
+		return true
+	}
 	backupDir, err := s.canonicalArtifactPath(record.BackupDir)
 	if err != nil {
 		return false
@@ -415,6 +446,14 @@ func (s *releaseLedgerStore) canonicalArtifactPath(path string) (string, error) 
 		}
 		if relative, mapped := releaseArtifactRelativePath(recordRoot, candidate); mapped {
 			candidate = filepath.Join(root, relative)
+		} else {
+			protectedRoot, protectedErr := filepath.Abs(s.protectedRecordArtifactRoot)
+			if protectedErr != nil {
+				return "", protectedErr
+			}
+			if _, protected := releaseArtifactRelativePath(protectedRoot, candidate); protected {
+				return candidate, nil
+			}
 		}
 	}
 	if resolved, resolveErr := filepath.EvalSymlinks(candidate); resolveErr == nil {
@@ -463,7 +502,7 @@ func validRFC3339(value string) bool {
 
 func validReleaseSourceKind(value string) bool {
 	switch value {
-	case "official", "custom", "combined", "bootstrap":
+	case "official", "custom", "combined", "bootstrap", UpdateKindIdentityConfig:
 		return true
 	default:
 		return false

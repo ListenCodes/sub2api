@@ -48,6 +48,8 @@ func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, cust
 	admin.GET("/system/releases/rollback", h.Admin.System.ListRollbackReleases)
 	admin.POST("/system/update/prepare", h.Admin.System.PrepareUpdate)
 	admin.POST("/system/update/apply", h.Admin.System.ApplyUpdate)
+	admin.POST("/system/identity-rollout/prepare", h.Admin.System.PrepareIdentityRollout)
+	admin.POST("/system/identity-rollout/apply", h.Admin.System.ApplyIdentityRollout)
 	admin.POST("/system/rollback/prepare", h.Admin.System.PrepareRollback)
 	admin.POST("/system/rollback/apply", h.Admin.System.ApplyRollback)
 	admin.GET("/system/update/status", h.Admin.System.GetUpdateStatus)

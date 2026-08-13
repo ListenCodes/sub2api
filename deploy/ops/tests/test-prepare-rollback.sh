@@ -206,6 +206,7 @@ invoke_prepare() {
     SUB2API_COMPOSE_BASE="$root/repo/deploy/docker-compose.yml" SUB2API_COMPOSE_CUSTOM="$root/repo/deploy/docker-compose.custom.yml" \
     SUB2API_RELEASE_LEDGER_ROOT="$root/data/release-ledger" SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" \
     SUB2API_RELEASE_BACKUP_ROOT="$root/data/release-backups" SUB2API_BACKUP_ROOT="$root/data/release-backups" \
+    SUB2API_LEGACY_RELEASE_BACKUP_ROOT="$root/data/legacy-release-backups" \
     SUB2API_PREPARED_ROOT="$root/data/release-prepared" SUB2API_RELEASE_STATE_FILE="$root/data/release-state.json" \
     SUB2API_RELEASE_LEDGER_LOCK_FILE="$root/data/release.lock" SUB2API_NGINX_VHOST="$root/nginx.conf" \
     SUB2API_ORIGIN_CERT="$root/origin.crt" SUB2API_ORIGIN_KEY="$root/origin.key" SUB2API_SYNC_PUBLISH_LOG="$root/release.log" \

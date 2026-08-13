@@ -2,11 +2,12 @@
 set -Eeuo pipefail
 
 RELEASE_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RELEASE_EXECUTOR_UID="$(id -u)"
 SUB2API_DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 RELEASE_LEDGER_ROOT="${SUB2API_RELEASE_LEDGER_ROOT:-$SUB2API_DATA_DIR/release-ledger}"
 RELEASE_JOBS_DIR="${SUB2API_RELEASE_OPERATIONS_DIR:-$RELEASE_LEDGER_ROOT/operations}"
-PREPARED_ROOT="${SUB2API_PREPARED_ROOT:-$SUB2API_DATA_DIR/release-prepared}"
-RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-$SUB2API_DATA_DIR/release-backups}"
+PREPARED_ROOT="${SUB2API_PREPARED_ROOT:-/var/lib/sub2api-release/prepared}"
+RELEASE_BACKUP_ROOT="${SUB2API_RELEASE_BACKUP_ROOT:-/var/lib/sub2api-release/backups}"
 PRODUCTION_RELEASE_STATE_FILE="${SUB2API_RELEASE_STATE_FILE:-$SUB2API_DATA_DIR/release-state.json}"
 REPO="${SUB2API_REPO:-/root/sub2api}"
 BRANCH="${SUB2API_BRANCH:-custom-release}"
@@ -26,8 +27,143 @@ release_manifest_sha_path() {
   printf '%s/%s/manifest.sha256\n' "$PREPARED_ROOT" "$job_id"
 }
 
+release_path_chain_has_no_symlink() {
+  local path="$1" current="/" component
+  local -a components=()
+  [[ "$path" == /* ]] || return 1
+  IFS='/' read -r -a components <<< "$path"
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    current="${current%/}/$component"
+    [[ ! -L "$current" ]] || return 1
+  done
+}
+
+release_path_ancestors_not_writable_by_non_owner() {
+  local path="$1" current="/" component mode owner permissions
+  local -a components=()
+  [[ "$path" == /* ]] || return 1
+  IFS='/' read -r -a components <<< "$path"
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    current="${current%/}/$component"
+    [[ ! -e "$current" ]] || {
+      mode="$(stat -c '%a' "$current")" || return 1
+      owner="$(stat -c '%u' "$current")" || return 1
+      [[ "$owner" == 0 || "$owner" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+      permissions=$((8#$mode))
+      if (( (permissions & 0022) != 0 )); then
+        (( owner == 0 && (permissions & 01000) != 0 )) || return 1
+      fi
+    }
+  done
+}
+
+release_ensure_prepared_root() {
+  local root_real
+  release_path_chain_has_no_symlink "$PREPARED_ROOT" || return 1
+  release_path_ancestors_not_writable_by_non_owner "$(dirname "$PREPARED_ROOT")" || return 1
+  if [[ ! -e "$PREPARED_ROOT" ]]; then
+    mkdir -p -m 0700 -- "$PREPARED_ROOT" || return 1
+  fi
+  release_path_chain_has_no_symlink "$PREPARED_ROOT" || return 1
+  release_path_ancestors_not_writable_by_non_owner "$PREPARED_ROOT" || return 1
+  [[ -d "$PREPARED_ROOT" && ! -L "$PREPARED_ROOT" ]] || return 1
+  [[ "$(stat -c '%u' "$PREPARED_ROOT")" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+  [[ "$(stat -c '%a' "$PREPARED_ROOT")" == 700 ]] || return 1
+  root_real="$(cd "$PREPARED_ROOT" && pwd -P)" || return 1
+  [[ "$root_real" == "$PREPARED_ROOT" ]]
+}
+
+release_ensure_backup_root() {
+  local root_real
+  release_path_chain_has_no_symlink "$RELEASE_BACKUP_ROOT" || return 1
+  release_path_ancestors_not_writable_by_non_owner "$(dirname "$RELEASE_BACKUP_ROOT")" || return 1
+  if [[ ! -e "$RELEASE_BACKUP_ROOT" ]]; then
+    mkdir -p -m 0700 -- "$RELEASE_BACKUP_ROOT" || return 1
+  fi
+  release_path_chain_has_no_symlink "$RELEASE_BACKUP_ROOT" || return 1
+  release_path_ancestors_not_writable_by_non_owner "$RELEASE_BACKUP_ROOT" || return 1
+  [[ -d "$RELEASE_BACKUP_ROOT" && ! -L "$RELEASE_BACKUP_ROOT" ]] || return 1
+  [[ "$(stat -c '%u' "$RELEASE_BACKUP_ROOT")" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+  chmod 0700 "$RELEASE_BACKUP_ROOT" || return 1
+  root_real="$(cd "$RELEASE_BACKUP_ROOT" && pwd -P)" || return 1
+  [[ "$root_real" == "$RELEASE_BACKUP_ROOT" ]]
+}
+
+release_prepare_manifest_dir() {
+  local job_id="$1" manifest_dir root_real manifest_real
+  release_valid_job_id "$job_id" || return 1
+  release_ensure_prepared_root || return 1
+  manifest_dir="$PREPARED_ROOT/$job_id"
+  if [[ ! -e "$manifest_dir" && ! -L "$manifest_dir" ]]; then
+    mkdir -m 0700 -- "$manifest_dir" || return 1
+  fi
+  release_path_chain_has_no_symlink "$manifest_dir" || return 1
+  [[ -d "$manifest_dir" && ! -L "$manifest_dir" ]] || return 1
+  [[ "$(stat -c '%u' "$manifest_dir")" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+  [[ "$(stat -c '%a' "$manifest_dir")" == 700 ]] || return 1
+  root_real="$(cd "$PREPARED_ROOT" && pwd -P)" || return 1
+  manifest_real="$(cd "$manifest_dir" && pwd -P)" || return 1
+  case "$manifest_real/" in "$root_real/"*) ;; *) return 1 ;; esac
+  printf '%s\n' "$manifest_real"
+}
+
+release_manifest_targets_safe() {
+  local manifest_dir="$1" target
+  for target in "$manifest_dir/manifest.json" "$manifest_dir/manifest.sha256"; do
+    [[ ! -L "$target" ]] || return 1
+    if [[ -e "$target" ]]; then
+      [[ -f "$target" ]] || return 1
+      [[ "$(stat -c '%u' "$target")" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+      [[ "$(stat -c '%a' "$target")" == 600 ]] || return 1
+    fi
+  done
+}
+
+release_install_manifest_files() {
+  local manifest_dir="$1" manifest_source="$2" manifest_tmp sha_tmp digest
+  local manifest_name="manifest.json" sha_name="manifest.sha256"
+  release_manifest_targets_safe "$manifest_dir" || return 1
+  [[ -f "$manifest_source" && ! -L "$manifest_source" ]] || return 1
+  [[ "$(stat -c '%u' "$manifest_source")" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+  [[ "$(stat -c '%a' "$manifest_source")" == 600 ]] || return 1
+  manifest_tmp=".manifest.json.$$.${RANDOM:-0}"
+  sha_tmp=".manifest.sha256.$$.${RANDOM:-0}"
+  (
+    cd "$manifest_dir" || exit 1
+    set -o noclobber
+    : > "$manifest_tmp" || exit 1
+    : > "$sha_tmp" || { rm -f -- "$manifest_tmp"; exit 1; }
+  ) || return 1
+  chmod 0600 "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp" \
+    || { rm -f "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp"; return 1; }
+  cp -- "$manifest_source" "$manifest_dir/$manifest_tmp" \
+    || { rm -f "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp"; return 1; }
+  digest="$(sha256sum "$manifest_dir/$manifest_tmp" | awk '{print $1}')" \
+    || { rm -f "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp"; return 1; }
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] \
+    || { rm -f "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp"; return 1; }
+  printf '%s  %s\n' "$digest" "$manifest_name" > "$manifest_dir/$sha_tmp" \
+    || { rm -f "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp"; return 1; }
+  (
+    cd "$manifest_dir" || exit 1
+    mv -f -- "$manifest_tmp" "$manifest_name" \
+      && mv -f -- "$sha_tmp" "$sha_name"
+  ) \
+    || { rm -f "$manifest_dir/$manifest_tmp" "$manifest_dir/$sha_tmp"; return 1; }
+  release_manifest_targets_safe "$manifest_dir"
+}
+
 release_manifest_valid() {
-  local job_id="$1" manifest expected actual expires backup_dir backup_root_real backup_dir_real operation_kind
+  local job_id="$1" manifest manifest_dir expected actual expires backup_dir backup_root_real backup_dir_real operation_kind
+  release_ensure_prepared_root || return 1
+  manifest_dir="$PREPARED_ROOT/$job_id"
+  release_path_chain_has_no_symlink "$manifest_dir" || return 1
+  [[ -d "$manifest_dir" && ! -L "$manifest_dir" ]] || return 1
+  [[ "$(stat -c '%u' "$manifest_dir")" == "$RELEASE_EXECUTOR_UID" ]] || return 1
+  [[ "$(stat -c '%a' "$manifest_dir")" == 700 ]] || return 1
+  release_manifest_targets_safe "$manifest_dir" || return 1
   manifest="$(release_manifest_path "$job_id")"
   expected="$(cat "$(release_manifest_sha_path "$job_id")" 2>/dev/null | awk '{print $1}' || true)"
   actual="$(sha256sum "$manifest" 2>/dev/null | awk '{print $1}' || true)"
@@ -38,7 +174,7 @@ release_manifest_valid() {
     type == "object"
     and .schema_version == 1
     and .operation_kind == "update"
-    and (.update_kind | IN("official", "custom", "combined"))
+    and (.update_kind | IN("official", "custom", "combined", "identity-config"))
     and (.base_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
     and (.base_custom_high_water | type == "number" and floor == . and . >= 0)
     and (.target_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
@@ -67,7 +203,21 @@ release_manifest_valid() {
     and (.expires_at | fromdateiso8601 > 0)
     and (.workflow_url | type == "string" and length > 0)
     and .images_verified == true
-    and (if .update_kind == "official" then
+    and (if .update_kind == "identity-config" then
+      .custom_docs_only == false
+      and .advances_custom_version == false
+      and .proposed_custom_sequence <= .base_custom_high_water
+      and .target_custom_version == ("v1.0." + (.proposed_custom_sequence | tostring))
+      and .target_custom_version == .current_custom_version
+      and .target_official_version == .current_official_version
+      and .target_commit == .source_commit
+      and .target_custom_commit == .source_commit
+      and .main_digest == .current_main_digest
+      and .extensions_digest == .current_extensions_digest
+	  and (.current_env_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+	  and .target_env_sha256 != .current_env_sha256
+      and (.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules"))
+    elif .update_kind == "official" then
       .advances_custom_version == false
       and (if .custom_docs_only then .target_custom_commit != .source_commit else .target_custom_commit == .source_commit end)
       and .target_custom_version == .current_custom_version
