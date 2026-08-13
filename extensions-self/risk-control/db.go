@@ -20,33 +20,45 @@ type SQLRepository struct{ db *sql.DB }
 
 func NewSQLRepository(db *sql.DB) *SQLRepository { return &SQLRepository{db: db} }
 
-const riskSubjectProjectionCTE = `WITH projected_risk_subjects AS (
+const riskSubjectProjectionCTE = `WITH legacy_api_subjects AS MATERIALIZED (
+SELECT user_id
+FROM risk_subjects
+WHERE risk_type='api_request' OR reason ILIKE '%API 请求观察%'
+), non_api_counts AS MATERIALIZED (
+SELECT e.user_id,
+  COUNT(*)::int AS event_count,
+  COUNT(DISTINCT NULLIF(e.ip_hash,''))::int AS ip_count,
+  COUNT(DISTINCT NULLIF(e.device_hash,''))::int AS device_count
+FROM risk_events e
+JOIN legacy_api_subjects legacy ON legacy.user_id=e.user_id
+WHERE e.event_type<>'api_request'
+GROUP BY e.user_id
+), non_api_best AS MATERIALIZED (
+SELECT DISTINCT ON (e.user_id)
+  e.user_id,e.risk_type,e.risk_level,e.score,e.reason,e.decision,e.occurred_at
+FROM risk_events e
+JOIN legacy_api_subjects legacy ON legacy.user_id=e.user_id
+WHERE e.event_type<>'api_request'
+ORDER BY e.user_id,e.score DESC,
+  CASE e.risk_level WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+  CASE e.decision WHEN 'ban' THEN 4 WHEN 'auto_ban' THEN 4 WHEN 'review' THEN 3 WHEN 'observe' THEN 2 ELSE 0 END DESC,
+  e.occurred_at DESC,e.id DESC
+), projected_risk_subjects AS (
 SELECT s.id,s.user_id,s.username,s.email_hash,s.account_status,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.risk_type,'') ELSE s.risk_type END AS risk_type,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.risk_level,'none') ELSE s.risk_level END AS risk_level,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.score,0) ELSE s.score END AS score,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.reason,'') ELSE s.reason END AS reason,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.event_count,0) ELSE s.event_count END AS event_count,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.ip_count,0) ELSE s.ip_count END AS ip_count,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.device_count,0) ELSE s.device_count END AS device_count,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.decision,'') ELSE s.last_action END AS last_action,
-  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.decision='review',FALSE) ELSE s.pending END AS pending,
-  CASE WHEN legacy_api.is_legacy THEN replacement.occurred_at ELSE s.last_event_at END AS last_event_at
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.risk_type,'') ELSE s.risk_type END AS risk_type,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.risk_level,'none') ELSE s.risk_level END AS risk_level,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.score,0) ELSE s.score END AS score,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.reason,'') ELSE s.reason END AS reason,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(counts.event_count,0) ELSE s.event_count END AS event_count,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(counts.ip_count,0) ELSE s.ip_count END AS ip_count,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(counts.device_count,0) ELSE s.device_count END AS device_count,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.decision,'') ELSE s.last_action END AS last_action,
+  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.decision='review',FALSE) ELSE s.pending END AS pending,
+  CASE WHEN legacy.user_id IS NOT NULL THEN best.occurred_at ELSE s.last_event_at END AS last_event_at
 FROM risk_subjects s
-CROSS JOIN LATERAL (SELECT s.risk_type='api_request' OR s.reason ILIKE '%API 请求观察%' AS is_legacy) legacy_api
-LEFT JOIN LATERAL (
-  SELECT e.id,e.risk_type,e.risk_level,e.score,e.reason,e.decision,e.occurred_at,
-    (SELECT COUNT(*)::int FROM risk_events x WHERE x.user_id=s.user_id AND x.event_type<>'api_request') AS event_count,
-    (SELECT COUNT(DISTINCT NULLIF(x.ip_hash,''))::int FROM risk_events x WHERE x.user_id=s.user_id AND x.event_type<>'api_request') AS ip_count,
-    (SELECT COUNT(DISTINCT NULLIF(x.device_hash,''))::int FROM risk_events x WHERE x.user_id=s.user_id AND x.event_type<>'api_request') AS device_count
-  FROM risk_events e
-  WHERE legacy_api.is_legacy AND e.user_id=s.user_id AND e.event_type<>'api_request'
-  ORDER BY e.score DESC,
-    CASE e.risk_level WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
-    CASE e.decision WHEN 'ban' THEN 4 WHEN 'auto_ban' THEN 4 WHEN 'review' THEN 3 WHEN 'observe' THEN 2 ELSE 0 END DESC,
-    e.occurred_at DESC,e.id DESC
-  LIMIT 1
-) replacement ON TRUE
+LEFT JOIN legacy_api_subjects legacy ON legacy.user_id=s.user_id
+LEFT JOIN non_api_counts counts ON counts.user_id=s.user_id
+LEFT JOIN non_api_best best ON best.user_id=s.user_id
 ) `
 
 func ApplySchema(ctx context.Context, db *sql.DB) error {
@@ -237,7 +249,11 @@ func (r *SQLRepository) ListSubjects(ctx context.Context, limit, offset int, ris
 	}
 	whereClause := strings.Join(where, " AND ")
 	var total int
-	if err := r.db.QueryRowContext(ctx, riskSubjectProjectionCTE+`SELECT COUNT(*) FROM projected_risk_subjects WHERE `+whereClause, args...).Scan(&total); err != nil {
+	countSource := `SELECT COUNT(*) FROM risk_subjects WHERE `
+	if riskType != "" || riskLevel != "" {
+		countSource = riskSubjectProjectionCTE + `SELECT COUNT(*) FROM projected_risk_subjects WHERE `
+	}
+	if err := r.db.QueryRowContext(ctx, countSource+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := r.db.QueryContext(ctx, riskSubjectProjectionCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE `+whereClause+fmt.Sprintf(" ORDER BY score DESC,last_event_at DESC NULLS LAST LIMIT $%d OFFSET $%d", index, index+1), append(args, limit, offset)...)

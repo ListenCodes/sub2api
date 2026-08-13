@@ -83,3 +83,16 @@ func TestIdentitySchemaStageZeroDoesNotMutateExistingV1Rules(t *testing.T) {
 		t.Fatal("schema does not persist the initial 14-day Shadow activation")
 	}
 }
+
+func TestLegacyRiskProjectionUsesSetBasedAggregation(t *testing.T) {
+	for _, expected := range []string{"legacy_api_subjects AS MATERIALIZED", "non_api_counts AS MATERIALIZED", "non_api_best AS MATERIALIZED"} {
+		if !strings.Contains(riskSubjectProjectionCTE, expected) {
+			t.Fatalf("risk subject projection is missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"JOIN LATERAL", "SELECT COUNT(*)::int FROM risk_events x"} {
+		if strings.Contains(riskSubjectProjectionCTE, forbidden) {
+			t.Fatalf("risk subject projection contains per-subject scan %q", forbidden)
+		}
+	}
+}
