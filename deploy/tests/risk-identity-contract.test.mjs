@@ -51,7 +51,7 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   const common = read('deploy/ops/release-common.sh')
   const ledger = read('deploy/ops/release-ledger.sh')
   const dispatcher = read('deploy/ops/sync-and-publish.sh')
-  for (const transition of ['stage1-v2', 'stage1-ip', 'stage1-device', 'stage2-admin', 'stage3-shadow-window', 'stage3-rules']) {
+  for (const transition of ['stage1-v2', 'stage1-ip', 'stage1-device', 'stage2-admin', 'stage3-shadow-window', 'stage3-rules', 'stage4-geo']) {
     assert.match(prepare, new RegExp(transition))
     assert.match(common, new RegExp(transition))
   }
@@ -72,6 +72,9 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   assert.match(read('deploy/docker-compose.custom.yml'), /SERVER_TRUSTED_PROXIES: \$\{SERVER_TRUSTED_PROXIES:-\}/)
   assert.match(apply, /validate_identity_runtime/)
   assert.match(apply, /UPDATE_KIND[^\n]*identity-config[^\n]*IDENTITY_TRANSITION[^\n]*stage1-/)
+  assert.match(apply, /IDENTITY_TRANSITION" == stage4-geo/)
+  assert.match(prepare, /stage4-geo[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS false[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true[\s\S]*RISK_IDENTITY_GEO_SOURCE cloudflare_verified/)
+  assert.match(apply, /identity\.geo_source == \$geo_source/)
   assert.match(ledger, /identity-config/)
   assert.match(ledger, /identity_transition/)
   assert.match(common, /PREPARED_ROOT="\$\{SUB2API_PREPARED_ROOT:-\/var\/lib\/sub2api-release\/prepared\}"/)

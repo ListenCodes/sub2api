@@ -115,6 +115,93 @@ func TestRiskIdentitySourceUsesContractValues(t *testing.T) {
 	engine.ServeHTTP(proxied.Writer, proxied.Request)
 }
 
+func TestRiskIdentityAcceptsGeoOnlyFromPinnedCloudflareLastHop(t *testing.T) {
+	t.Setenv("RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS", "true")
+	engine := gin.New()
+	if err := engine.SetTrustedProxies([]string{"192.0.2.2", "173.245.48.0/20"}); err != nil {
+		t.Fatal(err)
+	}
+	engine.GET("/", func(c *gin.Context) {
+		identity := requestRiskIdentity(c, false)
+		if identity.IPSource != "cf_connecting_ip" || !identity.GeoVerified || identity.GeoSource != "cloudflare_verified" {
+			t.Fatalf("verified Cloudflare identity rejected: %#v", identity)
+		}
+		if identity.CountryCode != "CN" || identity.Region != "Hubei" || identity.City != "Wuhan" || identity.ASN != 4134 {
+			t.Fatalf("Cloudflare geo mismatch: %#v", identity)
+		}
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "192.0.2.2:443"
+	request.Header.Set("X-Forwarded-For", "203.0.113.10, 173.245.48.10")
+	request.Header.Set("CF-Connecting-IP", "203.0.113.10")
+	request.Header.Set("X-Risk-CF-Country", "CN")
+	request.Header.Set("X-Risk-CF-Region", "Hubei")
+	request.Header.Set("X-Risk-CF-City", "Wuhan")
+	request.Header.Set("X-Risk-CF-ASN", "4134")
+	engine.ServeHTTP(httptest.NewRecorder(), request)
+}
+
+func TestRiskIdentityRejectsSpoofedGeoFromDirectOriginTraffic(t *testing.T) {
+	t.Setenv("RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS", "true")
+	engine := gin.New()
+	if err := engine.SetTrustedProxies([]string{"192.0.2.2", "173.245.48.0/20"}); err != nil {
+		t.Fatal(err)
+	}
+	engine.GET("/", func(c *gin.Context) {
+		identity := requestRiskIdentity(c, false)
+		if identity.IPSource == "cf_connecting_ip" || identity.GeoVerified || identity.CountryCode != "" || identity.ASN != 0 {
+			t.Fatalf("direct-origin geo spoof accepted: %#v", identity)
+		}
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "192.0.2.2:443"
+	request.Header.Set("X-Forwarded-For", "198.51.100.24")
+	request.Header.Set("CF-Connecting-IP", "198.51.100.24")
+	request.Header.Set("X-Risk-CF-Country", "US")
+	request.Header.Set("X-Risk-CF-ASN", "64512")
+	engine.ServeHTTP(httptest.NewRecorder(), request)
+}
+
+func TestRiskIdentityIgnoresCloudflareGeoWhileTrustSwitchIsDisabled(t *testing.T) {
+	t.Setenv("RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS", "false")
+	engine := gin.New()
+	if err := engine.SetTrustedProxies([]string{"192.0.2.2", "173.245.48.0/20"}); err != nil {
+		t.Fatal(err)
+	}
+	engine.GET("/", func(c *gin.Context) {
+		identity := requestRiskIdentity(c, false)
+		if identity.GeoVerified || identity.CountryCode != "" || identity.ASN != 0 {
+			t.Fatalf("disabled Cloudflare geo trust accepted metadata: %#v", identity)
+		}
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "192.0.2.2:443"
+	request.Header.Set("X-Forwarded-For", "203.0.113.10, 173.245.48.10")
+	request.Header.Set("CF-Connecting-IP", "203.0.113.10")
+	request.Header.Set("X-Risk-CF-Country", "CN")
+	request.Header.Set("X-Risk-CF-ASN", "4134")
+	engine.ServeHTTP(httptest.NewRecorder(), request)
+}
+
+func TestRiskIdentityCloudflareGeoValidationRejectsInvalidValues(t *testing.T) {
+	for _, code := range []string{"", "X", "123", "C1", "XX"} {
+		if validRiskIdentityCountryCode(code) {
+			t.Fatalf("invalid country code accepted: %q", code)
+		}
+	}
+	for _, code := range []string{"CN", "US"} {
+		if !validRiskIdentityCountryCode(code) {
+			t.Fatalf("valid country code rejected: %q", code)
+		}
+	}
+	if !sameRiskIdentityAddress("2606:4700:4700::1111", "2606:4700:4700:0:0:0:0:1111") {
+		t.Fatal("equivalent IPv6 addresses did not match")
+	}
+}
+
 func TestCoarseBrowserProfileDoesNotProduceInvasiveFingerprint(t *testing.T) {
 	browser, osFamily, device := coarseBrowserProfile("Mozilla/5.0 (Windows NT 10.0) AppleWebKit Chrome/130.0 Safari/537.36")
 	if browser != "chrome" || osFamily != "windows" || device != "desktop" {

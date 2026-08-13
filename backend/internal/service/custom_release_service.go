@@ -599,7 +599,8 @@ func ValidIdentityTransition(transition string) bool {
 		IdentityTransitionStage1Device,
 		IdentityTransitionStage2Admin,
 		IdentityTransitionStage3ShadowWindow,
-		IdentityTransitionStage3Rules:
+		IdentityTransitionStage3Rules,
+		IdentityTransitionStage4Geo:
 		return true
 	default:
 		return false

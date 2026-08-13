@@ -48,7 +48,7 @@ ledger_validate_release() {
     and (.published_at | fromdateiso8601 > 0)
     and (.source_kind | IN("official", "custom", "combined", "bootstrap", "identity-config"))
     and (if .source_kind == "identity-config" then
-      (.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules"))
+      (.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
     else (.identity_transition // "") == "" end)
     and (.operation_id | type == "string" and length > 0)
   ' "$path" >/dev/null || return 1
@@ -554,7 +554,7 @@ _ledger_commit_release_unlocked() {
 	identity-config)
 	  [[ "$custom_docs_only" == false && "$advances" == false ]] || return 1
 	  [[ "$(jq -r '.base_release_id' <<< "$operation")" == "$(jq -r '.release_id' "$current_record")" ]] || return 1
-	  [[ "$identity_transition" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules))$ ]] || return 1
+	  [[ "$identity_transition" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] || return 1
 	  [[ "$(jq -r '.identity_transition // empty' <<< "$record_content")" == "$identity_transition" ]] || return 1
 	  [[ "$(jq -r '.official_version' <<< "$record_content")" == "$current_official_version" ]] || return 1
 	  [[ "$(jq -r '.official_commit' <<< "$record_content")" == "$current_official_commit" ]] || return 1

@@ -227,6 +227,16 @@ apply_transition() {
       set_env_value "$target" RISK_IDENTITY_DEVICE_RULES_ENABLED true || return 1
       set_env_value "$target" RISK_IDENTITY_COMPOSITE_RULES_ENABLED true
       ;;
+	stage4-geo)
+	  require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED true \
+	    RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
+	    RISK_IDENTITY_RULES_ENABLED true RISK_IDENTITY_IP_RULES_ENABLED true \
+	    RISK_IDENTITY_DEVICE_RULES_ENABLED true RISK_IDENTITY_COMPOSITE_RULES_ENABLED true \
+	    RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS false \
+	    || return 1
+	  set_env_value "$target" RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true
+	  set_env_value "$target" RISK_IDENTITY_GEO_SOURCE cloudflare_verified
+	  ;;
     *) return 1 ;;
   esac
 }
@@ -238,7 +248,7 @@ touch "$LOG"
   && "$(jq -r '.update_kind // empty' "$JOB_FILE")" == identity-config ]] \
   || fail_prepare 'identity rollout job contract is invalid' INVALID_IDENTITY_OPERATION
 IDENTITY_TRANSITION="$(jq -r '.identity_transition // empty' "$JOB_FILE")"
-[[ "$IDENTITY_TRANSITION" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules))$ ]] \
+[[ "$IDENTITY_TRANSITION" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] \
   || fail_prepare 'identity rollout transition is invalid' INVALID_IDENTITY_TRANSITION
 
 LEDGER_STATE_PATH="$(ledger_state_path)"

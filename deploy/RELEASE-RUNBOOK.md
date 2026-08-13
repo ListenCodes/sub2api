@@ -412,7 +412,8 @@ Do not edit the production `.env` directly for these transitions. Use the
 administrator-only `POST /api/v1/admin/system/identity-rollout/prepare` and
 `POST /api/v1/admin/system/identity-rollout/apply` two-phase endpoints. Prepare
 accepts exactly one transition name: `stage1-v2`, `stage1-ip`,
-`stage1-device`, `stage2-admin`, `stage3-shadow-window`, or `stage3-rules`.
+`stage1-device`, `stage2-admin`, `stage3-shadow-window`, `stage3-rules`, or
+`stage4-geo`.
 The host rejects skipped, repeated, or reversed transitions, produces the same
 complete paired backup as a code release, and records `source_kind` as
 `identity-config` without increasing the custom version high-water.
@@ -424,11 +425,23 @@ a root-owned mode `0700` directory, when
 the file is absent. Secret values never enter the request, operation JSON, or
 release log. Preserve that file separately from database backups. Stage 1
 recreates `extensions-self` before `sub2api`; Stage 2 and Stage 3 recreate only
-`extensions-self`. Every apply validates the exact expected identity flags and
+`extensions-self`, while Stage 4 again recreates both services. Every apply validates the exact expected identity flags and
 identity health before committing the ledger, and restores the prepared base
 snapshot on failure. Keep `RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS=false`
 unless the direct-origin Cloudflare trust boundary has been independently
 verified.
+
+`stage4-geo` is a separate, one-way transition after all Shadow rule switches
+are enabled. Before preparing it, configure both Cloudflare zones to overwrite
+`X-Risk-CF-Country`, `X-Risk-CF-Region`, `X-Risk-CF-City`, and
+`X-Risk-CF-ASN` from Cloudflare `ip.src` fields. The application accepts those
+headers only when `CF-Connecting-IP` equals the resolved trusted client and the
+rightmost incoming `X-Forwarded-For` hop belongs to the reviewed Cloudflare
+CIDRs. Direct-origin callers therefore cannot supply trusted geography even
+when the origin remains reachable. Stage 4 recreates both `extensions-self`
+and `sub2api`, validates the environment and health projection, and remains
+fail-open when a location field is unavailable. It does not enable enforcement
+or extend the Shadow deadline.
 
 During `stage1-v2`, prepare resolves the current `deploy_sub2api-network`
 gateway and builds `SERVER_TRUSTED_PROXIES` from that one `/32` or `/128` peer

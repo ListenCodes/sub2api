@@ -361,6 +361,7 @@ func TestIdentityRolloutPrepareBypassesGitHubAndPreservesReleaseIdentity(t *test
 }
 
 func TestIdentityRolloutRejectsUnknownTransition(t *testing.T) {
+	require.True(t, ValidIdentityTransition(IdentityTransitionStage4Geo))
 	_, err := NewUpdateService(nil, nil, "0.1.163", "release").PrepareIdentityRollout(context.Background(), "stage4-enforce")
 	require.ErrorIs(t, err, ErrIdentityTransitionInvalid)
 }

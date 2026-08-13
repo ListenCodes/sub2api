@@ -95,7 +95,7 @@ Do not move custom services back into `docker-compose.local.yml`.
   rendering and complete backup validation, then stops at `prepared` with a
   signed-by-SHA256 60-minute manifest. It must not run Compose lifecycle
   commands or write production state.
-- `prepare-identity-rollout.sh` prepares only the six fixed, ordered identity
+- `prepare-identity-rollout.sh` prepares only the seven fixed, ordered identity
   transitions. It preserves commit, digest, version, and high-water identity,
   generates three pairwise-independent identity keys only in the root-owned
   mode `0600` host secret file under a root-owned mode `0700` directory, and

@@ -250,11 +250,11 @@ func upsertNetworkIdentity(ctx context.Context, tx *sql.Tx, value *IdentityNetwo
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
 ON CONFLICT(lookup_key) DO UPDATE SET last_seen_at=GREATEST(risk_network_identities.last_seen_at,EXCLUDED.last_seen_at),
  ip_source=EXCLUDED.ip_source,
- country_code=CASE WHEN EXCLUDED.geo_verified THEN EXCLUDED.country_code ELSE risk_network_identities.country_code END,
- region=CASE WHEN EXCLUDED.geo_verified THEN EXCLUDED.region ELSE risk_network_identities.region END,
- city=CASE WHEN EXCLUDED.geo_verified THEN EXCLUDED.city ELSE risk_network_identities.city END,
- asn=CASE WHEN EXCLUDED.geo_verified THEN EXCLUDED.asn ELSE risk_network_identities.asn END,
- geo_source=CASE WHEN EXCLUDED.geo_verified THEN EXCLUDED.geo_source ELSE risk_network_identities.geo_source END,
+ country_code=CASE WHEN EXCLUDED.geo_verified AND (risk_network_identities.geo_source!='cloudflare_verified' OR EXCLUDED.geo_source='cloudflare_verified') THEN EXCLUDED.country_code ELSE risk_network_identities.country_code END,
+ region=CASE WHEN EXCLUDED.geo_verified AND (risk_network_identities.geo_source!='cloudflare_verified' OR EXCLUDED.geo_source='cloudflare_verified') THEN EXCLUDED.region ELSE risk_network_identities.region END,
+ city=CASE WHEN EXCLUDED.geo_verified AND (risk_network_identities.geo_source!='cloudflare_verified' OR EXCLUDED.geo_source='cloudflare_verified') THEN EXCLUDED.city ELSE risk_network_identities.city END,
+ asn=CASE WHEN EXCLUDED.geo_verified AND (risk_network_identities.geo_source!='cloudflare_verified' OR EXCLUDED.geo_source='cloudflare_verified') THEN EXCLUDED.asn ELSE risk_network_identities.asn END,
+ geo_source=CASE WHEN EXCLUDED.geo_verified AND (risk_network_identities.geo_source!='cloudflare_verified' OR EXCLUDED.geo_source='cloudflare_verified') THEN EXCLUDED.geo_source ELSE risk_network_identities.geo_source END,
  geo_verified=risk_network_identities.geo_verified OR EXCLUDED.geo_verified
 RETURNING id`, value.LookupKey, value.PrefixLookupKey, value.Ciphertext, value.Nonce, value.KeyID, value.Family, value.Source, value.Public, value.CountryCode, value.Region, value.City, value.ASN, value.GeoSource, value.GeoVerified, occurredAt).Scan(&id)
 	return id, err

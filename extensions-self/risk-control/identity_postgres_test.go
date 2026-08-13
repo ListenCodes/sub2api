@@ -109,6 +109,36 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if fmt.Sprint(families) != "[4 6]" {
 		t.Fatalf("stored IP families = %v", families)
 	}
+	geoLookupKey := service.protector.LookupKey("ip", "9.9.9.9")
+	geoReports := []IdentityEventReport{
+		{EventKey: "geo-unverified", EventType: "login_success", EventClass: "login", Outcome: "success", OccurredAt: base.Add(3 * time.Minute).Format(time.RFC3339Nano), UserID: 300, ClientIP: "9.9.9.9", IPSource: "trusted_xff", ProxyChainValid: true, CountryCode: "ZZ", Region: "spoofed", ASN: 64512, GeoSource: "cloudflare_verified", GeoVerified: false},
+		{EventKey: "geo-local", EventType: "login_success", EventClass: "login", Outcome: "success", OccurredAt: base.Add(4 * time.Minute).Format(time.RFC3339Nano), UserID: 300, ClientIP: "9.9.9.9", IPSource: "trusted_xff", ProxyChainValid: true, CountryCode: "US", Region: "local-region", ASN: 19281, GeoSource: "maxmind_local", GeoVerified: true},
+		{EventKey: "geo-cloudflare", EventType: "login_success", EventClass: "login", Outcome: "success", OccurredAt: base.Add(5 * time.Minute).Format(time.RFC3339Nano), UserID: 300, ClientIP: "9.9.9.9", IPSource: "cf_connecting_ip", ProxyChainValid: true, CountryCode: "US", Region: "cloudflare-region", ASN: 19281, GeoSource: "cloudflare_verified", GeoVerified: true},
+		{EventKey: "geo-local-later", EventType: "login_success", EventClass: "login", Outcome: "success", OccurredAt: base.Add(6 * time.Minute).Format(time.RFC3339Nano), UserID: 300, ClientIP: "9.9.9.9", IPSource: "trusted_xff", ProxyChainValid: true, CountryCode: "CA", Region: "later-local", ASN: 123, GeoSource: "maxmind_local", GeoVerified: true},
+	}
+	if _, err := service.Ingest(ctx, geoReports[0]); err != nil {
+		t.Fatalf("persist geo report %s: %v", geoReports[0].EventKey, err)
+	}
+	var country, region, geoSource string
+	var asn int64
+	var geoVerified bool
+	if err := db.QueryRowContext(ctx, `SELECT country_code,region,asn,geo_source,geo_verified FROM risk_network_identities WHERE lookup_key=$1`, geoLookupKey).Scan(&country, &region, &asn, &geoSource, &geoVerified); err != nil {
+		t.Fatal(err)
+	}
+	if country != "" || region != "" || asn != 0 || geoSource != "" || geoVerified {
+		t.Fatalf("unverified geo persisted = %q/%q/%d/%q/%v", country, region, asn, geoSource, geoVerified)
+	}
+	for _, report := range geoReports[1:] {
+		if _, err := service.Ingest(ctx, report); err != nil {
+			t.Fatalf("persist geo report %s: %v", report.EventKey, err)
+		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT country_code,region,asn,geo_source,geo_verified FROM risk_network_identities WHERE lookup_key=$1`, geoLookupKey).Scan(&country, &region, &asn, &geoSource, &geoVerified); err != nil {
+		t.Fatal(err)
+	}
+	if country != "US" || region != "cloudflare-region" || asn != 19281 || geoSource != "cloudflare_verified" || !geoVerified {
+		t.Fatalf("geo source priority = %q/%q/%d/%q/%v", country, region, asn, geoSource, geoVerified)
+	}
 
 	apiInput := IdentityEventReport{
 		EventKey: "api-success-202", EventType: "api_request", EventClass: identityEventAPI, Outcome: "success",

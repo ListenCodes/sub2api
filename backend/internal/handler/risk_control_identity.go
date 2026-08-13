@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,15 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+var riskIdentityCloudflarePrefixes = mustRiskIdentityCloudflarePrefixes([]string{
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22", "2400:cb00::/32",
+	"2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32",
+	"2a06:98c0::/29", "2c0f:f248::/32",
+})
 
 var riskIdentityEventSequence atomic.Uint64
 
@@ -78,15 +88,15 @@ func requestRiskIdentity(c *gin.Context, includeBrowser bool) *riskRequestIdenti
 		identity.LanguageFamily = language
 	}
 	cfIP := strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))
-	if envBoolRiskIdentity("RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS") && source != "remote_addr" && cfIP == clientIP {
+	if envBoolRiskIdentity("RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS") && source != "remote_addr" && sameRiskIdentityAddress(cfIP, clientIP) && riskIdentityLastForwardedHopIsCloudflare(c) {
 		identity.IPSource = "cf_connecting_ip"
-		identity.CountryCode = strings.ToUpper(strings.TrimSpace(c.GetHeader("CF-IPCountry")))
-		if len(identity.CountryCode) != 2 {
+		identity.CountryCode = strings.ToUpper(firstRiskIdentityHeader(c, "X-Risk-CF-Country", "CF-IPCountry"))
+		if !validRiskIdentityCountryCode(identity.CountryCode) {
 			identity.CountryCode = ""
 		}
-		identity.Region = boundedHeader(c.GetHeader("CF-Region"), 80)
-		identity.City = boundedHeader(c.GetHeader("CF-IPCity"), 120)
-		if asn, err := strconv.ParseInt(strings.TrimSpace(c.GetHeader("CF-ASN")), 10, 64); err == nil && asn > 0 {
+		identity.Region = boundedHeader(firstRiskIdentityHeader(c, "X-Risk-CF-Region", "CF-Region"), 80)
+		identity.City = boundedHeader(firstRiskIdentityHeader(c, "X-Risk-CF-City", "CF-IPCity"), 120)
+		if asn, err := strconv.ParseInt(firstRiskIdentityHeader(c, "X-Risk-CF-ASN", "CF-ASN"), 10, 64); err == nil && asn > 0 && asn <= 4294967295 {
 			identity.ASN = asn
 		}
 		if identity.CountryCode != "" || identity.Region != "" || identity.City != "" || identity.ASN > 0 {
@@ -96,6 +106,72 @@ func requestRiskIdentity(c *gin.Context, includeBrowser bool) *riskRequestIdenti
 	}
 	c.Set(riskIdentityContextKey, identity)
 	return identity
+}
+
+func mustRiskIdentityCloudflarePrefixes(values []string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			panic("invalid pinned Cloudflare prefix: " + value)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
+}
+
+func riskIdentityLastForwardedHopIsCloudflare(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	values := c.Request.Header.Values("X-Forwarded-For")
+	for valueIndex := len(values) - 1; valueIndex >= 0; valueIndex-- {
+		candidates := strings.Split(values[valueIndex], ",")
+		for candidateIndex := len(candidates) - 1; candidateIndex >= 0; candidateIndex-- {
+			candidate := strings.TrimSpace(candidates[candidateIndex])
+			if candidate == "" {
+				continue
+			}
+			address, err := netip.ParseAddr(candidate)
+			if err != nil {
+				return false
+			}
+			for _, prefix := range riskIdentityCloudflarePrefixes {
+				if prefix.Contains(address) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
+func firstRiskIdentityHeader(c *gin.Context, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(c.GetHeader(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sameRiskIdentityAddress(left, right string) bool {
+	leftAddress, leftErr := netip.ParseAddr(strings.TrimSpace(left))
+	rightAddress, rightErr := netip.ParseAddr(strings.TrimSpace(right))
+	return leftErr == nil && rightErr == nil && leftAddress.Unmap() == rightAddress.Unmap()
+}
+
+func validRiskIdentityCountryCode(value string) bool {
+	if len(value) != 2 {
+		return false
+	}
+	for _, character := range value {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return value != "XX"
 }
 
 func newRiskIdentityEventRoot() string {

@@ -95,11 +95,24 @@ func (s *IdentityService) prepare(input IdentityEventReport) (IdentityFact, erro
 				return IdentityFact{}, encryptErr
 			}
 			geoVerified := input.GeoVerified && (input.GeoSource == "cloudflare_verified" || input.GeoSource == "maxmind_local")
-			countryCode := strings.ToUpper(strings.TrimSpace(input.CountryCode))
-			if len(countryCode) != 2 {
-				countryCode = ""
+			countryCode, region, city, asn, geoSource := "", "", "", int64(0), ""
+			if geoVerified {
+				countryCode = strings.ToUpper(strings.TrimSpace(input.CountryCode))
+				if !validIdentityCountryCode(countryCode) {
+					countryCode = ""
+				}
+				region = validateIdentityText(input.Region, 80)
+				city = validateIdentityText(input.City, 120)
+				if input.ASN > 0 && input.ASN <= 4294967295 {
+					asn = input.ASN
+				}
+				geoSource = input.GeoSource
+				geoVerified = countryCode != "" || region != "" || city != "" || asn > 0
 			}
-			fact.Network = &IdentityNetworkFact{LookupKey: lookupKey, PrefixLookupKey: s.protector.LookupKey("ip-prefix", normalized.PrefixValue), Ciphertext: ciphertext, Nonce: nonce, KeyID: s.protector.keyID, Family: normalized.Family, Source: validateIdentityText(input.IPSource, 40), Public: true, CountryCode: countryCode, Region: validateIdentityText(input.Region, 80), City: validateIdentityText(input.City, 120), ASN: input.ASN, GeoSource: validateIdentityText(input.GeoSource, 40), GeoVerified: geoVerified}
+			if !geoVerified {
+				countryCode, region, city, asn, geoSource = "", "", "", 0, ""
+			}
+			fact.Network = &IdentityNetworkFact{LookupKey: lookupKey, PrefixLookupKey: s.protector.LookupKey("ip-prefix", normalized.PrefixValue), Ciphertext: ciphertext, Nonce: nonce, KeyID: s.protector.keyID, Family: normalized.Family, Source: validateIdentityText(input.IPSource, 40), Public: true, CountryCode: countryCode, Region: region, City: city, ASN: asn, GeoSource: geoSource, GeoVerified: geoVerified}
 			fact.IPQualityValid = true
 		}
 	}
@@ -122,6 +135,18 @@ func (s *IdentityService) prepare(input IdentityEventReport) (IdentityFact, erro
 		}
 	}
 	return fact, nil
+}
+
+func validIdentityCountryCode(value string) bool {
+	if len(value) != 2 || value == "XX" {
+		return false
+	}
+	for _, character := range value {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *IdentityService) Summary(ctx context.Context, userID int64) (IdentitySummary, error) {

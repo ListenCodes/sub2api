@@ -216,6 +216,13 @@ risk-control-postgres
 
 Cloudflare 位置头只有在来源链可信时才能使用。直连源站或无法验证来源时，忽略客户端自行提供的 `CF-*` 位置头。
 
+生产环境的 Cloudflare 地区阶段使用边缘 Transform Rule 覆盖专用
+`X-Risk-CF-*` 头，并同时校验 `CF-Connecting-IP`、可信客户端 IP 与
+`X-Forwarded-For` 最后一跳的 Cloudflare 官方 CIDR。源站即使仍可直连，直连请求
+也不能伪造为可信地区。该阶段通过独立 `stage4-geo` 配置发布开启，不改变永久
+Shadow、不启用拒绝或自动封禁。Cloudflare 未提供字段时保留“地区不可用”，不在
+业务请求中调用在线 IP API。
+
 城市定位只能作为辅助证据。风险规则最多使用国家变化、ASN/网络类型和粗粒度区域，不使用经纬度或城市距离直接封禁。
 
 ### 5.4 管理端显示
@@ -651,7 +658,7 @@ V2 上线后执行一次全量重算，之后支持增量和可重复全量重�
 - `RISK_IDENTITY_DEVICE_RULES_ENABLED`：只控制设备风控规则。
 - `RISK_IDENTITY_COMPOSITE_RULES_ENABLED`：只控制综合关联规则；任一基础域不健康时自动失效。
 - `RISK_IDENTITY_SHADOW_UNTIL`：固定 Shadow 截止时间。
-- `RISK_IDENTITY_GEO_SOURCE`：`cloudflare,maxmind` 优先级。
+- `RISK_IDENTITY_GEO_SOURCE`：已激活的可信地区来源；生产当前使用 `cloudflare_verified`，扩展契约同时保留 `maxmind_local`。
 
 发布顺序：
 

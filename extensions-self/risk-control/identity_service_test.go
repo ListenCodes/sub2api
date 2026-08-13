@@ -12,15 +12,48 @@ func identityServiceForPrepareTest(t *testing.T) *IdentityService {
 	key := base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
 	hmacKey := base64.StdEncoding.EncodeToString([]byte("abcdefghijklmnopqrstuvwxyzABCDEF"))
 	service, err := NewIdentityService(IdentityConfig{
-		Enabled:         true,
-		HMACKey:         hmacKey,
-		EncryptionKey:   key,
-		EncryptionKeyID: "test-key",
+		Enabled:             true,
+		IPCollectionEnabled: true,
+		HMACKey:             hmacKey,
+		EncryptionKey:       key,
+		EncryptionKeyID:     "test-key",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return service
+}
+
+func TestIdentityPrepareStoresOnlyVerifiedGeo(t *testing.T) {
+	service := identityServiceForPrepareTest(t)
+	base := IdentityEventReport{EventKey: "geo-event", EventType: "registration_success", EventClass: "registration", Outcome: "success", OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), UserID: 7, ClientIP: "8.8.8.8", IPSource: "cf_connecting_ip", ProxyChainValid: true, CountryCode: "US", Region: "California", City: "Mountain View", ASN: 15169, GeoSource: "cloudflare_verified"}
+
+	unverified, err := service.prepare(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unverified.Network == nil || unverified.Network.CountryCode != "" || unverified.Network.Region != "" || unverified.Network.City != "" || unverified.Network.ASN != 0 || unverified.Network.GeoSource != "" || unverified.Network.GeoVerified {
+		t.Fatalf("unverified geo escaped sanitization: %#v", unverified.Network)
+	}
+
+	base.GeoVerified = true
+	verified, err := service.prepare(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Network == nil || verified.Network.CountryCode != "US" || verified.Network.Region != "California" || verified.Network.City != "Mountain View" || verified.Network.ASN != 15169 || verified.Network.GeoSource != "cloudflare_verified" || !verified.Network.GeoVerified {
+		t.Fatalf("verified geo was not retained: %#v", verified.Network)
+	}
+
+	base.CountryCode = "C1"
+	base.Region, base.City, base.ASN = "", "", 0
+	invalid, err := service.prepare(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invalid.Network == nil || invalid.Network.CountryCode != "" || invalid.Network.GeoVerified {
+		t.Fatalf("invalid country code was retained: %#v", invalid.Network)
+	}
 }
 
 func TestIdentityPrepareDoesNotCorrelateMissingEmail(t *testing.T) {
