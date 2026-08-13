@@ -52,6 +52,7 @@ export interface RiskUserDetail {
 export interface RiskEvent {
   id: number
   type: string
+  identity_version?: 'legacy_v1'
   risk_type?: string
   risk_level?: RiskLevel
   score?: number
@@ -186,6 +187,11 @@ async function fetchIdentityListSummaries(userIDs: number[]): Promise<IdentityLi
   }
 }
 
+function isLegacyAPIObservation(signal?: { risk_type?: string; reason?: string } | null): boolean {
+  if (!signal) return false
+  return signal.risk_type === 'api_request' || /API 请求观察|api_request_observation/i.test(String(signal.reason || ''))
+}
+
 async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListResponse<RiskUserRow>> {
   const params = compactParams({ search: filters.search, status: filters.status, sort_by: filters.sortBy === 'created_at' ? 'created_at' : undefined, sort_order: filters.sortBy === 'created_at' ? filters.sortOrder : undefined })
   const riskSort = filters.sortBy && filters.sortBy !== 'created_at'
@@ -196,7 +202,8 @@ async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListRespons
   const riskItems = await fetchAllRiskSignals(filters, filteringRisk ? undefined : main.items.map((user) => user.id))
   const riskByID = new Map(riskItems.map((item) => [item.id, item]))
   const items: RiskUserRow[] = main.items.map((user) => {
-    const signal = riskByID.get(user.id)
+    const candidate = riskByID.get(user.id)
+    const signal = isLegacyAPIObservation(candidate) ? undefined : candidate
     const riskReason = formatRiskReason(signal?.reason, { eventType: signal?.risk_type, count: signal?.event_count })
     return { ...user, risk_type: signal?.risk_type || null, risk_level: signal?.risk_level || null, risk_score: signal?.score || 0, risk_reason: signal?.reason ? riskReason : null, last_action: signal?.last_action || null, pending: Boolean(signal?.pending), processing_status: signal?.pending ? 'pending' : signal?.last_action === 'review' ? 'reviewed' : signal?.last_action === 'ban' || signal?.last_action === 'auto_ban' ? 'banned' : signal?.last_action === 'unban' ? 'unbanned' : signal ? 'observed' : null, event_count: signal?.event_count || 0, ip_count: signal?.ip_count || 0, device_count: signal?.device_count || 0, last_event_at: signal?.last_event_at || null, last_risk_at: signal?.last_event_at || null } satisfies RiskUserRow
   }).filter((user) => (!filters.pendingOnly || Boolean(user.pending)) && (!filters.riskOnly || Boolean(user.risk_type)) && (!filters.riskType || user.risk_type === filters.riskType) && (!filters.riskLevel || user.risk_level === filters.riskLevel) && (!filters.processingStatus || user.processing_status === filters.processingStatus) && (filters.minScore === undefined || (user.risk_score || 0) >= filters.minScore) && (filters.maxScore === undefined || (user.risk_score || 0) <= filters.maxScore))
@@ -221,7 +228,7 @@ async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListRespons
 
 async function getUserDetail(id: number): Promise<RiskUserDetail> {
   const riskPromise = mainAdminClient
-    .get<{ id: number; username: string; account_status: AccountStatus; risk_type: string; risk_level: RiskLevel; score: number; event_count: number; ip_count?: number; device_count?: number; last_event_at?: string; timeline?: Array<Record<string, unknown>> }>(`/admin/user-risk-control/users/${id}`)
+    .get<{ id: number; username: string; account_status: AccountStatus; risk_type: string; risk_level: RiskLevel; score: number; reason?: string; event_count: number; ip_count?: number; device_count?: number; last_event_at?: string; timeline?: Array<Record<string, unknown>> }>(`/admin/user-risk-control/users/${id}`)
     .then(({ data }) => data)
     .catch((error) => {
       if (error?.response?.status === 404 || error?.status === 404) return null
@@ -240,12 +247,13 @@ async function getUserDetail(id: number): Promise<RiskUserDetail> {
   const data = risk
   const timeline = Array.isArray(data.timeline) ? data.timeline : []
   const events: RiskEvent[] = timeline.map((event) => ({
-    id: Number(event.id), type: String(event.event_type || ''), risk_type: event.risk_type as RiskEvent['risk_type'], risk_level: event.risk_level as RiskLevel | undefined,
-    score: Number(event.score || 0), reason: formatRiskReason(event.reason, { eventType: String(event.risk_type || event.event_type || ''), ruleCode: Array.isArray(event.rule_codes) ? String(event.rule_codes[0] || '') : '' }), error_code: String(event.error_code || ''), endpoint: String(event.endpoint || ''), model: String(event.model || ''), ip: String(event.ip || ''), device_id: String(event.device_id || ''), decision: String(event.decision || ''), rule_codes: Array.isArray(event.rule_codes) ? event.rule_codes.map(String) : [], evidence: (event.evidence || {}) as Record<string, unknown>, occurred_at: String(event.occurred_at || event.created_at || ''),
+    id: Number(event.id), type: String(event.event_type || ''), identity_version: event.identity_version === 'legacy_v1' ? 'legacy_v1' : undefined, risk_type: event.risk_type as RiskEvent['risk_type'], risk_level: event.risk_level as RiskLevel | undefined,
+    score: Number(event.score || 0), reason: formatRiskReason(event.reason, { eventType: String(event.risk_type || event.event_type || ''), identityVersion: String(event.identity_version || ''), ruleCode: Array.isArray(event.rule_codes) ? String(event.rule_codes[0] || '') : '' }), error_code: String(event.error_code || ''), endpoint: String(event.endpoint || ''), model: String(event.model || ''), ip: String(event.ip || ''), device_id: String(event.device_id || ''), decision: String(event.decision || ''), rule_codes: Array.isArray(event.rule_codes) ? event.rule_codes.map(String) : [], evidence: (event.evidence || {}) as Record<string, unknown>, occurred_at: String(event.occurred_at || event.created_at || ''),
   }))
+  const subjectReason = data.reason ? formatRiskReason(data.reason, { eventType: data.risk_type }) : null
   return {
-    user: { id: data.id, username: main.data.username || data.username, email: main.data.email, status: main.data.status, risk_type: data.risk_type, risk_level: data.risk_level, risk_score: data.score, risk_reason: events[0]?.reason || null, event_count: data.event_count, ip_count: data.ip_count, device_count: data.device_count, last_event_at: data.last_event_at || null },
-    summary: { score: data.score, level: data.risk_level, reason: events[0]?.reason || '', event_count: data.event_count },
+    user: { id: data.id, username: main.data.username || data.username, email: main.data.email, status: main.data.status, risk_type: data.risk_type || null, risk_level: data.risk_level === 'none' ? null : data.risk_level, risk_score: data.score, risk_reason: subjectReason, event_count: data.event_count, ip_count: data.ip_count, device_count: data.device_count, last_event_at: data.last_event_at || null },
+    summary: { score: data.score, level: data.risk_level, reason: subjectReason || '', event_count: data.event_count },
     events, audit: audit.items, associations: { ip_count: Number(data.ip_count || 0), device_count: Number(data.device_count || 0) },
   }
 }

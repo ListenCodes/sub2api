@@ -35,6 +35,8 @@ describe('user risk-control labels', () => {
 
   it('translates legacy rule-hit reasons into direct administrator language', () => {
     expect(formatRiskReason('规则 api_request_observation 命中')).toBe('V1 历史正常 API 流量记录：该规则已停用，不再计入账号风险摘要。')
+    expect(formatRiskReason('命中规则：API 请求观察（24 小时内1 次事件）')).toBe('V1 历史正常 API 流量记录：该规则已停用，不再计入账号风险摘要。')
+    expect(formatRiskReason('gateway request completed', { eventType: 'api_request', identityVersion: 'legacy_v1' })).toBe('V1 历史正常 API 流量记录：该规则已停用，不再计入账号风险摘要。')
     expect(formatRiskReason('规则 registration_identity_abuse 命中')).toBe('同邮箱或设备重复注册：同一邮箱或设备在短时间内重复提交注册。')
     expect(formatRiskReason('规则 registration_ip_multi_account 命中')).toBe('同 IP 多账号注册：同一真实客户端 IP 在短时间内注册多个不同账号。')
   })

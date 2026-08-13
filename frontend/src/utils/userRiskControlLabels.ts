@@ -118,6 +118,7 @@ export function formatProcessingStatus(value: unknown): string {
 
 export type RiskReasonEvidence = {
   eventType?: string
+  identityVersion?: string
   ruleName?: string
   ruleCode?: string
   count?: number
@@ -140,6 +141,10 @@ function reasonVerb(eventType: string): string {
 
 export function formatRiskReason(rawReason: unknown, evidence: RiskReasonEvidence = {}): string {
   const reason = String(rawReason ?? '').trim()
+  const eventType = String(evidence.eventType || '').trim()
+  if ((evidence.identityVersion === 'legacy_v1' && eventType === 'api_request') || /API 请求观察|api_request_observation/i.test(reason)) {
+    return legacyRuleReasons.api_request_observation
+  }
   if (reason) {
     const legacyRule = reason.match(/^规则\s+([a-z0-9_-]+)\s+命中$/i)
     if (legacyRule) return legacyRuleReasons[legacyRule[1]] || `命中规则：${legacyRule[1]}`

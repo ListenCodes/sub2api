@@ -169,3 +169,39 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 		t.Fatalf("write rebuild before Shadow deadline error = %v", err)
 	}
 }
+
+func TestLegacyAPIObservationIsNotProjectedAsUserRisk(t *testing.T) {
+	ctx := context.Background()
+	db := openIsolatedRiskTestDB(t)
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSQLRepository(db)
+	base := time.Now().UTC().Truncate(time.Second)
+	insert := func(event EventRecord) {
+		t.Helper()
+		if _, _, err := repo.InsertEvent(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(EventRecord{EventKey: "mixed-login", EventType: "login_failure", UserID: 501, RiskType: "login_failure", RiskLevel: "high", Score: 70, Reason: "login failure evidence", Decision: "review", OccurredAt: base.Add(-time.Minute).Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "mixed-api", EventType: "api_request", UserID: 501, RiskType: "api_request", RiskLevel: "low", Score: 0, Reason: "API 请求观察", Decision: "observe", OccurredAt: base.Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "api-only", EventType: "api_request", UserID: 502, RiskType: "api_request", RiskLevel: "low", Score: 0, Reason: "API 请求观察", Decision: "observe", OccurredAt: base.Format(time.RFC3339Nano)})
+	for _, userID := range []int64{501, 502} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,last_event_at) VALUES($1,'api_request','low',0,'命中规则：API 请求观察（24 小时内1 次事件）',1,'observe',$2)`, userID, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mixed, found, err := repo.GetSubject(ctx, 501)
+	if err != nil || !found || mixed.RiskType != "login_failure" || mixed.Score != 70 || mixed.EventCount != 1 {
+		t.Fatalf("mixed legacy projection = %+v, found=%v, error=%v", mixed, found, err)
+	}
+	apiOnly, found, err := repo.GetSubject(ctx, 502)
+	if err != nil || !found || apiOnly.RiskType != "" || apiOnly.RiskLevel != "none" || apiOnly.Score != 0 || apiOnly.Reason != "" || apiOnly.EventCount != 0 {
+		t.Fatalf("API-only legacy projection = %+v, found=%v, error=%v", apiOnly, found, err)
+	}
+	items, total, err := repo.ListSubjects(ctx, 20, 0, "api_request", "", nil)
+	if err != nil || total != 0 || len(items) != 0 {
+		t.Fatalf("legacy API risk filter = total:%d items:%+v error:%v", total, items, err)
+	}
+}

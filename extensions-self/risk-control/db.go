@@ -20,6 +20,35 @@ type SQLRepository struct{ db *sql.DB }
 
 func NewSQLRepository(db *sql.DB) *SQLRepository { return &SQLRepository{db: db} }
 
+const riskSubjectProjectionCTE = `WITH projected_risk_subjects AS (
+SELECT s.id,s.user_id,s.username,s.email_hash,s.account_status,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.risk_type,'') ELSE s.risk_type END AS risk_type,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.risk_level,'none') ELSE s.risk_level END AS risk_level,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.score,0) ELSE s.score END AS score,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.reason,'') ELSE s.reason END AS reason,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.event_count,0) ELSE s.event_count END AS event_count,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.ip_count,0) ELSE s.ip_count END AS ip_count,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.device_count,0) ELSE s.device_count END AS device_count,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.decision,'') ELSE s.last_action END AS last_action,
+  CASE WHEN legacy_api.is_legacy THEN COALESCE(replacement.decision='review',FALSE) ELSE s.pending END AS pending,
+  CASE WHEN legacy_api.is_legacy THEN replacement.occurred_at ELSE s.last_event_at END AS last_event_at
+FROM risk_subjects s
+CROSS JOIN LATERAL (SELECT s.risk_type='api_request' OR s.reason ILIKE '%API 请求观察%' AS is_legacy) legacy_api
+LEFT JOIN LATERAL (
+  SELECT e.id,e.risk_type,e.risk_level,e.score,e.reason,e.decision,e.occurred_at,
+    (SELECT COUNT(*)::int FROM risk_events x WHERE x.user_id=s.user_id AND x.event_type<>'api_request') AS event_count,
+    (SELECT COUNT(DISTINCT NULLIF(x.ip_hash,''))::int FROM risk_events x WHERE x.user_id=s.user_id AND x.event_type<>'api_request') AS ip_count,
+    (SELECT COUNT(DISTINCT NULLIF(x.device_hash,''))::int FROM risk_events x WHERE x.user_id=s.user_id AND x.event_type<>'api_request') AS device_count
+  FROM risk_events e
+  WHERE legacy_api.is_legacy AND e.user_id=s.user_id AND e.event_type<>'api_request'
+  ORDER BY e.score DESC,
+    CASE e.risk_level WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+    CASE e.decision WHEN 'ban' THEN 4 WHEN 'auto_ban' THEN 4 WHEN 'review' THEN 3 WHEN 'observe' THEN 2 ELSE 0 END DESC,
+    e.occurred_at DESC,e.id DESC
+  LIMIT 1
+) replacement ON TRUE
+) `
+
 func ApplySchema(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return errors.New("database is nil")
@@ -208,10 +237,10 @@ func (r *SQLRepository) ListSubjects(ctx context.Context, limit, offset int, ris
 	}
 	whereClause := strings.Join(where, " AND ")
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_subjects WHERE `+whereClause, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, riskSubjectProjectionCTE+`SELECT COUNT(*) FROM projected_risk_subjects WHERE `+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM risk_subjects WHERE `+whereClause+fmt.Sprintf(" ORDER BY score DESC,last_event_at DESC NULLS LAST LIMIT $%d OFFSET $%d", index, index+1), append(args, limit, offset)...)
+	rows, err := r.db.QueryContext(ctx, riskSubjectProjectionCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE `+whereClause+fmt.Sprintf(" ORDER BY score DESC,last_event_at DESC NULLS LAST LIMIT $%d OFFSET $%d", index, index+1), append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -229,7 +258,7 @@ func (r *SQLRepository) ListSubjects(ctx context.Context, limit, offset int, ris
 
 func (r *SQLRepository) GetSubject(ctx context.Context, userID int64) (RiskSubject, bool, error) {
 	var item RiskSubject
-	err := r.db.QueryRowContext(ctx, `SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM risk_subjects WHERE user_id=$1`, userID).Scan(&item.ID, &item.UserID, &item.Username, &item.EmailHash, &item.AccountStatus, &item.RiskType, &item.RiskLevel, &item.Score, &item.Reason, &item.EventCount, &item.IPCount, &item.DeviceCount, &item.LastAction, &item.Pending, &item.LastEventAt)
+	err := r.db.QueryRowContext(ctx, riskSubjectProjectionCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE user_id=$1`, userID).Scan(&item.ID, &item.UserID, &item.Username, &item.EmailHash, &item.AccountStatus, &item.RiskType, &item.RiskLevel, &item.Score, &item.Reason, &item.EventCount, &item.IPCount, &item.DeviceCount, &item.LastAction, &item.Pending, &item.LastEventAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RiskSubject{}, false, nil
 	}

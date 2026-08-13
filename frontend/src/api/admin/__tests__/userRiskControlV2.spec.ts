@@ -49,6 +49,18 @@ describe('userRiskControlV2API', () => {
     }))
   })
 
+  it('does not expose a legacy API observation as the account risk summary', async () => {
+    vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({
+      data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1 },
+    } as never).mockResolvedValueOnce({
+      data: { items: [{ id: 7, risk_type: 'api_request', risk_level: 'low', score: 0, reason: '命中规则：API 请求观察（24 小时内1 次事件）', event_count: 206 }], total: 1 },
+    } as never).mockResolvedValueOnce({ data: { items: [] } } as never)
+
+    await expect(userRiskControlV2API.listUsers()).resolves.toMatchObject({
+      items: [{ id: 7, risk_type: null, risk_level: null, risk_score: 0, risk_reason: null, event_count: 0 }],
+    })
+  })
+
   it('uses the main admin user API for ban and unban', async () => {
     const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValue({
       data: { user: { id: 7, status: 'disabled' } },
