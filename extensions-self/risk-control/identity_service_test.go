@@ -73,6 +73,45 @@ func TestAPISuccessNeverWritesCrossAccountIdentityLinks(t *testing.T) {
 	}
 }
 
+func TestIdentityRuleDomainEnabledRequiresGlobalAndDomainSwitches(t *testing.T) {
+	cfg := IdentityConfig{
+		RulesEnabled:            true,
+		IPCollectionEnabled:     true,
+		DeviceCollectionEnabled: true,
+		IPDomainEnabled:         true,
+		DeviceDomainEnabled:     true,
+		CompositeDomainEnabled:  true,
+	}
+	for _, domain := range []string{"account", "ip", "device", "composite"} {
+		if !identityRuleDomainEnabled(cfg, domain) {
+			t.Fatalf("domain %q should be enabled", domain)
+		}
+	}
+	cfg.RulesEnabled = false
+	if identityRuleDomainEnabled(cfg, "account") || identityRuleDomainEnabled(cfg, "ip") {
+		t.Fatal("global rule switch must disable every identity rule")
+	}
+	cfg.RulesEnabled = true
+	cfg.DeviceDomainEnabled = false
+	if identityRuleDomainEnabled(cfg, "device") || identityRuleDomainEnabled(cfg, "composite") {
+		t.Fatal("device domain switch must disable device and composite rules")
+	}
+}
+
+func TestIdentityRuleEffectiveStateRequiresHealthyQuality(t *testing.T) {
+	cfg := IdentityConfig{RulesEnabled: true, IPCollectionEnabled: true, IPDomainEnabled: true}
+	if got := identityRuleEffectiveState(cfg, "ip", map[string]string{"ip": "paused"}); got != "paused" {
+		t.Fatalf("IP effective state = %q", got)
+	}
+	if got := identityRuleEffectiveState(cfg, "account", nil); got != "healthy" {
+		t.Fatalf("account effective state = %q", got)
+	}
+	cfg.RulesEnabled = false
+	if got := identityRuleEffectiveState(cfg, "ip", map[string]string{"ip": "healthy"}); got != "disabled" {
+		t.Fatalf("disabled global state = %q", got)
+	}
+}
+
 func TestIdentityPrepareRejectsAPISuccessOlderThanDedupLedger(t *testing.T) {
 	service := identityServiceForPrepareTest(t)
 	_, err := service.prepare(IdentityEventReport{

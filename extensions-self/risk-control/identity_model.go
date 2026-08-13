@@ -203,6 +203,27 @@ type IdentityHealth struct {
 	Quality24H   map[string]any    `json:"quality_24h"`
 }
 
+type IdentityRule struct {
+	Code              string `json:"code"`
+	Domain            string `json:"domain"`
+	ConfiguredEnabled bool   `json:"configured_enabled"`
+	Enabled           bool   `json:"enabled"`
+	State             string `json:"state"`
+	WindowSeconds     int    `json:"window_seconds"`
+	Threshold         int    `json:"threshold"`
+	Score             int    `json:"score"`
+	Mode              string `json:"mode"`
+	Revision          int    `json:"revision"`
+	UpdatedAt         string `json:"updated_at"`
+}
+
+type LegacyV1CleanupResult struct {
+	Applied         bool  `json:"applied"`
+	EventsDeleted   int64 `json:"events_deleted"`
+	SubjectsDeleted int64 `json:"subjects_deleted"`
+	RulesDeleted    int64 `json:"rules_deleted"`
+}
+
 type RebuildResult struct {
 	ID                 int64            `json:"id"`
 	DryRun             bool             `json:"dry_run"`

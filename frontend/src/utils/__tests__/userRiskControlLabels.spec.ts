@@ -9,6 +9,10 @@ import {
 } from '@/utils/userRiskControlLabels'
 
 describe('user risk-control labels', () => {
+  it('translates the one-time V1 cleanup audit action', () => {
+    expect(formatRiskAction('purge_legacy_v1')).toBe('清理 V1 历史数据')
+  })
+
   it('formats protocol enums as Chinese administrator labels', () => {
     expect(formatRiskType('login_failure')).toBe('登录失败')
     expect(formatRiskLevel('critical')).toBe('严重风险')

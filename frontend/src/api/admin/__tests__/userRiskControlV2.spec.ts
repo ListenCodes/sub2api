@@ -3,6 +3,13 @@ import { afterEach } from 'vitest'
 import { mainAdminClient, userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 
 describe('userRiskControlV2API', () => {
+
+  it('loads the independent V2 identity rule domains', async () => {
+    const get = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({ data: { items: [{ code: 'v2_registration_ip_accounts', domain: 'ip', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 5, score: 60, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' }] } } as never)
+    const rules = await userRiskControlV2API.listIdentityRules()
+    expect(get).toHaveBeenCalledWith('/admin/user-risk-control/identity-rules')
+    expect(rules).toEqual([expect.objectContaining({ code: 'v2_registration_ip_accounts', domain: 'ip', mode: 'shadow' })])
+  })
   afterEach(() => vi.restoreAllMocks())
 
   it('requests real users with risk filters and pagination', async () => {

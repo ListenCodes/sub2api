@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -156,14 +157,84 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if err := repo.EnsureShadowActivation(ctx, activation, base); err != nil {
 		t.Fatalf("record initial Shadow: %v", err)
 	}
-	if err := repo.ActivateShadowRules(ctx); err != nil {
-		t.Fatalf("activate Shadow rules: %v", err)
-	}
-	if err := db.QueryRowContext(ctx, `SELECT enabled,action FROM risk_rules WHERE code='api_request_observation'`).Scan(&enabled, &action); err != nil {
+	var identityEventsBefore int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_identity_events`).Scan(&identityEventsBefore); err != nil {
 		t.Fatal(err)
 	}
-	if enabled || action != "observe" {
-		t.Fatalf("V1 rule was not retired at Stage 3: enabled=%v action=%q", enabled, action)
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at) VALUES ('legacy-cleanup','login_failure',909,'login_failure','legacy evidence',$1)`, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_event_keys(event_key,event_id) VALUES ('legacy-cleanup',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,last_event_at) VALUES (909,'login_failure','high',70,'legacy evidence',1,'review',$1)`, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason) VALUES (7,'review','user','909','success','keep audit')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_rules(code,name,event_types,enabled,window_seconds,threshold,score,risk_level,action) VALUES ('registration_abuse','legacy combined rule','["registration_attempt","registration_success"]',FALSE,600,3,80,'critical','reject_candidate')`); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := repo.CleanupLegacyV1(ctx)
+	if err != nil {
+		t.Fatalf("cleanup legacy V1: %v", err)
+	}
+	if !cleanup.Applied || cleanup.EventsDeleted != 1 || cleanup.SubjectsDeleted != 1 || cleanup.RulesDeleted != 4 {
+		t.Fatalf("cleanup result = %+v", cleanup)
+	}
+	for table, want := range map[string]int{"risk_event_keys": 0, "risk_events": 0, "risk_subjects": 0, "risk_identity_events": identityEventsBefore} {
+		var got int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s count = %d, want %d", table, got, want)
+		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT enabled,action FROM risk_rules WHERE code='api_request_observation'`).Scan(&enabled, &action); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("retired V1 rule query error = %v, want sql.ErrNoRows", err)
+	}
+	var genericRuleCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_rules WHERE code='login_failure_burst'`).Scan(&genericRuleCount); err != nil || genericRuleCount != 1 {
+		t.Fatalf("generic rule count = %d, error = %v", genericRuleCount, err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_rules(code,name,event_types,enabled,window_seconds,threshold,score,risk_level,action) VALUES
+('registration_identity_abuse','old image seed','["registration_attempt"]',TRUE,600,3,80,'critical','reject_candidate'),
+('registration_ip_multi_account','old image seed','["registration_success"]',TRUE,600,5,60,'high','review'),
+('api_request_observation','old image seed','["api_request"]',FALSE,86400,1,0,'low','observe') ON CONFLICT (code) DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	var retiredRuleCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_rules WHERE code IN ('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation')`).Scan(&retiredRuleCount); err != nil || retiredRuleCount != 0 {
+		t.Fatalf("retired rules after legacy image seed = %d, error = %v", retiredRuleCount, err)
+	}
+	var auditCount, cleanupEvents int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX((metadata->>'events_deleted')::int) FILTER (WHERE action='purge_legacy_v1'),0) FROM risk_audit_logs`).Scan(&auditCount, &cleanupEvents); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 2 || cleanupEvents != 1 {
+		t.Fatalf("audit count = %d, cleanup events = %d", auditCount, cleanupEvents)
+	}
+	identityRules, err := repo.ListIdentityRules(ctx)
+	if err != nil || len(identityRules) != 4 {
+		t.Fatalf("identity rules = %#v, error = %v", identityRules, err)
+	}
+	adminCfg := activation
+	adminCfg.AdminEnabled = true
+	adminCfg.IPDomainEnabled = true
+	adminCfg.DeviceDomainEnabled = true
+	adminCfg.CompositeDomainEnabled = true
+	serverCfg := Config{InternalSecret: testSecret, Mode: "shadow", Identity: adminCfg}
+	server := NewHTTPServer(serverCfg, NewSQLRepository(db))
+	request := signedRequest("GET", "/api/v1/admin/identity-rules", nil, testSecret, "nonce-identity-rules", base)
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"v2_registration_composite_accounts"`) {
+		t.Fatalf("identity rule response = %d %s", response.Code, response.Body.String())
+	}
+	if second, err := repo.CleanupLegacyV1(ctx); err != nil || second.Applied {
+		t.Fatalf("idempotent cleanup = %+v, error = %v", second, err)
 	}
 	if _, err := repo.Rebuild(ctx, 7, false, activation); err == nil || !strings.Contains(err.Error(), "Shadow period") {
 		t.Fatalf("write rebuild before Shadow deadline error = %v", err)

@@ -1,5 +1,5 @@
 import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlRulesView from '@/views/admin/UserRiskControlRulesView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -11,6 +11,7 @@ import SearchInput from '@/components/common/SearchInput.vue'
 vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
     listRules: vi.fn(),
+    listIdentityRules: vi.fn(),
     updateRule: vi.fn(),
     createRule: vi.fn(),
     testRule: vi.fn(),
@@ -19,6 +20,12 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
+beforeEach(() => {
+  vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([
+    { code: 'v2_registration_email_retries', domain: 'account', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 5, score: 0, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
+    { code: 'v2_registration_device_accounts', domain: 'device', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 3, score: 70, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
+  ])
+})
 afterAll(() => { delete config.global.stubs.RouterLink })
 afterEach(() => {
   document.body.innerHTML = ''
@@ -56,6 +63,9 @@ describe('UserRiskControlRulesView', () => {
     await flushPromises()
 
     expect(wrapper.findComponent(DataTable).exists()).toBe(true)
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('同邮箱重复注册尝试')
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('同浏览器实例多账号注册')
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('已启用 · Shadow')
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
     expect(wrapper.findComponent(BaseDialog).props('show')).toBe(true)
     expect(wrapper.findComponent(BaseDialog).props('closeOnClickOutside')).toBe(true)
@@ -79,6 +89,43 @@ describe('UserRiskControlRulesView', () => {
     expect(wrapper.find('[data-testid="rule-editor-1"]').exists()).toBe(false)
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     expect(bodyElement('[data-testid="rule-editor-1"]')).toBeTruthy()
+  })
+
+  it('keeps generic rules available when the V2 rule endpoint is unavailable', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
+    vi.mocked(userRiskControlV2API.listIdentityRules).mockRejectedValue(new Error('identity rules unavailable'))
+
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('登录失败爆发')
+    expect(wrapper.get('[data-testid="identity-rules-error"]').text()).toContain('identity rules unavailable')
+  })
+
+  it('does not report configured V2 rules as active before the rollout switch is effective', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+    vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([
+      { code: 'v2_registration_ip_accounts', domain: 'ip', configured_enabled: true, enabled: false, state: 'disabled', window_seconds: 600, threshold: 5, score: 60, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
+    ])
+
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('尚未启用')
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('配置已开 · 尚未生效')
+  })
+
+  it('shows the data-quality circuit breaker instead of claiming the rule is active', async () => {
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+    vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([
+      { code: 'v2_registration_ip_accounts', domain: 'ip', configured_enabled: true, enabled: false, state: 'paused', window_seconds: 600, threshold: 5, score: 60, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
+    ])
+
+    const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('数据质量保护中')
+    expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('数据质量异常 · 已暂停')
   })
 
   it('loads a scenario rule, saves changes, and shows test output', async () => {
@@ -182,8 +229,8 @@ describe('UserRiskControlRulesView', () => {
 
     const codeTarget = bodyElement('[data-testid="rule-code-input"]')
     const codeInput = codeTarget.matches('input') ? codeTarget as HTMLInputElement : codeTarget.querySelector<HTMLInputElement>('input')
-    expect(codeInput?.value).toBe('registration_identity_abuse')
-    expect(bodyElement('[data-testid="template-registration_identity_abuse"]').getAttribute('aria-pressed')).toBe('true')
+    expect(codeInput?.value).toBe('login_failure_burst')
+    expect(bodyElement('[data-testid="template-login_failure_burst"]').getAttribute('aria-pressed')).toBe('true')
   })
 
   it('filters the complete rule list locally by text, enabled state, and risk level', async () => {

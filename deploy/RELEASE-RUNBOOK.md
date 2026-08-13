@@ -399,6 +399,15 @@ Identity V2 must advance in order. A failure rolls back only the current identit
 3. Stage 2 enables `RISK_IDENTITY_ADMIN_ENABLED` for administrator sampling of full IP, browser instance, API client, and associated-account evidence. The extension never receives main-user-table credentials.
 4. Stage 3 sets `RISK_IDENTITY_SHADOW_UNTIL` at least 14 days ahead on initial activation, then enables the global, IP, device, and composite rule switches. Every V2 signal remains Shadow; registration rejection and automatic bans are forbidden.
 
+On the first extensions start with V2 rules enabled, migration version 3 performs
+the approved one-time V1 cleanup inside one transaction. It deletes the current
+`legacy_v1` event snapshot, V1 event-key ledger, derived subject projection, and
+retired registration/API-observation rule configurations; it preserves audit
+records, all V2 identity tables, account-monitor tables, and generic rule
+configurations. Confirm the prepared release backup contains a valid
+`risk_control_db.dump` before apply. The cleanup is recorded in the risk audit
+log with row counts and never runs again.
+
 Do not edit the production `.env` directly for these transitions. Use the
 administrator-only `POST /api/v1/admin/system/identity-rollout/prepare` and
 `POST /api/v1/admin/system/identity-rollout/apply` two-phase endpoints. Prepare
@@ -674,6 +683,12 @@ The additive `extensions_self_ro.public_group_catalog` view and appended
 Database restore is not automatic. Restore `risk_control_db.dump` only for
 separately confirmed schema/data corruption; a normal code rollback must not
 discard newly collected risk or monitor data.
+
+The one-time V1 cleanup is not undone by an image or configuration rollback. If
+the administrator explicitly decides to recover those removed V1 rows, stop
+writers and perform a separately approved manual restore from the matching
+pre-release `risk_control_db.dump`; that restore also reverts newer extension
+database writes and must not be combined with an automatic rollback.
 
 For an administrator-requested historical rollback, the panel must expose
 loading, error/retry, empty, selection, prepared countdown, expiry, and apply

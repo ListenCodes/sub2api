@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,26 @@ func TestIdentitySchemaStageZeroDoesNotMutateExistingV1Rules(t *testing.T) {
 	if !strings.Contains(schemaSQL, "risk_identity_shadow_activation") {
 		t.Fatal("schema does not persist the initial 14-day Shadow activation")
 	}
+}
+
+func TestLegacyV1CleanupIsActivationGatedAndAudited(t *testing.T) {
+	for _, expected := range []string{"legacyV1CleanupMigrationVersion = 3", "purge_legacy_v1", "DELETE FROM risk_events WHERE identity_version='legacy_v1'", "DELETE FROM risk_subjects"} {
+		if !strings.Contains(identityDatabaseSourceForContract(t), expected) {
+			t.Fatalf("identity cleanup is missing %q", expected)
+		}
+	}
+	if !strings.Contains(schemaSQL, "risk_reject_retired_v1_rule_insert") {
+		t.Fatal("schema is missing the retired V1 rule rollback guard")
+	}
+}
+
+func identityDatabaseSourceForContract(t *testing.T) string {
+	t.Helper()
+	payload, err := os.ReadFile("identity_db.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
 }
 
 func TestLegacyRiskProjectionUsesSetBasedAggregation(t *testing.T) {

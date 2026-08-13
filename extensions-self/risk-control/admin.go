@@ -149,6 +149,10 @@ func (s *HTTPServer) handleRuleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if isRetiredV1IdentityRule(input.Code) {
+		writeError(w, http.StatusBadRequest, errors.New("retired V1 rule code is reserved"))
+		return
+	}
 	created, err := s.service.repo.CreateRule(r.Context(), input.Rule)
 	if errors.Is(err, ErrRuleCodeConflict) {
 		writeError(w, http.StatusConflict, err)
@@ -213,7 +217,7 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 
 func isRetiredV1IdentityRule(code string) bool {
 	switch strings.TrimSpace(code) {
-	case "registration_identity_abuse", "registration_ip_multi_account", "api_request_observation":
+	case "registration_abuse", "registration_identity_abuse", "registration_ip_multi_account", "api_request_observation":
 		return true
 	default:
 		return false

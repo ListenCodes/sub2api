@@ -115,14 +115,20 @@ WHERE code = 'registration_abuse'
 
 INSERT INTO risk_rules (code, name, description, event_types, count_strategy, enabled, window_seconds, threshold, score, risk_level, action)
 VALUES
- ('registration_identity_abuse', '同邮箱或设备重复注册', '同一邮箱或设备在短时间内重复提交注册', '["registration_attempt", "registration_success"]', 'subject_device_events', TRUE, 600, 3, 80, 'critical', 'reject_candidate'),
- ('registration_ip_multi_account', '同 IP 多账号注册', '同一真实客户端 IP 在短时间内注册多个不同账号', '["registration_success"]', 'ip_distinct_subjects', TRUE, 600, 5, 60, 'high', 'review'),
  ('login_failure_burst', '登录失败爆发', '同一账号连续登录失败', '["login_failure"]', 'associated_events', TRUE, 600, 5, 70, 'high', 'review'),
  ('api_error_burst', 'API 错误爆发', '同一用户短时间内出现大量 API 错误', '["api_error"]', 'associated_events', TRUE, 300, 10, 35, 'medium', 'observe'),
  ('content_risk', '内容风险', '命中内容安全策略', '["content_risk"]', 'associated_events', TRUE, 86400, 1, 85, 'high', 'review'),
  ('quota_abuse', '配额滥用', '持续触发配额或计费限制', '["quota_exceeded"]', 'associated_events', TRUE, 3600, 5, 55, 'medium', 'review'),
- ('upstream_error', '上游错误', '持续触发上游错误', '["upstream_error"]', 'associated_events', TRUE, 600, 8, 25, 'low', 'observe'),
- ('api_request_observation', 'V1 历史正常 API 流量记录', 'V1 历史正常 API 流量规则；已停用且不再计入用户风险摘要', '["api_request"]', 'associated_events', FALSE, 86400, 1, 0, 'low', 'observe')
+ ('upstream_error', '上游错误', '持续触发上游错误', '["upstream_error"]', 'associated_events', TRUE, 600, 8, 25, 'low', 'observe')
+ON CONFLICT (code) DO NOTHING;
+
+INSERT INTO risk_rules (code, name, description, event_types, count_strategy, enabled, window_seconds, threshold, score, risk_level, action)
+SELECT seed.* FROM (VALUES
+ ('registration_identity_abuse', '同邮箱或设备重复注册', '同一邮箱或设备在短时间内重复提交注册', '["registration_attempt", "registration_success"]'::jsonb, 'subject_device_events', TRUE, 600, 3, 80, 'critical', 'reject_candidate'),
+ ('registration_ip_multi_account', '同 IP 多账号注册', '同一真实客户端 IP 在短时间内注册多个不同账号', '["registration_success"]'::jsonb, 'ip_distinct_subjects', TRUE, 600, 5, 60, 'high', 'review'),
+ ('api_request_observation', 'V1 历史正常 API 流量记录', 'V1 历史正常 API 流量规则；已停用且不再计入用户风险摘要', '["api_request"]'::jsonb, 'associated_events', FALSE, 86400, 1, 0, 'low', 'observe')
+) AS seed(code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action)
+WHERE NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=3)
 ON CONFLICT (code) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS risk_signature_nonces (
@@ -251,6 +257,29 @@ CREATE TABLE IF NOT EXISTS risk_identity_rules (
     revision INTEGER NOT NULL DEFAULT 1,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE OR REPLACE FUNCTION risk_reject_retired_v1_rule()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.code IN ('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation')
+       AND EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=3) THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname='risk_reject_retired_v1_rule_insert'
+          AND tgrelid='risk_rules'::regclass
+          AND NOT tgisinternal
+    ) THEN
+        CREATE TRIGGER risk_reject_retired_v1_rule_insert
+        BEFORE INSERT ON risk_rules
+        FOR EACH ROW EXECUTE FUNCTION risk_reject_retired_v1_rule();
+    END IF;
+END $$;
 DO $$ BEGIN
     IF EXISTS (
         SELECT 1 FROM pg_constraint

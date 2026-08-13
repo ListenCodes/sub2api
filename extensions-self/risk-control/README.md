@@ -31,6 +31,15 @@ no review or enforcement mode, do not reject registration, and do not ban or
 change an account. The generic `RISK_CONTROL_MODE` rollout below applies only
 to the pre-existing non-identity rules.
 
+When V2 rules are enabled for the first time, migration version 3 performs the
+approved one-time V1 cleanup. It removes all `legacy_v1` risk events, the V1
+event-key ledger, derived `risk_subjects`, and the retired registration/API
+observation rule configurations. It keeps administrator audit records, V2
+identity facts and signals, account-monitor data, and the remaining generic
+risk rule configurations. The cleanup records its row counts in the audit log
+and is not repeated. A release backup is the only recovery source for removed
+V1 data.
+
 Repeated registration attempts for one normalized email create a zero-score
 `account` observation keyed only by the email HMAC. It never enters the user
 risk summary, and IP/device/composite rebuilds do not remove that evidence.

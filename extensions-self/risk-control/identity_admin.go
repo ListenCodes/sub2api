@@ -172,6 +172,19 @@ func (s *HTTPServer) handleIdentityHealth(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, health)
 }
 
+func (s *HTTPServer) handleIdentityRules(w http.ResponseWriter, r *http.Request) {
+	if s.identity == nil || !s.cfg.Identity.AdminEnabled {
+		writeError(w, http.StatusServiceUnavailable, errors.New("identity admin is disabled"))
+		return
+	}
+	rules, err := s.identity.Rules(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": rules})
+}
+
 func (s *HTTPServer) handleIdentityRebuild(w http.ResponseWriter, r *http.Request, dryRun bool) {
 	if s.identity == nil || !s.cfg.Identity.AdminEnabled {
 		writeError(w, http.StatusServiceUnavailable, errors.New("identity admin is disabled"))

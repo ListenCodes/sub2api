@@ -13,6 +13,33 @@
               新建规则
             </button>
           </div>
+          <section class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-v2-rules">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">V2 身份规则</h2>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">邮箱、真实 IP、浏览器实例和综合关联独立计算</p>
+              </div>
+              <span :class="identityRulesActive ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'" class="rounded-md px-2 py-1 text-xs font-medium">{{ identityRulesHeader }}</span>
+            </div>
+            <p v-if="identityRulesError" class="mb-3 text-sm text-red-600 dark:text-red-300" data-testid="identity-rules-error">{{ identityRulesError }}</p>
+            <div class="overflow-x-auto">
+              <table class="w-full min-w-[760px] text-left text-sm">
+                <thead class="text-xs text-gray-500 dark:text-gray-400">
+                  <tr><th class="pb-2 pr-4 font-medium">规则</th><th class="pb-2 pr-4 font-medium">独立域</th><th class="pb-2 pr-4 font-medium">触发条件</th><th class="pb-2 pr-4 font-medium">风险分</th><th class="pb-2 font-medium">状态</th></tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-for="rule in identityRules" :key="rule.code" :data-testid="`identity-rule-${rule.code}`">
+                    <td class="py-2.5 pr-4"><p class="font-medium text-gray-900 dark:text-white">{{ identityRuleName(rule.code) }}</p><p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ rule.code }}</p></td>
+                    <td class="py-2.5 pr-4">{{ identityDomainLabel(rule.domain) }}</td>
+                    <td class="py-2.5 pr-4">{{ identityRuleCondition(rule) }}</td>
+                    <td class="py-2.5 pr-4">{{ rule.score ? rule.score : '0（仅观察）' }}</td>
+                    <td class="py-2.5"><span :class="rule.enabled ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'">{{ identityRuleStatus(rule) }}</span></td>
+                  </tr>
+                  <tr v-if="!identityRules.length && !loading && !identityRulesError"><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400">暂无 V2 身份规则</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </template>
 
@@ -174,11 +201,13 @@ import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
-import { userRiskControlV2API, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
+import { userRiskControlV2API, type IdentityRule, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
 import { formatRiskAction, formatRiskLevel, formatRiskType, riskActionOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
 const rules = ref<Rule[]>([])
+const identityRules = ref<IdentityRule[]>([])
+const identityRulesError = ref('')
 const loading = ref(true)
 const saving = ref(false)
 const creating = ref(false)
@@ -217,10 +246,10 @@ const filteredRules = computed(() => {
     .filter((rule) => !levelFilter.value || rule.riskLevel === levelFilter.value)
     .map((rule) => ({ ...rule, rule: rule.name || rule.code, condition: rule.threshold, risk: rule.score }))
 })
+const identityRulesActive = computed(() => identityRules.value.some((rule) => rule.enabled))
+const identityRulesHeader = computed(() => identityRulesActive.value ? 'Shadow 观察期' : identityRules.value.some((rule) => rule.state === 'paused' || rule.state === 'degraded') ? '数据质量保护中' : '尚未启用')
 const ruleActionOptions = riskActionOptions.filter((option) => ['observe', 'review', 'ban', 'reject_candidate', 'auto_ban'].includes(option.value))
 const ruleTemplates: RuleCreateInput[] = [
-  { code: 'registration_identity_abuse', name: '同邮箱或设备重复注册', description: '同一邮箱或设备在短时间内重复提交注册', eventTypes: ['registration_attempt', 'registration_success'], countStrategy: 'subject_device_events', enabled: true, windowSeconds: 600, threshold: 3, score: 80, riskLevel: 'critical', action: 'reject_candidate' },
-  { code: 'registration_ip_multi_account', name: '同 IP 多账号注册', description: '同一真实客户端 IP 在短时间内注册多个不同账号', eventTypes: ['registration_success'], countStrategy: 'ip_distinct_subjects', enabled: true, windowSeconds: 600, threshold: 5, score: 60, riskLevel: 'high', action: 'review' },
   { code: 'login_failure_burst', name: '登录失败爆发', description: '同一账号连续登录失败', eventTypes: ['login_failure'], enabled: true, windowSeconds: 600, threshold: 5, score: 70, riskLevel: 'high', action: 'review' },
   { code: 'api_error_burst', name: 'API 错误爆发', description: '同一用户短时间内出现大量 API 错误', eventTypes: ['api_error'], enabled: true, windowSeconds: 300, threshold: 10, score: 35, riskLevel: 'medium', action: 'observe' },
   { code: 'content_risk', name: '内容风险', description: '命中内容安全策略', eventTypes: ['content_risk'], enabled: true, windowSeconds: 86400, threshold: 1, score: 85, riskLevel: 'high', action: 'review' },
@@ -230,7 +259,21 @@ const ruleTemplates: RuleCreateInput[] = [
 const draft = reactive<RuleCreateInput>({ ...ruleTemplates[0], eventTypes: [...ruleTemplates[0].eventTypes] })
 
 function errorMessage(err: unknown, fallback = t('admin.userRiskControl.loadFailed')) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : fallback }
-async function load() { loading.value = true; try { rules.value = await userRiskControlV2API.listRules() } catch (err) { error.value = errorMessage(err) } finally { loading.value = false } }
+function identityRuleName(code: string) { return ({ v2_registration_email_retries: '同邮箱重复注册尝试', v2_registration_ip_accounts: '同真实 IP 多账号注册', v2_registration_device_accounts: '同浏览器实例多账号注册', v2_registration_composite_accounts: '同 IP + 浏览器实例多账号注册' } as Record<string, string>)[code] || code }
+function identityDomainLabel(domain: IdentityRule['domain']) { return ({ account: '邮箱', ip: 'IP', device: '设备', composite: '综合关联' } as Record<IdentityRule['domain'], string>)[domain] }
+function identityRuleCondition(rule: IdentityRule) { const unit = rule.domain === 'account' ? '次注册尝试' : '个成功账号'; return `${Math.round(rule.window_seconds / 60)} 分钟内 ${rule.threshold} ${unit}` }
+function identityRuleStatus(rule: IdentityRule) { return rule.enabled ? '已启用 · Shadow' : rule.state === 'paused' ? '数据质量异常 · 已暂停' : rule.state === 'degraded' ? '样本不足 · 暂不计算' : rule.configured_enabled ? '配置已开 · 尚未生效' : '已停用' }
+async function load() {
+  loading.value = true
+  error.value = ''
+  identityRulesError.value = ''
+  const [genericResult, identityResult] = await Promise.allSettled([userRiskControlV2API.listRules(), userRiskControlV2API.listIdentityRules()])
+  if (genericResult.status === 'fulfilled') rules.value = genericResult.value
+  else error.value = errorMessage(genericResult.reason)
+  if (identityResult.status === 'fulfilled') identityRules.value = identityResult.value
+  else identityRulesError.value = errorMessage(identityResult.reason, 'V2 身份规则暂时不可用')
+  loading.value = false
+}
 function openCreateForm() { applyTemplate(ruleTemplates[0]); createOpen.value = true; notice.value = '' }
 function closeCreateForm() { if (!creating.value) createOpen.value = false }
 function closeEditor() { if (saving.value || testing.value) return; expandedRuleId.value = null; editDraft.value = null; testResult.value = null; testedId.value = null }

@@ -21,19 +21,88 @@ type identityQueryer interface {
 
 const minimumIdentityShadowDuration = 14 * 24 * time.Hour
 
+const legacyV1CleanupMigrationVersion = 3
+
 func NewSQLIdentityRepository(db *sql.DB) *SQLIdentityRepository {
 	return &SQLIdentityRepository{db: db}
 }
 
 func (r *SQLIdentityRepository) ActivateShadowRules(ctx context.Context) error {
-	if r == nil || r.db == nil {
-		return errors.New("identity repository unavailable")
-	}
-	_, err := r.db.ExecContext(ctx, `UPDATE risk_rules
-SET enabled=FALSE,action='observe',description='V1 历史身份/API 规则；V2 启用后停止计算且不与 V2 混算',revision=revision+1,updated_at=NOW()
-WHERE code IN ('registration_identity_abuse','registration_ip_multi_account','api_request_observation')
-  AND (enabled=TRUE OR action<>'observe')`)
+	_, err := r.CleanupLegacyV1(ctx)
 	return err
+}
+
+func (r *SQLIdentityRepository) CleanupLegacyV1(ctx context.Context) (LegacyV1CleanupResult, error) {
+	if r == nil || r.db == nil {
+		return LegacyV1CleanupResult{}, errors.New("identity repository unavailable")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE risk_schema_migrations IN EXCLUSIVE MODE`); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+
+	var applied bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM risk_schema_migrations WHERE version=$1)`, legacyV1CleanupMigrationVersion).Scan(&applied); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	if applied {
+		return LegacyV1CleanupResult{}, tx.Commit()
+	}
+
+	result := LegacyV1CleanupResult{Applied: true}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM risk_event_keys`); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	deleted, err := tx.ExecContext(ctx, `DELETE FROM risk_events WHERE identity_version='legacy_v1'`)
+	if err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	result.EventsDeleted, _ = deleted.RowsAffected()
+	deleted, err = tx.ExecContext(ctx, `DELETE FROM risk_subjects`)
+	if err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	result.SubjectsDeleted, _ = deleted.RowsAffected()
+	deleted, err = tx.ExecContext(ctx, `DELETE FROM risk_rules WHERE code IN ('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation')`)
+	if err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	result.RulesDeleted, _ = deleted.RowsAffected()
+	metadata, _ := json.Marshal(result)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason,metadata)
+VALUES (0,'purge_legacy_v1','system','legacy_v1','success','V2 identity rollout: removed legacy V1 events, projections, and retired rule configurations',$1)`, metadata); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_schema_migrations(version) VALUES ($1)`, legacyV1CleanupMigrationVersion); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	return result, tx.Commit()
+}
+
+func (r *SQLIdentityRepository) ListIdentityRules(ctx context.Context) ([]IdentityRule, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("identity repository unavailable")
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT code,domain,enabled,window_seconds,threshold,score,mode,revision,
+COALESCE(to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'')
+FROM risk_identity_rules ORDER BY CASE domain WHEN 'account' THEN 1 WHEN 'ip' THEN 2 WHEN 'device' THEN 3 ELSE 4 END,code`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]IdentityRule, 0, 4)
+	for rows.Next() {
+		var rule IdentityRule
+		if err := rows.Scan(&rule.Code, &rule.Domain, &rule.ConfiguredEnabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.Mode, &rule.Revision, &rule.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, rule)
+	}
+	return result, rows.Err()
 }
 
 func (r *SQLIdentityRepository) EnsureShadowActivation(ctx context.Context, cfg IdentityConfig, now time.Time) error {

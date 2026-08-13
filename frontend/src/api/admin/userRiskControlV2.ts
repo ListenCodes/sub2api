@@ -96,6 +96,7 @@ export interface IPIdentity { id: number; ip: string; ip_family: 4 | 6; ip_sourc
 export interface DeviceIdentity { id: number; identity_kind: 'browser_instance' | 'browser_profile' | 'api_client'; display_code: string; confidence: 'low' | 'medium_high' | 'high'; browser_family: string; os_family: string; device_class: string; language_family: string; cookie_status: string; first_seen_at: string; last_seen_at: string; registration_success_count: number; login_success_count: number; api_success_count: number; network_count: number; associated_account_count: number }
 export interface AssociatedRiskUser { user_id: number; relation: 'ip' | 'device' | 'multi_domain' | 'composite'; shared_network_count: number; shared_device_count: number; cooccurring_evidence_count: number; evidence_strength: 'weak' | 'medium_high' | 'high'; evidence_window_seconds: number; first_seen_at: string; last_seen_at: string; account?: { id: number; email: string; username: string; status: string; deleted: boolean; created_at: string } }
 export interface IdentityListSummary { user_id: number; latest_ip: string; country_code: string; region: string; browser_instance_count: number; api_client_count: number; associated_account_count: number; active_rule_count: number; quality_state: IdentityDomainState }
+export interface IdentityRule { code: string; domain: 'account' | IdentityDomain; configured_enabled: boolean; enabled: boolean; state: IdentityDomainState; window_seconds: number; threshold: number; score: number; mode: 'shadow'; revision: number; updated_at: string }
 export interface AuditFilters {
   action?: string
   targetUserId?: number
@@ -283,6 +284,11 @@ async function getIdentityHealth(): Promise<IdentityHealth> {
   return data
 }
 
+async function listIdentityRules(): Promise<IdentityRule[]> {
+  const { data } = await mainAdminClient.get<{ items: IdentityRule[] }>('/admin/user-risk-control/identity-rules')
+  return data.items
+}
+
 async function setUserStatus(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskUserRow> {
   // Account status is authoritative in the main Sub2API users table.
   const { data } = await mainAdminClient.post<{ user: RiskUserRow }>(`/admin/users/${id}/risk-status`, { status, reason: reason.trim(), batch_id: batchId })
@@ -417,5 +423,5 @@ async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<R
   }) }
 }
 
-export const userRiskControlV2API = { listUsers, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
+export const userRiskControlV2API = { listUsers, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, listIdentityRules, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
 export default userRiskControlV2API

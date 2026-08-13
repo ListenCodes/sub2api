@@ -31,6 +31,7 @@ const riskActions: Record<string, string> = {
   update_rule: '修改规则',
   rule_test: '规则测试',
   mark_processed: '标记已处理',
+  purge_legacy_v1: '清理 V1 历史数据',
 }
 
 const accountStatuses: Record<string, string> = {

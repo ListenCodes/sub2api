@@ -212,6 +212,8 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleAudit(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-health":
 		s.handleIdentityHealth(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-rules":
+		s.handleIdentityRules(w, r)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds/dry-run":
 		s.handleIdentityRebuild(w, r, true)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds":

@@ -134,3 +134,55 @@ func (s *IdentityService) Health(ctx context.Context) (IdentityHealth, error) {
 	}
 	return s.repo.Health(ctx, s.cfg)
 }
+
+func (s *IdentityService) Rules(ctx context.Context) ([]IdentityRule, error) {
+	if s == nil || s.repo == nil {
+		return nil, errors.New("identity service unavailable")
+	}
+	rules, err := s.repo.ListIdentityRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	states, _, err := s.repo.qualityStates(ctx, s.cfg)
+	if err != nil {
+		return nil, err
+	}
+	for index := range rules {
+		state := identityRuleEffectiveState(s.cfg, rules[index].Domain, states)
+		rules[index].State = state
+		rules[index].Enabled = rules[index].ConfiguredEnabled && state == "healthy"
+	}
+	return rules, nil
+}
+
+func identityRuleEffectiveState(cfg IdentityConfig, domain string, states map[string]string) string {
+	if !identityRuleDomainEnabled(cfg, domain) {
+		return "disabled"
+	}
+	if domain == "account" {
+		return "healthy"
+	}
+	state := states[domain]
+	if state == "" {
+		return "disabled"
+	}
+	return state
+}
+
+func identityRuleDomainEnabled(cfg IdentityConfig, domain string) bool {
+	if !cfg.RulesEnabled {
+		return false
+	}
+	switch domain {
+	case "account":
+		return true
+	case "ip":
+		return cfg.IPCollectionEnabled && cfg.IPDomainEnabled
+	case "device":
+		return cfg.DeviceCollectionEnabled && cfg.DeviceDomainEnabled
+	case "composite":
+		return cfg.IPCollectionEnabled && cfg.DeviceCollectionEnabled && cfg.IPDomainEnabled && cfg.DeviceDomainEnabled && cfg.CompositeDomainEnabled
+	default:
+		return false
+	}
+}

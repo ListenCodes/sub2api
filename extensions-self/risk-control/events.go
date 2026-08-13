@@ -145,12 +145,10 @@ func (s *RiskService) RecordAudit(ctx context.Context, report AuditReport) error
 
 func defaultRules() []Rule {
 	return []Rule{
-		{ID: 1, Code: "registration_identity_abuse", Name: "同邮箱或设备重复注册", EventTypes: []string{"registration_attempt", "registration_success"}, CountStrategy: countStrategySubjectDeviceEvents, Enabled: true, WindowSeconds: 600, Threshold: 3, Score: 80, RiskLevel: "critical", Action: "reject_candidate", Revision: 1},
-		{ID: 2, Code: "registration_ip_multi_account", Name: "同 IP 多账号注册", EventTypes: []string{"registration_success"}, CountStrategy: countStrategyIPDistinctSubjects, Enabled: true, WindowSeconds: 600, Threshold: 5, Score: 60, RiskLevel: "high", Action: "review", Revision: 1},
-		{ID: 3, Code: "login_failure_burst", Name: "登录失败爆发", EventTypes: []string{"login_failure"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 5, Score: 70, RiskLevel: "high", Action: "review", Revision: 1},
-		{ID: 4, Code: "api_error_burst", Name: "API 错误爆发", EventTypes: []string{"api_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 300, Threshold: 10, Score: 35, RiskLevel: "medium", Action: "observe", Revision: 1},
-		{ID: 5, Code: "content_risk", Name: "内容风险", EventTypes: []string{"content_risk"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 86400, Threshold: 1, Score: 85, RiskLevel: "high", Action: "review", Revision: 1},
-		{ID: 6, Code: "quota_abuse", Name: "配额滥用", EventTypes: []string{"quota_exceeded"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 3600, Threshold: 5, Score: 55, RiskLevel: "medium", Action: "review", Revision: 1},
-		{ID: 7, Code: "upstream_error", Name: "上游错误", EventTypes: []string{"upstream_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 8, Score: 25, RiskLevel: "low", Action: "observe", Revision: 1},
+		{ID: 1, Code: "login_failure_burst", Name: "登录失败爆发", EventTypes: []string{"login_failure"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 5, Score: 70, RiskLevel: "high", Action: "review", Revision: 1},
+		{ID: 2, Code: "api_error_burst", Name: "API 错误爆发", EventTypes: []string{"api_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 300, Threshold: 10, Score: 35, RiskLevel: "medium", Action: "observe", Revision: 1},
+		{ID: 3, Code: "content_risk", Name: "内容风险", EventTypes: []string{"content_risk"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 86400, Threshold: 1, Score: 85, RiskLevel: "high", Action: "review", Revision: 1},
+		{ID: 4, Code: "quota_abuse", Name: "配额滥用", EventTypes: []string{"quota_exceeded"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 3600, Threshold: 5, Score: 55, RiskLevel: "medium", Action: "review", Revision: 1},
+		{ID: 5, Code: "upstream_error", Name: "上游错误", EventTypes: []string{"upstream_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 8, Score: 25, RiskLevel: "low", Action: "observe", Revision: 1},
 	}
 }

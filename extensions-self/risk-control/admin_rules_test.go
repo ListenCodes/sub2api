@@ -48,6 +48,7 @@ func TestValidateRuleConfigRejectsUnsafeAndInvalidValues(t *testing.T) {
 
 func TestIsRetiredV1IdentityRule(t *testing.T) {
 	for _, code := range []string{
+		"registration_abuse",
 		"registration_identity_abuse",
 		"registration_ip_multi_account",
 		"api_request_observation",
@@ -58,6 +59,17 @@ func TestIsRetiredV1IdentityRule(t *testing.T) {
 	}
 	if isRetiredV1IdentityRule("login_failure_burst") {
 		t.Fatal("login_failure_burst must remain available as a non-identity rule")
+	}
+}
+
+func TestAdminRejectsRecreatingRetiredV1Rule(t *testing.T) {
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "shadow", Identity: IdentityConfig{Enabled: true}}, NewMemoryRepository(nil))
+	body := []byte(`{"code":"api_request_observation","name":"retired","event_types":["login_failure"],"enabled":false,"window_seconds":600,"threshold":1,"score":0,"risk_level":"low","action":"observe"}`)
+	request := signedRequest(http.MethodPost, "/api/v1/admin/rules", body, testSecret, "nonce-recreate-v1-rule", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

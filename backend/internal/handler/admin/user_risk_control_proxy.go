@@ -129,7 +129,7 @@ func allowedRiskControlPath(method, path string) bool {
 		return false
 	}
 	switch {
-	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/audit"):
+	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/identity-rules" || path == "/audit"):
 		return true
 	case method == http.MethodPut && strings.HasPrefix(path, "/rules/"):
 		return true

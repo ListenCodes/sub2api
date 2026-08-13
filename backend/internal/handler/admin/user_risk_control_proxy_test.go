@@ -63,6 +63,9 @@ func TestProxyRiskControlRejectsUnallowlistedPath(t *testing.T) {
 }
 
 func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
+	if !allowedRiskControlPath(http.MethodGet, "/identity-rules") {
+		t.Fatal("GET /identity-rules must be allowlisted for authenticated admin proxy")
+	}
 	if !allowedRiskControlPath(http.MethodPost, "/rules") {
 		t.Fatal("POST /rules must be allowlisted for authenticated admin proxy")
 	}
