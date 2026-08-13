@@ -41,7 +41,10 @@ release_install_manifest_files "$manifest_dir" "$source_file" \
   || fail 'manifest is not mode 0600'
 [[ "$(stat -c '%a' "$manifest_dir/manifest.sha256")" == 600 ]] \
   || fail 'manifest checksum is not mode 0600'
-sha256sum -c "$manifest_dir/manifest.sha256" >/dev/null \
+(
+  cd "$manifest_dir"
+  sha256sum -c manifest.sha256 >/dev/null
+) \
   || fail 'manifest checksum does not match the installed manifest'
 
 chmod 0755 "$SUB2API_PREPARED_ROOT"
