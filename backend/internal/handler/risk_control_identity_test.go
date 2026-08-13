@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,9 +24,32 @@ func TestRiskDeviceCookieRejectsTampering(t *testing.T) {
 	if !ok || value == "" {
 		t.Fatal("valid signed cookie rejected")
 	}
-	cookie.Value = cookie.Value[:len(cookie.Value)-1] + "0"
+	replacement := "0"
+	if cookie.Value[len(cookie.Value)-1] == '0' {
+		replacement = "1"
+	}
+	cookie.Value = cookie.Value[:len(cookie.Value)-1] + replacement
 	if _, ok := verifyRiskDeviceCookie(cookie.Value, key, "current", time.Now().UTC()); ok {
 		t.Fatal("tampered signed cookie accepted")
+	}
+}
+
+func TestRiskDeviceCookieRejectsNonCanonicalSignature(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+	c.Request = httptest.NewRequest("GET", "https://example.test", nil)
+	setSignedRiskDeviceCookie(c, "0123456789abcdef0123456789abcdef0123", key, "current")
+	cookie := writer.Result().Cookies()[0]
+	parts := strings.Split(cookie.Value, ".")
+	if index := strings.IndexAny(parts[4], "abcdef"); index >= 0 {
+		parts[4] = parts[4][:index] + strings.ToUpper(parts[4][index:index+1]) + parts[4][index+1:]
+	} else {
+		parts[4] += "00"
+	}
+	cookie.Value = strings.Join(parts, ".")
+	if _, ok := verifyRiskDeviceCookie(cookie.Value, key, "current", time.Now().UTC()); ok {
+		t.Fatal("non-canonical signed cookie accepted")
 	}
 }
 

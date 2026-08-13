@@ -233,6 +233,9 @@ func verifyRiskDeviceCookie(raw string, key []byte, expectedKeyID string, now ti
 	}
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte("risk-device-cookie-v2\n" + strings.Join(parts[:4], ".")))
+	if len(parts[4]) != sha256.Size*2 || !isLowerHex(parts[4]) {
+		return "", false
+	}
 	expected, err := hex.DecodeString(parts[4])
 	if err != nil || !hmac.Equal(mac.Sum(nil), expected) {
 		return "", false
