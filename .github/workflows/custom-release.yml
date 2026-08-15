@@ -153,14 +153,18 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release.outputs.version }}
+      go_version: ${{ steps.release.outputs.go_version }}
     steps:
       - uses: actions/checkout@v6
       - id: release
-        name: Read stable Release version
+        name: Read stable Release and Go versions
         run: |
           tag="$(jq -er '.tag' deploy/stable-release-baseline.json)"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          go_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          [[ "$go_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "go_version=${go_version}" >> "$GITHUB_OUTPUT"
 
   images:
     needs: [backend, golangci, frontend, extensions, deployment, metadata]
@@ -184,6 +188,7 @@ jobs:
           push: true
           tags: ghcr.io/listencodes/sub2api-custom:custom-${{ github.sha }}
           build-args: |
+            GOLANG_IMAGE=golang:${{ needs.metadata.outputs.go_version }}-alpine
             VERSION=${{ needs.metadata.outputs.version }}
             COMMIT=${{ github.sha }}
             IMAGE_VERSION=${{ needs.metadata.outputs.version }}

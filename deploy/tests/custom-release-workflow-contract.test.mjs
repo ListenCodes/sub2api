@@ -36,6 +36,12 @@ test('custom-release workflow gates paired images on every required validation j
   assert.match(workflow, /expected_go_version=.*backend\/go\.mod/)
   assert.match(workflow, /actual_go_version=.*go env GOVERSION/)
   assert.match(workflow, /test "\$actual_go_version" = "go\$\{expected_go_version\}"/)
+  assert.match(workflow, /go_version:\s*\$\{\{ steps\.release\.outputs\.go_version \}\}/)
+  assert.match(workflow, /go_version=.*backend\/go\.mod/)
+  assert.match(
+    workflow,
+    /GOLANG_IMAGE=golang:\$\{\{ needs\.metadata\.outputs\.go_version \}\}-alpine/
+  )
   assert.doesNotMatch(
     workflow,
     /Verify Go version[\s\S]{0,160}grep -q ['"]go\d/,
