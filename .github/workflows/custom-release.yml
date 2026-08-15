@@ -30,7 +30,10 @@ jobs:
           cache: true
           cache-dependency-path: backend/go.sum
       - name: Verify Go version
-        run: go version | grep -q 'go1.26.5'
+        run: |
+          expected_go_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          actual_go_version="$(go env GOVERSION)"
+          test "$actual_go_version" = "go${expected_go_version}"
       - name: Backend unit tests
         working-directory: backend
         run: make test-unit

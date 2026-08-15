@@ -33,6 +33,14 @@ test('custom-release workflow gates paired images on every required validation j
     /deployment:[\s\S]*?uses: actions\/checkout@v6\n        with:\n          fetch-depth: 0/,
     'deployment contracts must fetch the Stable baseline commit'
   )
+  assert.match(workflow, /expected_go_version=.*backend\/go\.mod/)
+  assert.match(workflow, /actual_go_version=.*go env GOVERSION/)
+  assert.match(workflow, /test "\$actual_go_version" = "go\$\{expected_go_version\}"/)
+  assert.doesNotMatch(
+    workflow,
+    /Verify Go version[\s\S]{0,160}grep -q ['"]go\d/,
+    'the fork-owned workflow must follow the Go version declared by the Stable backend module'
+  )
 
   for (const marker of [
     'make test-unit',
