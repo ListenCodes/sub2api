@@ -630,9 +630,9 @@ AND ABS(EXTRACT(EPOCH FROM(other.occurred_at-mine.occurred_at)))<=COALESCE((SELE
 	historicalScores := map[string]int{"ip": 0, "device": 0, "composite": 0}
 	historicalCounts := map[string]int{"ip": 0, "device": 0, "composite": 0}
 	if err := r.db.QueryRowContext(ctx, `WITH historical AS (
- SELECT domain,score,rule_code FROM risk_identity_signals WHERE user_id=$1 AND domain IN ('ip','device','composite') AND score>0
- UNION ALL SELECT domain,score,rule_code FROM risk_identity_signal_history WHERE user_id=$1 AND domain IN ('ip','device','composite') AND score>0
-) SELECT COALESCE(MAX(score),0),COUNT(*)::int FROM historical`).Scan(&result.HistoricalMaxScore, &result.HistoricalSignalCount); err != nil {
+	 SELECT domain,score,rule_code FROM risk_identity_signals WHERE user_id=$1 AND domain IN ('ip','device','composite') AND score>0
+	 UNION ALL SELECT domain,score,rule_code FROM risk_identity_signal_history WHERE user_id=$1 AND domain IN ('ip','device','composite') AND score>0
+	) SELECT COALESCE(MAX(score),0),COUNT(*)::int FROM historical`, userID).Scan(&result.HistoricalMaxScore, &result.HistoricalSignalCount); err != nil {
 		return result, err
 	}
 	for _, domain := range []string{"ip", "device", "composite"} {

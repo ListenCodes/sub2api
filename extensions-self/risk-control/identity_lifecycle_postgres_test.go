@@ -74,6 +74,13 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT historical_max_score FROM risk_review_cases WHERE user_id=1004 AND status='pending'`).Scan(&historical); err != nil || historical != 90 {
 		t.Fatalf("pending case historical score = %d, error=%v", historical, err)
 	}
+	summary, err := service.Summary(ctx, 1004)
+	if err != nil {
+		t.Fatalf("identity summary: %v", err)
+	}
+	if summary.OverallScore != 90 || summary.HistoricalMaxScore != 90 || summary.HistoricalSignalCount != 3 {
+		t.Fatalf("identity summary = current:%d historical:%d signals:%d, want 90/90/3", summary.OverallScore, summary.HistoricalMaxScore, summary.HistoricalSignalCount)
+	}
 
 	var firstCaseID int64
 	if err := db.QueryRowContext(ctx, `SELECT id FROM risk_review_cases WHERE user_id=1004 AND status='pending'`).Scan(&firstCaseID); err != nil {
