@@ -249,7 +249,9 @@ func (h *CustomUserHandler) listAllUserRiskUsersSortedByRisk(c *gin.Context, pag
 	sort.SliceStable(items, func(left, right int) bool {
 		leftScore, rightScore := riskRowScore(items[left]), riskRowScore(items[right])
 		if leftScore == rightScore {
-			return items[left]["id"].(int64) < items[right]["id"].(int64)
+			leftID, _ := items[left]["id"].(int64)
+			rightID, _ := items[right]["id"].(int64)
+			return leftID < rightID
 		}
 		if descending {
 			return leftScore > rightScore
