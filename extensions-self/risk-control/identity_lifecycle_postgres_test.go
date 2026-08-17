@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -358,6 +359,10 @@ func TestIdentityRebuildKeepsVersionedEvidenceAndCasesPostgres(t *testing.T) {
 	if err != nil || dryRun.V2Signals == 0 {
 		t.Fatalf("rebuild Dry Run = %+v, error=%v", dryRun, err)
 	}
+	if _, err := service.repo.Rebuild(ctx, 7, false, cfg); err == nil || !strings.Contains(err.Error(), cfg.ShadowUntil.UTC().Format(time.RFC3339)) {
+		t.Fatalf("rebuild before configured Shadow deadline error = %v", err)
+	}
+	cfg.ShadowUntil = base.Add(-time.Hour)
 	result, err := service.repo.Rebuild(ctx, 7, false, cfg)
 	if err != nil || result.ApprovedDryRunID != dryRun.ID {
 		t.Fatalf("rebuild apply = %+v, error=%v", result, err)

@@ -147,6 +147,10 @@ func (r *SQLIdentityRepository) EnsureShadowActivation(ctx context.Context, cfg 
 		return err
 	} else if cfg.ShadowUntil.Before(recordedUntil) {
 		return errors.New("RISK_IDENTITY_SHADOW_UNTIL must not shorten the recorded Shadow period")
+	} else if cfg.ShadowUntil.After(recordedUntil) {
+		if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_shadow_activation SET shadow_until=$1 WHERE singleton=1`, cfg.ShadowUntil.UTC()); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -1129,8 +1133,12 @@ func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryR
 			}
 			return RebuildResult{}, err
 		}
-		if time.Now().UTC().Before(shadowUntil.UTC()) {
-			return RebuildResult{}, fmt.Errorf("identity Shadow period is active until %s", shadowUntil.UTC().Format(time.RFC3339))
+		effectiveShadowUntil := shadowUntil.UTC()
+		if cfg.ShadowUntil.After(effectiveShadowUntil) {
+			effectiveShadowUntil = cfg.ShadowUntil.UTC()
+		}
+		if time.Now().UTC().Before(effectiveShadowUntil) {
+			return RebuildResult{}, fmt.Errorf("identity Shadow period is active until %s", effectiveShadowUntil.Format(time.RFC3339))
 		}
 		var dryRunID, evidenceHighWater int64
 		var dryRunCompleted time.Time

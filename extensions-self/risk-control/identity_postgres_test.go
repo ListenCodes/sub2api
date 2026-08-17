@@ -206,6 +206,23 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if err := repo.EnsureShadowActivation(ctx, activation, base); err != nil {
 		t.Fatalf("record initial Shadow: %v", err)
 	}
+	extendedShadowUntil := activation.ShadowUntil.Add(24 * time.Hour)
+	activation.ShadowUntil = extendedShadowUntil
+	if err := repo.EnsureShadowActivation(ctx, activation, base.Add(time.Hour)); err != nil {
+		t.Fatalf("extend recorded Shadow: %v", err)
+	}
+	var recordedShadowUntil time.Time
+	if err := db.QueryRowContext(ctx, `SELECT shadow_until FROM risk_identity_shadow_activation WHERE singleton=1`).Scan(&recordedShadowUntil); err != nil {
+		t.Fatal(err)
+	}
+	if !recordedShadowUntil.UTC().Equal(extendedShadowUntil.UTC()) {
+		t.Fatalf("recorded Shadow deadline = %s, want %s", recordedShadowUntil.UTC(), extendedShadowUntil.UTC())
+	}
+	activation.ShadowUntil = extendedShadowUntil.Add(-time.Hour)
+	if err := repo.EnsureShadowActivation(ctx, activation, base.Add(2*time.Hour)); err == nil || !strings.Contains(err.Error(), "must not shorten") {
+		t.Fatalf("shortened recorded Shadow error = %v", err)
+	}
+	activation.ShadowUntil = extendedShadowUntil
 	var identityEventsBefore int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_identity_events`).Scan(&identityEventsBefore); err != nil {
 		t.Fatal(err)
