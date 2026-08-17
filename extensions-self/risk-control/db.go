@@ -20,25 +20,33 @@ type SQLRepository struct{ db *sql.DB }
 
 func NewSQLRepository(db *sql.DB) *SQLRepository { return &SQLRepository{db: db} }
 
-const riskSubjectProjectionCTE = `WITH legacy_api_subjects AS MATERIALIZED (
+func buildRiskSubjectProjectionCTE(subjectFilter, eventFilter string) string {
+	return `WITH legacy_api_subjects AS MATERIALIZED (
 SELECT user_id
 FROM risk_subjects
-WHERE risk_type='api_request' OR reason ILIKE '%API 请求观察%'
+WHERE ` + subjectFilter + `(risk_type IN ('api_request','api_error','upstream_error') OR reason ILIKE '%API 请求观察%')
+UNION
+SELECT DISTINCT subject.user_id
+FROM risk_subjects subject
+JOIN risk_events event ON event.user_id=subject.user_id
+WHERE ` + eventFilter + `event.event_type IN ('api_request','api_error','upstream_error')
 ), non_api_counts AS MATERIALIZED (
 SELECT e.user_id,
   COUNT(*)::int AS event_count,
   COUNT(DISTINCT NULLIF(e.ip_hash,''))::int AS ip_count,
-  COUNT(DISTINCT NULLIF(e.device_hash,''))::int AS device_count
+  COUNT(DISTINCT NULLIF(e.device_hash,''))::int AS device_count,
+  MAX(e.occurred_at) AS last_event_at
 FROM risk_events e
 JOIN legacy_api_subjects legacy ON legacy.user_id=e.user_id
-WHERE e.event_type<>'api_request'
+WHERE e.event_type NOT IN ('api_request','api_error','upstream_error')
 GROUP BY e.user_id
 ), non_api_best AS MATERIALIZED (
 SELECT DISTINCT ON (e.user_id)
-  e.user_id,e.risk_type,e.risk_level,e.score,e.reason,e.decision,e.occurred_at
+  e.user_id,CASE WHEN e.risk_type IN ('api_request','api_error','upstream_error') THEN e.event_type ELSE e.risk_type END AS risk_type,
+  e.risk_level,e.score,e.reason,e.decision,e.occurred_at
 FROM risk_events e
 JOIN legacy_api_subjects legacy ON legacy.user_id=e.user_id
-WHERE e.event_type<>'api_request'
+WHERE e.event_type NOT IN ('api_request','api_error','upstream_error')
 ORDER BY e.user_id,e.score DESC,
   CASE e.risk_level WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
   CASE e.decision WHEN 'ban' THEN 4 WHEN 'auto_ban' THEN 4 WHEN 'review' THEN 3 WHEN 'observe' THEN 2 ELSE 0 END DESC,
@@ -53,13 +61,19 @@ SELECT s.id,s.user_id,s.username,s.email_hash,s.account_status,
   CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(counts.ip_count,0) ELSE s.ip_count END AS ip_count,
   CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(counts.device_count,0) ELSE s.device_count END AS device_count,
   CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.decision,'') ELSE s.last_action END AS last_action,
-  CASE WHEN legacy.user_id IS NOT NULL THEN COALESCE(best.decision='review',FALSE) ELSE s.pending END AS pending,
-  CASE WHEN legacy.user_id IS NOT NULL THEN best.occurred_at ELSE s.last_event_at END AS last_event_at
+  s.pending,
+  CASE WHEN legacy.user_id IS NOT NULL THEN counts.last_event_at ELSE s.last_event_at END AS last_event_at
 FROM risk_subjects s
 LEFT JOIN legacy_api_subjects legacy ON legacy.user_id=s.user_id
 LEFT JOIN non_api_counts counts ON counts.user_id=s.user_id
 LEFT JOIN non_api_best best ON best.user_id=s.user_id
 ) `
+}
+
+var (
+	riskSubjectProjectionCTE       = buildRiskSubjectProjectionCTE("", "")
+	riskSubjectProjectionByUserCTE = buildRiskSubjectProjectionCTE("user_id=$1 AND ", "subject.user_id=$1 AND ")
+)
 
 func ApplySchema(ctx context.Context, db *sql.DB) error {
 	if db == nil {
@@ -263,7 +277,7 @@ func (r *SQLRepository) ListSubjects(ctx context.Context, limit, offset int, ris
 	if err := r.db.QueryRowContext(ctx, countSource+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, riskSubjectProjectionCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE `+whereClause+fmt.Sprintf(" ORDER BY score DESC,last_event_at DESC NULLS LAST LIMIT $%d OFFSET $%d", index, index+1), append(args, limit, offset)...)
+	rows, err := r.db.QueryContext(ctx, riskSubjectProjectionCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE `+whereClause+fmt.Sprintf(" ORDER BY score DESC,last_event_at DESC NULLS LAST,id DESC LIMIT $%d OFFSET $%d", index, index+1), append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -281,7 +295,7 @@ func (r *SQLRepository) ListSubjects(ctx context.Context, limit, offset int, ris
 
 func (r *SQLRepository) GetSubject(ctx context.Context, userID int64) (RiskSubject, bool, error) {
 	var item RiskSubject
-	err := r.db.QueryRowContext(ctx, riskSubjectProjectionCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE user_id=$1`, userID).Scan(&item.ID, &item.UserID, &item.Username, &item.EmailHash, &item.AccountStatus, &item.RiskType, &item.RiskLevel, &item.Score, &item.Reason, &item.EventCount, &item.IPCount, &item.DeviceCount, &item.LastAction, &item.Pending, &item.LastEventAt)
+	err := r.db.QueryRowContext(ctx, riskSubjectProjectionByUserCTE+`SELECT id,user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'') FROM projected_risk_subjects WHERE user_id=$1`, userID).Scan(&item.ID, &item.UserID, &item.Username, &item.EmailHash, &item.AccountStatus, &item.RiskType, &item.RiskLevel, &item.Score, &item.Reason, &item.EventCount, &item.IPCount, &item.DeviceCount, &item.LastAction, &item.Pending, &item.LastEventAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RiskSubject{}, false, nil
 	}

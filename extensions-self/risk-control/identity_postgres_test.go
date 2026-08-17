@@ -271,7 +271,7 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	}
 }
 
-func TestLegacyAPIObservationIsNotProjectedAsUserRisk(t *testing.T) {
+func TestReliabilityEventsAreNotProjectedAsUserRisk(t *testing.T) {
 	ctx := context.Background()
 	db := openIsolatedRiskTestDB(t)
 	if err := ApplySchema(ctx, db); err != nil {
@@ -285,24 +285,62 @@ func TestLegacyAPIObservationIsNotProjectedAsUserRisk(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	insert(EventRecord{EventKey: "mixed-login", EventType: "login_failure", UserID: 501, RiskType: "login_failure", RiskLevel: "high", Score: 70, Reason: "login failure evidence", Decision: "review", OccurredAt: base.Add(-time.Minute).Format(time.RFC3339Nano)})
-	insert(EventRecord{EventKey: "mixed-api", EventType: "api_request", UserID: 501, RiskType: "api_request", RiskLevel: "low", Score: 0, Reason: "API 请求观察", Decision: "observe", OccurredAt: base.Format(time.RFC3339Nano)})
-	insert(EventRecord{EventKey: "api-only", EventType: "api_request", UserID: 502, RiskType: "api_request", RiskLevel: "low", Score: 0, Reason: "API 请求观察", Decision: "observe", OccurredAt: base.Format(time.RFC3339Nano)})
-	for _, userID := range []int64{501, 502} {
-		if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,last_event_at) VALUES($1,'api_request','low',0,'命中规则：API 请求观察（24 小时内1 次事件）',1,'observe',$2)`, userID, base); err != nil {
+	loginAt := base.Add(-time.Minute)
+	recentObserveAt := base.Add(-30 * time.Second)
+	insert(EventRecord{EventKey: "mixed-login", EventType: "login_failure", UserID: 501, RiskType: "login_failure", RiskLevel: "high", Score: 70, Reason: "login failure evidence", Decision: "review", IPHash: "login-ip", DeviceHash: "login-device", OccurredAt: loginAt.Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "mixed-observe", EventType: "content_policy", UserID: 501, RiskType: "content_policy", RiskLevel: "low", Score: 10, Reason: "recent low-risk observation", Decision: "observe", OccurredAt: recentObserveAt.Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "mixed-api", EventType: "api_request", UserID: 501, RiskType: "api_request", RiskLevel: "low", Score: 0, Reason: "API 请求观察", Decision: "observe", IPHash: "api-ip", DeviceHash: "api-device", OccurredAt: base.Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "mixed-api-error", EventType: "api_error", UserID: 501, RiskType: "api_error", RiskLevel: "low", Score: 0, Reason: "gateway request failed", Decision: "observe", IPHash: "api-error-ip", DeviceHash: "api-error-device", OccurredAt: base.Add(time.Second).Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "mixed-upstream-error", EventType: "upstream_error", UserID: 501, RiskType: "upstream_error", RiskLevel: "low", Score: 0, Reason: "upstream unavailable", Decision: "observe", IPHash: "upstream-ip", DeviceHash: "upstream-device", OccurredAt: base.Add(2 * time.Second).Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "mismatched-risk-type", EventType: "login_failure", UserID: 505, RiskType: "api_error", RiskLevel: "high", Score: 65, Reason: "login failure with stale risk type", Decision: "review", OccurredAt: base.Add(-2 * time.Minute).Format(time.RFC3339Nano)})
+	type reliabilityCase struct {
+		userID    int64
+		eventType string
+		reason    string
+	}
+	reliabilityOnly := []reliabilityCase{
+		{userID: 502, eventType: "api_request", reason: "API 请求观察"},
+		{userID: 503, eventType: "api_error", reason: "gateway request failed"},
+		{userID: 504, eventType: "upstream_error", reason: "upstream unavailable"},
+	}
+	for _, item := range reliabilityOnly {
+		insert(EventRecord{EventKey: fmt.Sprintf("%s-only", item.eventType), EventType: item.eventType, UserID: item.userID, RiskType: item.eventType, RiskLevel: "low", Score: 0, Reason: item.reason, Decision: "observe", OccurredAt: base.Format(time.RFC3339Nano)})
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,last_event_at) VALUES(501,'login_failure','high',70,'login failure evidence',5,4,4,'review',FALSE,$1)`, base.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,pending,last_event_at) VALUES(505,'api_error','high',65,'login failure with stale risk type',1,'review',TRUE,$1)`, base.Add(-2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range reliabilityOnly {
+		if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,last_event_at) VALUES($1,$2,'low',0,$3,1,'observe',$4)`, item.userID, item.eventType, item.reason, base); err != nil {
 			t.Fatal(err)
 		}
 	}
 	mixed, found, err := repo.GetSubject(ctx, 501)
-	if err != nil || !found || mixed.RiskType != "login_failure" || mixed.Score != 70 || mixed.EventCount != 1 {
+	if err != nil || !found || mixed.RiskType != "login_failure" || mixed.Score != 70 || mixed.EventCount != 2 || mixed.IPCount != 1 || mixed.DeviceCount != 1 || mixed.LastAction != "review" || mixed.Pending || mixed.LastEventAt != recentObserveAt.Format("2006-01-02T15:04:05.000Z") {
 		t.Fatalf("mixed legacy projection = %+v, found=%v, error=%v", mixed, found, err)
 	}
-	apiOnly, found, err := repo.GetSubject(ctx, 502)
-	if err != nil || !found || apiOnly.RiskType != "" || apiOnly.RiskLevel != "none" || apiOnly.Score != 0 || apiOnly.Reason != "" || apiOnly.EventCount != 0 {
-		t.Fatalf("API-only legacy projection = %+v, found=%v, error=%v", apiOnly, found, err)
+	mismatched, found, err := repo.GetSubject(ctx, 505)
+	if err != nil || !found || mismatched.RiskType != "login_failure" || mismatched.Score != 65 || mismatched.Reason != "login failure with stale risk type" {
+		t.Fatalf("mismatched risk type projection = %+v, found=%v, error=%v", mismatched, found, err)
 	}
-	items, total, err := repo.ListSubjects(ctx, 20, 0, "api_request", "", nil)
-	if err != nil || total != 0 || len(items) != 0 {
-		t.Fatalf("legacy API risk filter = total:%d items:%+v error:%v", total, items, err)
+	for _, item := range reliabilityOnly {
+		subject, found, err := repo.GetSubject(ctx, item.userID)
+		if err != nil || !found || subject.RiskType != "" || subject.RiskLevel != "none" || subject.Score != 0 || subject.Reason != "" || subject.EventCount != 0 {
+			t.Fatalf("%s-only legacy projection = %+v, found=%v, error=%v", item.eventType, subject, found, err)
+		}
+	}
+	for _, riskType := range []string{"api_request", "api_error", "upstream_error"} {
+		items, total, err := repo.ListSubjects(ctx, 20, 0, riskType, "", nil)
+		if err != nil || total != 0 || len(items) != 0 {
+			t.Fatalf("legacy %s risk filter = total:%d items:%+v error:%v", riskType, total, items, err)
+		}
+	}
+	for offset, wantUserID := range []int64{504, 503, 502} {
+		items, total, err := repo.ListSubjects(ctx, 1, offset, "", "none", nil)
+		if err != nil || total != 3 || len(items) != 1 || items[0].UserID != wantUserID {
+			t.Fatalf("stable reliability pagination offset %d = total:%d items:%+v error:%v", offset, total, items, err)
+		}
 	}
 }
