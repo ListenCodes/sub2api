@@ -238,9 +238,9 @@ func (r *SQLIdentityRepository) RecordDeliveryHeartbeat(ctx context.Context, rep
  SELECT generation,started_at,sequence,enqueued,succeeded,failed,dropped,queue_depth,gap_detected_at,gap_until FROM risk_delivery_watermarks WHERE source=$1
 ), upserted AS (
  INSERT INTO risk_delivery_watermarks(source,generation,started_at,sequence,enqueued,succeeded,failed,dropped,queue_depth,last_event_at,last_success_at,last_failure_at,last_drop_at,gap_detected_at,gap_until,generated_at,received_at,updated_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-   CASE WHEN $7>0 OR $8>0 THEN NOW() END,
-   CASE WHEN $7>0 OR $8>0 THEN NOW()+interval '24 hours' END,$14,NOW(),NOW())
+ VALUES($1::varchar,$2::varchar,$3::timestamptz,$4::bigint,$5::bigint,$6::bigint,$7::bigint,$8::bigint,$9::integer,$10::timestamptz,$11::timestamptz,$12::timestamptz,$13::timestamptz,
+   CASE WHEN $7::bigint>0 OR $8::bigint>0 THEN NOW() END,
+   CASE WHEN $7::bigint>0 OR $8::bigint>0 THEN NOW()+interval '24 hours' END,$14::timestamptz,NOW(),NOW())
  ON CONFLICT(source) DO UPDATE SET generation=EXCLUDED.generation,started_at=EXCLUDED.started_at,sequence=EXCLUDED.sequence,enqueued=EXCLUDED.enqueued,succeeded=EXCLUDED.succeeded,failed=EXCLUDED.failed,dropped=EXCLUDED.dropped,queue_depth=EXCLUDED.queue_depth,last_event_at=EXCLUDED.last_event_at,last_success_at=EXCLUDED.last_success_at,last_failure_at=EXCLUDED.last_failure_at,last_drop_at=EXCLUDED.last_drop_at,
  gap_detected_at=CASE WHEN
    (EXCLUDED.generation=risk_delivery_watermarks.generation AND (EXCLUDED.failed>risk_delivery_watermarks.failed OR EXCLUDED.dropped>risk_delivery_watermarks.dropped OR EXCLUDED.enqueued<risk_delivery_watermarks.enqueued OR EXCLUDED.succeeded<risk_delivery_watermarks.succeeded))

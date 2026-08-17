@@ -1272,7 +1272,7 @@ WHERE ROW(current.ip_score,current.device_score,current.composite_score,current.
 	sampleUsers, _ := json.Marshal(result.SampleUserIDs)
 	ruleWatermark, _ := json.Marshal(result.RuleWatermark)
 	var completedAt time.Time
-	err = tx.QueryRowContext(ctx, `INSERT INTO risk_identity_rebuild_jobs(dry_run,status,requested_by,legacy_api_subjects,current_signal_users,v2_signal_users,current_signals,v2_signals,changed_subjects,rule_hits,sample_user_ids,evidence_high_water,rule_watermark,approved_dry_run_id,completed_at) VALUES($1,'completed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW()) RETURNING id,completed_at`, dryRun, actorID, result.LegacyAPISubjects, result.CurrentSignalUsers, result.V2SignalUsers, result.CurrentSignals, result.V2Signals, result.ChangedSubjects, ruleHits, sampleUsers, result.EvidenceHighWater, ruleWatermark, nullablePositiveInt64(result.ApprovedDryRunID)).Scan(&result.ID, &completedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO risk_identity_rebuild_jobs(dry_run,status,requested_by,legacy_api_subjects,current_signal_users,v2_signal_users,current_signals,v2_signals,changed_subjects,rule_hits,sample_user_ids,evidence_high_water,rule_watermark,approved_dry_run_id,completed_at) VALUES($1,'completed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW()) RETURNING id,completed_at`, dryRun, actorID, result.LegacyAPISubjects, result.CurrentSignalUsers, result.V2SignalUsers, result.CurrentSignals, result.V2Signals, result.ChangedSubjects, ruleHits, sampleUsers, result.EvidenceHighWater, ruleWatermark, nullablePositiveInt64(result.ApprovedDryRunID)).Scan(&result.ID, &completedAt)
 	if err != nil {
 		return result, err
 	}

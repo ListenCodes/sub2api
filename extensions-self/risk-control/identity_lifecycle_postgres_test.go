@@ -49,7 +49,7 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	}
 	base := time.Now().UTC()
 	for index := range 5 {
-		if _, err := service.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("lifecycle-registration-%d", index), int64(1000+index), base.Add(time.Duration(index)*time.Second), "8.8.4.4", "shared-browser")); err != nil {
+		if _, err := service.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("lifecycle-registration-%d", index), int64(1000+index), base, "8.8.4.4", "shared-browser")); err != nil {
 			t.Fatalf("registration %d: %v", index, err)
 		}
 	}
@@ -95,7 +95,7 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	if feedbackActiveSignals != 3 || feedbackActiveDecisions != 3 {
 		t.Fatalf("review feedback changed evidence lifecycle: signals=%d decisions=%d", feedbackActiveSignals, feedbackActiveDecisions)
 	}
-	if _, err := service.Ingest(ctx, registrationIdentityReport("lifecycle-registration-reopen", 1004, base.Add(10*time.Second), "8.8.4.4", "shared-browser")); err != nil {
+	if _, err := service.Ingest(ctx, registrationIdentityReport("lifecycle-registration-reopen", 1004, base, "8.8.4.4", "shared-browser")); err != nil {
 		t.Fatal(err)
 	}
 	var resolvedCases, pendingCases int
@@ -123,7 +123,7 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	if activeLabeledIPSignals != 0 || activeLabeledIPDecisions != 0 {
 		t.Fatalf("shared-network label retained current IP risk: signals=%d decisions=%d", activeLabeledIPSignals, activeLabeledIPDecisions)
 	}
-	if _, err := service.Ingest(ctx, registrationIdentityReport("lifecycle-registration-labeled", 1006, base.Add(11*time.Second), "8.8.4.4", "shared-browser")); err != nil {
+	if _, err := service.Ingest(ctx, registrationIdentityReport("lifecycle-registration-labeled", 1006, base, "8.8.4.4", "shared-browser")); err != nil {
 		t.Fatal(err)
 	}
 	var labeledIPSignals int
@@ -214,7 +214,7 @@ func TestIdentityAggregatesOAuthAndPersistentRetryPostgres(t *testing.T) {
 	for index, userID := range []int64{202, 203} {
 		_, err := service.Ingest(ctx, IdentityEventReport{
 			EventKey: fmt.Sprintf("api-observation-%d", userID), EventType: "api_request", EventClass: identityEventAPI, Outcome: "success",
-			OccurredAt: base.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano), UserID: userID,
+			OccurredAt: base.Format(time.RFC3339Nano), UserID: userID,
 			ClientIP: []string{"1.1.1.1", "9.9.9.9"}[index], IPSource: "remote_addr", ProxyChainValid: true, APIKeyID: 77,
 		})
 		if err != nil {
@@ -254,7 +254,7 @@ func TestIdentityAggregatesOAuthAndPersistentRetryPostgres(t *testing.T) {
 	for index := range 5 {
 		if _, err := service.Ingest(ctx, IdentityEventReport{
 			EventKey: fmt.Sprintf("email-retry-%d", index), EventType: "registration_attempt", EventClass: "registration", Outcome: "attempt",
-			OccurredAt: base.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano), Email: "same@example.test",
+			OccurredAt: base.Format(time.RFC3339Nano), Email: "same@example.test",
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -276,11 +276,11 @@ func TestIdentityAggregatesOAuthAndPersistentRetryPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ingestErr := retryService.Ingest(ctx, registrationIdentityReport("delivery-retry", 205, base.Add(20*time.Second), "208.67.222.222", "delivery-browser"))
+	_, ingestErr := retryService.Ingest(ctx, registrationIdentityReport("delivery-retry", 205, base, "208.67.222.222", "delivery-browser"))
 	if !errors.Is(ingestErr, ErrIdentitySignalProcessing) {
 		t.Fatalf("delivery-gap ingest error = %v", ingestErr)
 	}
-	_, secondIngestErr := retryService.Ingest(ctx, registrationIdentityReport("delivery-retry-peer", 206, base.Add(21*time.Second), "208.67.220.220", "delivery-browser-peer"))
+	_, secondIngestErr := retryService.Ingest(ctx, registrationIdentityReport("delivery-retry-peer", 206, base, "208.67.220.220", "delivery-browser-peer"))
 	if !errors.Is(secondIngestErr, ErrIdentitySignalProcessing) {
 		t.Fatalf("second delivery-gap ingest error = %v", secondIngestErr)
 	}
@@ -340,7 +340,7 @@ func TestIdentityRebuildKeepsVersionedEvidenceAndCasesPostgres(t *testing.T) {
 	}
 	base := time.Now().UTC()
 	for index := range 3 {
-		if _, err := service.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("rebuild-registration-%d", index), int64(3000+index), base.Add(time.Duration(index)*time.Second), "8.8.8.8", "rebuild-browser")); err != nil {
+		if _, err := service.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("rebuild-registration-%d", index), int64(3000+index), base, "8.8.8.8", "rebuild-browser")); err != nil {
 			t.Fatal(err)
 		}
 	}
