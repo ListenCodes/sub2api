@@ -61,14 +61,12 @@ func TestEventRecordUsesStableJSONFieldNames(t *testing.T) {
 	}
 }
 
-func TestSchemaMigratesLegacyRegistrationRuleToSplitStrategies(t *testing.T) {
+func TestSchemaMigratesLegacyRegistrationRulesToExplicitStrategies(t *testing.T) {
 	for _, expected := range []string{
 		"ALTER TABLE risk_rules ADD COLUMN IF NOT EXISTS count_strategy",
-		"code = 'registration_abuse'",
-		"'registration_identity_abuse'",
-		"'subject_device_events'",
-		"'registration_ip_multi_account'",
-		"'ip_distinct_subjects'",
+		"WHEN 'associated_events' THEN 'user_events'",
+		"WHEN 'subject_device_events' THEN 'email_subject_events'",
+		"WHEN 'ip_distinct_subjects' THEN 'ip_distinct_success_users'",
 	} {
 		if !strings.Contains(schemaSQL, expected) {
 			t.Fatalf("schema is missing %q", expected)
@@ -76,9 +74,30 @@ func TestSchemaMigratesLegacyRegistrationRuleToSplitStrategies(t *testing.T) {
 	}
 }
 
+func TestSchemaDisablesUnsafeLegacyEventRuleSemantics(t *testing.T) {
+	for _, expected := range []string{
+		"jsonb_array_elements_text(event_types)",
+		"count_strategy='email_subject_events'",
+		"count_strategy IN ('ip_distinct_success_users','browser_instance_distinct_success_users','ip_browser_cooccurrence')",
+		"INSERT INTO risk_schema_migrations(version) VALUES (5)",
+	} {
+		if !strings.Contains(schemaSQL, expected) {
+			t.Fatalf("schema is missing unsafe-rule migration fragment %q", expected)
+		}
+	}
+}
+
 func TestIdentitySchemaStageZeroDoesNotMutateExistingV1Rules(t *testing.T) {
-	if strings.Contains(schemaSQL, "WHERE code = 'api_request_observation'") {
-		t.Fatal("Stage 0 schema must not mutate an existing V1 API observation rule")
+	for _, forbidden := range []string{
+		"WHERE code = 'registration_abuse'",
+		"WHERE code IN ('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation')",
+	} {
+		if strings.Contains(schemaSQL, forbidden) {
+			t.Fatalf("Stage 0 schema must not mutate existing V1 rules: found %q", forbidden)
+		}
+	}
+	if !strings.Contains(schemaSQL, "AND code NOT IN ('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation')") {
+		t.Fatal("legacy strategy migration must exclude activation-gated V1 rules")
 	}
 	if !strings.Contains(schemaSQL, "risk_identity_shadow_activation") {
 		t.Fatal("schema does not persist the initial 14-day Shadow activation")

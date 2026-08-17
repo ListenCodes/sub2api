@@ -7,12 +7,16 @@
         </div>
       </template>
       <template #filters>
-        <section class="flex flex-wrap items-center gap-3" data-testid="audit-filters">
+        <section class="space-y-3" data-testid="audit-filters">
+          <div class="inline-flex max-w-full overflow-x-auto rounded-md border border-gray-200 p-1 dark:border-gray-700" role="tablist" aria-label="审计分类">
+            <button v-for="category in auditCategories" :key="category.value" type="button" role="tab" class="btn btn-sm shrink-0" :class="draft.category === category.value ? 'btn-primary' : 'btn-ghost'" :aria-selected="draft.category === category.value" :data-testid="`audit-category-${category.value}`" @click="setCategory(category.value)">{{ category.label }}</button>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
           <SearchInput
             :model-value="draft.actor || ''"
             class="w-full sm:w-56"
             data-testid="audit-actor-filter"
-            placeholder="管理员账号或 ID"
+            placeholder="管理员 ID"
             @update:model-value="setTextFilter('actor', $event)"
             @search="runFiltersNow"
           />
@@ -31,6 +35,7 @@
           <button type="button" class="btn btn-ghost btn-icon" :disabled="!hasFilters || loading" title="重置筛选" aria-label="重置筛选" data-testid="reset-audit-filters" @click="resetFilters">
             <Icon name="x" size="md" />
           </button>
+          </div>
         </section>
       </template>
       <template #table>
@@ -41,7 +46,18 @@
           <template #cell-target="{ row: record }">{{ targetLabel(record) }}</template>
           <template #cell-statusChange="{ row: record }"><span :data-testid="`audit-status-change-${record.id}`">{{ statusChange(record) }}</span></template>
           <template #cell-result="{ row: record }"><span :class="record.result === 'success' ? 'text-emerald-600 dark:text-emerald-400' : record.result === 'partial' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'">{{ formatAuditResult(record.result) }}</span></template>
-          <template #cell-reason="{ row: record }"><div class="max-w-xl whitespace-normal break-words text-left"><p>{{ record.reason || '无操作原因' }}</p><p v-if="record.failure_reason" class="mt-1 text-red-600 dark:text-red-400">失败原因：{{ record.failure_reason }}</p><p v-if="record.batch_id || record.request_id" class="mt-1 text-xs text-gray-400 dark:text-gray-500">批次：{{ record.batch_id || '-' }} · 请求：{{ record.request_id || '-' }}</p></div></template>
+          <template #cell-reason="{ row: record }">
+            <div class="max-w-xl whitespace-normal break-words text-left">
+              <button v-if="record.action === 'view_identity_detail'" type="button" class="btn btn-ghost btn-icon" :title="sensitiveExpanded(record.id) ? '折叠详情' : '展开详情'" :aria-label="sensitiveExpanded(record.id) ? '折叠详情' : '展开详情'" :data-testid="`toggle-sensitive-audit-${record.id}`" @click="toggleSensitive(record.id)">
+                <Icon :name="sensitiveExpanded(record.id) ? 'chevronDown' : 'chevronRight'" size="sm" />
+              </button>
+              <template v-if="record.action !== 'view_identity_detail' || sensitiveExpanded(record.id)">
+                <p>{{ record.reason || formatSensitiveSection(record) || '无操作原因' }}</p>
+                <p v-if="record.failure_reason" class="mt-1 text-red-600 dark:text-red-400">失败原因：{{ record.failure_reason }}</p>
+                <p v-if="record.batch_id || record.request_id" class="mt-1 text-xs text-gray-400 dark:text-gray-500">批次：{{ record.batch_id || '-' }} · 请求：{{ record.request_id || '-' }}</p>
+              </template>
+            </div>
+          </template>
           <template #empty><EmptyState :title="t('admin.userRiskControl.empty')" /></template>
         </DataTable>
       </template>
@@ -79,8 +95,9 @@ const loading = ref(true)
 const error = ref('')
 const sortBy = ref<AuditFilters['sortBy']>()
 const sortOrder = ref<'asc' | 'desc'>('desc')
-const draft = reactive<AuditFilters>({ action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' })
+const draft = reactive<AuditFilters>({ category: 'security', action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' })
 const activeFilters = reactive<AuditFilters>({ ...draft })
+const expandedSensitiveIDs = ref<Set<number>>(new Set())
 const columns: Column[] = [
   { key: 'time', label: t('admin.userRiskControl.table.time'), sortable: true },
   { key: 'actor', label: t('admin.userRiskControl.table.actor') },
@@ -92,8 +109,17 @@ const columns: Column[] = [
 ]
 let loadRequestID = 0
 let writingQuery = false
-const auditActionOptions = riskActionOptions.filter((option) => ['ban', 'unban', 'auto_ban', 'create_rule', 'update_rule', 'rule_test', 'mark_processed'].includes(option.value))
-const auditActionFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allActions') }, ...auditActionOptions])
+const auditCategories: Array<{ value: NonNullable<AuditFilters['category']>; label: string }> = [
+  { value: 'security', label: '安全处置' },
+  { value: 'rules', label: '规则变更' },
+  { value: 'sensitive', label: '敏感数据查看' },
+]
+const auditActionsByCategory: Record<NonNullable<AuditFilters['category']>, string[]> = {
+  security: ['ban', 'unban', 'auto_ban', 'mark_processed', 'claim_risk_review_case', 'review_risk_case', 'label_shared_network'],
+  rules: ['create_rule', 'update_rule', 'rule_test', 'disable_identity_rule', 'purge_legacy_v1', 'identity_rebuild_dry_run', 'identity_rebuild'],
+  sensitive: ['view_identity_detail'],
+}
+const auditActionFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allActions') }, ...riskActionOptions.filter((option) => auditActionsByCategory[draft.category || 'security'].includes(option.value))])
 const auditResultFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allResults') }, ...auditResultOptions])
 const mobileSortOptions = [
   { value: '', label: '默认排序' },
@@ -129,6 +155,7 @@ function restoreRouteState() {
   if (!route) return
   const nextSort = queryText('sort_by')
   Object.assign(draft, {
+	category: ['security', 'rules', 'sensitive'].includes(queryText('category')) ? queryText('category') as AuditFilters['category'] : 'security',
     actor: queryText('actor'),
     target: queryText('target'),
     action: queryText('action'),
@@ -147,6 +174,7 @@ async function syncRouteState() {
   if (!route || !router) return
   const query: LocationQueryRaw = { ...route.query }
   const values: Record<string, string | undefined> = {
+	category: activeFilters.category === 'security' ? undefined : activeFilters.category,
     actor: String(activeFilters.actor || '').trim() || undefined,
     target: String(activeFilters.target || '').trim() || undefined,
     action: String(activeFilters.action || '') || undefined,
@@ -169,7 +197,7 @@ async function syncRouteState() {
 
 function errorMessage(err: unknown) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed') }
 function requestFilters(): AuditFilters {
-  const result: AuditFilters = { action: activeFilters.action, result: activeFilters.result, page: page.value, pageSize: pageSize.value }
+  const result: AuditFilters = { category: activeFilters.category || 'security', action: activeFilters.action, result: activeFilters.result, page: page.value, pageSize: pageSize.value }
   if (activeFilters.targetUserId) result.targetUserId = activeFilters.targetUserId
   if (activeFilters.target?.trim()) result.target = activeFilters.target.trim()
   if (activeFilters.actor?.trim()) result.actor = activeFilters.actor.trim()
@@ -198,6 +226,7 @@ async function applyFilters() { Object.assign(activeFilters, draft); page.value 
 const { schedule: scheduleFilters, runNow: runFiltersNow } = useDebouncedAction(applyFilters, 300)
 function setTextFilter(key: 'actor' | 'target', value: string) { draft[key] = value; scheduleFilters() }
 function setFilter(key: 'action' | 'result', value: string | number | boolean | null) { Object.assign(draft, { [key]: String(value ?? '') }); void runFiltersNow() }
+function setCategory(category: NonNullable<AuditFilters['category']>) { draft.category = category; draft.action = ''; expandedSensitiveIDs.value = new Set(); void runFiltersNow() }
 function setDateRange(range: { startDate: string; endDate: string }) { draft.from = range.startDate; draft.to = range.endDate; void runFiltersNow() }
 async function setMobileSort(value: string | number | boolean | null) {
   if (!value || typeof value === 'boolean') sortBy.value = undefined
@@ -223,8 +252,17 @@ async function handleTableSort(key: string, order: 'asc' | 'desc') {
   await loadAudit()
 }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
-function targetLabel(record: RiskAuditRecord) { return record.target_type === 'user' ? `用户 #${record.target_id || record.target_user_id}` : record.target_type === 'rule' ? `规则 ${record.target_id || '-'}` : `未知目标：${record.target_id || '-'}` }
+function targetLabel(record: RiskAuditRecord) {
+  const labels: Record<string, string> = { user: '用户', rule: '规则', identity_rule: '身份规则', risk_review_case: '复核案件', network_identity: '网络身份' }
+  return `${labels[record.target_type || ''] || '其他目标'} ${record.target_id || (record.target_user_id ? `#${record.target_user_id}` : '-')}`
+}
 function statusChange(record: RiskAuditRecord) { return record.before_status && record.after_status ? `${formatAccountStatus(record.before_status)} → ${formatAccountStatus(record.after_status)}` : '-' }
+function sensitiveExpanded(id: number) { return expandedSensitiveIDs.value.has(id) }
+function toggleSensitive(id: number) { const next = new Set(expandedSensitiveIDs.value); next.has(id) ? next.delete(id) : next.add(id); expandedSensitiveIDs.value = next }
+function formatSensitiveSection(record: RiskAuditRecord) {
+  const section = String(record.metadata?.section || '')
+  return ({ 'identity-summary': '身份摘要', 'ip-identities': 'IP 身份', 'device-identities': '设备身份', 'associated-users': '关联账号' } as Record<string, string>)[section] || ''
+}
 restoreRouteState()
 watch(() => route?.fullPath, () => {
   if (writingQuery) return

@@ -27,3 +27,13 @@ func TestBuildRiskStatusAuditReportKeepsFailureAndBatchContext(t *testing.T) {
 		t.Fatalf("metadata = %#v", report.Metadata)
 	}
 }
+
+func TestBuildRiskStatusAuditReportPreservesPartialOutcome(t *testing.T) {
+	report := buildRiskStatusAuditReport(7, 42, service.StatusDisabled, service.StatusActive, service.StatusDisabled, "partial", "manual review", "token revocation failed", "batch-123", "")
+	if report.Result != "partial" || report.Metadata["after_status"] != service.StatusDisabled {
+		t.Fatalf("partial report = %#v", report)
+	}
+	if report.Metadata["failure_reason"] != "token revocation failed" {
+		t.Fatalf("failure reason = %#v", report.Metadata["failure_reason"])
+	}
+}

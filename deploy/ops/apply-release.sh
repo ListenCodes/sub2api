@@ -180,7 +180,7 @@ validate_identity_runtime() {
 	[[ "$expected" =~ ^[^,]+/(32|128),173\.245\.48\.0/20, ]] || return 1
 	actual="$(container_env_value sub2api SERVER_TRUSTED_PROXIES)" || return 1
 	[[ "$actual" == "$expected" ]] || return 1
-  for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
+  for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_DELIVERY_ENABLED RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
     expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
     [[ "$expected" == true || "$expected" == false ]] || return 1
     actual="$(container_env_value sub2api "$key")" || return 1
@@ -188,7 +188,8 @@ validate_identity_runtime() {
   done
   for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED \
     RISK_IDENTITY_ADMIN_ENABLED RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
-    RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED; do
+	RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED \
+	RISK_IDENTITY_CURRENT_SCORE_ENABLED RISK_IDENTITY_CASES_ENABLED RISK_IDENTITY_EXPLAIN_ENABLED RISK_IDENTITY_DELIVERY_ENABLED; do
     expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
     [[ "$expected" == true || "$expected" == false ]] || return 1
     actual="$(container_env_value extensions-self "$key")" || return 1
@@ -201,11 +202,79 @@ validate_identity_runtime() {
   health="$(docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz)" || return 1
   expected_enabled="$(awk -F= '$1=="RISK_IDENTITY_V2_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
   expected_admin="$(awk -F= '$1=="RISK_IDENTITY_ADMIN_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
-  jq -e --argjson enabled "$expected_enabled" --argjson admin "$expected_admin" --arg geo_source "$expected_geo_source" '
+	jq -e --argjson enabled "$expected_enabled" --argjson admin "$expected_admin" --arg geo_source "$expected_geo_source" '
     .identity.enabled == $enabled and .identity.admin_enabled == $admin
     and .identity.mode == "shadow" and .identity.schema == "v2"
 	and .identity.geo_source == $geo_source
-  ' <<< "$health" >/dev/null
+	' <<< "$health" >/dev/null
+	if [[ "$IDENTITY_TRANSITION" == stage3-rules || "$IDENTITY_TRANSITION" == stage4-geo ]]; then
+		jq -e '
+			.identity.features.current_score and .identity.features.cases
+			and .identity.features.explain and .identity.features.delivery
+			and .identity.configured_rule_count >= 5
+			and .identity.domains.ip == "healthy"
+			and .identity.domains.device == "healthy"
+			and .identity.domains.composite == "healthy"
+			and .identity.processing.pending == 0
+			and .identity.processing.retry == 0
+			and .identity.processing.failed == 0
+			and .identity.delivery.sources > 0
+			and .identity.delivery.gap_sources == 0
+			and .identity.delivery.stale_sources == 0
+			and .identity.delivery.queue_depth == 0
+			and .identity.delivery.dropped == 0
+			and .identity.delivery.failed == 0
+		' <<< "$health" >/dev/null || return 1
+		jq -e '.identity.effective_rule_count >= 5' <<< "$health" >/dev/null || return 1
+	fi
+}
+
+validate_identity_pre_switch() {
+  local health shadow_until
+  [[ "$UPDATE_KIND" == identity-config ]] || return 0
+  [[ "$IDENTITY_TRANSITION" == stage3-rules || "$IDENTITY_TRANSITION" == stage4-geo ]] || return 0
+  health="$(docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz)" || return 1
+  jq -e '
+    .status == "ok"
+    and .identity.enabled and .identity.admin_enabled
+    and .identity.mode == "shadow" and .identity.schema == "v2"
+    and .identity.quality_domains.ip == "healthy"
+    and .identity.quality_domains.device == "healthy"
+    and .identity.quality_domains.composite == "healthy"
+    and .identity.configured_rule_count >= 5
+    and .identity.prospective_rule_count >= 5
+    and .identity.features.delivery and .identity.features.explain
+    and .identity.processing.pending == 0
+    and .identity.processing.retry == 0
+    and .identity.processing.failed == 0
+    and .identity.delivery.sources > 0
+    and .identity.delivery.gap_sources == 0
+    and .identity.delivery.stale_sources == 0
+    and .identity.delivery.queue_depth == 0
+    and .identity.delivery.dropped == 0
+    and .identity.delivery.failed == 0
+  ' <<< "$health" >/dev/null || return 1
+  if [[ "$IDENTITY_TRANSITION" == stage3-rules ]]; then
+    shadow_until="$(jq -er '.identity.shadow_until' <<< "$health")" || return 1
+    [[ "$(date -u -d "$shadow_until" +%s)" -ge "$(date -u -d '+14 days' +%s)" ]] || return 1
+    jq -e '
+      .identity.domains.ip == "disabled"
+      and .identity.domains.device == "disabled"
+      and .identity.domains.composite == "disabled"
+      and .identity.effective_rule_count == 0
+      and (.identity.features.current_score | not)
+      and (.identity.features.cases | not)
+    ' <<< "$health" >/dev/null
+  else
+    jq -e '
+      .identity.domains.ip == "healthy"
+      and .identity.domains.device == "healthy"
+      and .identity.domains.composite == "healthy"
+      and .identity.effective_rule_count >= 5
+      and .identity.features.current_score
+      and .identity.features.cases
+    ' <<< "$health" >/dev/null
+  fi
 }
 
 render_and_match() {
@@ -387,7 +456,7 @@ restore_base_before_main_switch() {
 restore_interrupted_base_runtime() {
   local source_head="$1" source_ref="$2"
   if [[ "$operation_status" == switching_extensions \
-    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage1-*) ]]; then
+    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage1-* && "$IDENTITY_TRANSITION" != stage4-geo) ]]; then
     restore_base_before_main_switch "$source_head" "$source_ref"
   else
     restore_base_runtime "$source_head" "$source_ref"
@@ -547,6 +616,7 @@ release_running_container_matches_image extensions-self "$EXTENSIONS_REPOSITORY@
   || fail_before_mutation 'running extensions container no longer matches the base digest' CURRENT_RUNTIME_DRIFT
 wait_container_healthy sub2api || fail_before_mutation 'running main container is not healthy' CURRENT_RUNTIME_DRIFT
 wait_container_healthy extensions-self || fail_before_mutation 'running extensions container is not healthy' CURRENT_RUNTIME_DRIFT
+validate_identity_pre_switch || fail_before_mutation 'identity data quality or Shadow prerequisites changed after preparation' IDENTITY_PREFLIGHT_DRIFT failed
 
 rollback_started=false
 main_switch_started=false
@@ -585,13 +655,13 @@ abort_apply() {
 trap 'apply_failure_message="unexpected apply error at line $LINENO"; apply_failure_code=UNEXPECTED_APPLY_ERROR; rollback_on_error 1' ERR
 release_job_update "$JOB_ID" validating_manifest 'Prepared manifest and production ledger revalidated' '{}'
 rollback_started=true
+release_job_update "$JOB_ID" switching_extensions "Beginning extension switch to $EXTENSIONS_DIGEST" '{}'
 release_checkout_exact_commit "$TARGET_COMMIT" >> "$LOG" 2>&1 || abort_apply 'target source checkout failed' SOURCE_CHECKOUT_FAILED
 release_install_snapshot_artifacts "$TARGET_DIR" || abort_apply 'target Compose pair or environment installation failed' TARGET_ARTIFACT_INSTALL_FAILED
 target_artifact_identity_matches || abort_apply 'installed target artifacts failed exact validation' TARGET_ARTIFACT_DRIFT
 refresh_account_monitor_source_views >> "$LOG" 2>&1 \
   || abort_apply 'account-monitor source views could not be refreshed' SOURCE_VIEWS_FAILED
 
-release_job_update "$JOB_ID" switching_extensions "Switching extensions to $EXTENSIONS_DIGEST" '{}'
 SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \
   docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" \
   up -d --pull never --no-deps --force-recreate extensions-self >> "$LOG" 2>&1 \

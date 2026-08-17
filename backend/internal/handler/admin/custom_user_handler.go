@@ -115,14 +115,21 @@ func (h *CustomUserHandler) SetRiskStatus(c *gin.Context) {
 		return
 	}
 	if shouldRevokeTokensForStatusChange(before.Status, req.Status) && h.authService != nil {
-		if err := h.authService.RevokeAllUserTokens(c.Request.Context(), userID); err != nil {
-			h.reportRiskStatusAudit(getAdminIDFromContext(c), userID, req.Status, before.Status, updated.Status, "failed", req.Reason, err.Error(), req.BatchID, req.RequestID)
-			response.ErrorFrom(c, err)
+		if err := h.authService.RevokeAllUserSessions(c.Request.Context(), userID); err != nil {
+			h.reportRiskStatusAudit(getAdminIDFromContext(c), userID, req.Status, before.Status, updated.Status, "partial", req.Reason, err.Error(), req.BatchID, req.RequestID)
+			response.Success(c, gin.H{
+				"user":           dto.UserFromServiceAdmin(updated),
+				"before_status":  before.Status,
+				"after_status":   updated.Status,
+				"reason":         req.Reason,
+				"result":         "partial",
+				"failure_reason": "Account status changed, but active sessions could not be revoked",
+			})
 			return
 		}
 	}
 	h.reportRiskStatusAudit(getAdminIDFromContext(c), userID, req.Status, before.Status, updated.Status, "success", req.Reason, "", req.BatchID, req.RequestID)
-	response.Success(c, gin.H{"user": dto.UserFromServiceAdmin(updated), "before_status": before.Status, "after_status": updated.Status, "reason": req.Reason})
+	response.Success(c, gin.H{"user": dto.UserFromServiceAdmin(updated), "before_status": before.Status, "after_status": updated.Status, "reason": req.Reason, "result": "success"})
 }
 
 func shouldRevokeTokensForStatusChange(beforeStatus, requestedStatus string) bool {

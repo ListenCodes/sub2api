@@ -31,6 +31,7 @@ func RegisterCustomExtensionRoutes(
 
 func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, custom *handler.CustomExtensions) {
 	admin.Group("/user-risk-control").Any("/*path", custom.AdminUser.ProxyRiskControl)
+	admin.GET("/user-risk/users", custom.AdminUser.ListUserRiskUsers)
 	admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)
 	admin.POST("/users/:id/risk-status", custom.AdminUser.SetRiskStatus)
 	admin.GET("/users/:id/identity-summary", custom.AdminUser.ProxyUserRiskIdentity)

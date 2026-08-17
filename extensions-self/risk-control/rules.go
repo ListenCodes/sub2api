@@ -6,19 +6,29 @@ import (
 )
 
 const (
-	countStrategyAssociatedEvents    = "associated_events"
-	countStrategySubjectDeviceEvents = "subject_device_events"
-	countStrategyIPDistinctSubjects  = "ip_distinct_subjects"
+	countStrategyUserEvents                  = "user_events"
+	countStrategyEmailSubjectEvents          = "email_subject_events"
+	countStrategyIPDistinctSuccessUsers      = "ip_distinct_success_users"
+	countStrategyBrowserDistinctSuccessUsers = "browser_instance_distinct_success_users"
+	countStrategyAPIClientDistinctUsers      = "api_client_distinct_users"
+	countStrategyIPBrowserCooccurrence       = "ip_browser_cooccurrence"
 )
 
 func normalizeCountStrategy(strategy string) string {
 	switch strings.TrimSpace(strategy) {
-	case countStrategySubjectDeviceEvents:
-		return countStrategySubjectDeviceEvents
-	case countStrategyIPDistinctSubjects:
-		return countStrategyIPDistinctSubjects
+	case countStrategyEmailSubjectEvents, countStrategyIPDistinctSuccessUsers, countStrategyBrowserDistinctSuccessUsers, countStrategyAPIClientDistinctUsers, countStrategyIPBrowserCooccurrence:
+		return strings.TrimSpace(strategy)
 	default:
-		return countStrategyAssociatedEvents
+		return countStrategyUserEvents
+	}
+}
+
+func isDistinctSubjectStrategy(strategy string) bool {
+	switch normalizeCountStrategy(strategy) {
+	case countStrategyIPDistinctSuccessUsers, countStrategyBrowserDistinctSuccessUsers, countStrategyAPIClientDistinctUsers, countStrategyIPBrowserCooccurrence:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -31,11 +41,33 @@ func evaluateRulesWithMode(rules []Rule, event EventReport, recentCount func(Rul
 	if recentCount == nil {
 		recentCount = func(Rule) int { return 0 }
 	}
+	type matchedRule struct {
+		rule  Rule
+		count int
+	}
+	winners := map[string]matchedRule{}
+	order := []string{}
 	for _, rule := range rules {
-		count := recentCount(rule)
-		if !rule.Enabled || rule.Threshold <= 0 || !ruleMatchesEvent(rule, event) || count < rule.Threshold {
+		if !rule.Enabled || rule.Threshold <= 0 || !ruleMatchesEvent(rule, event) || !ruleHasRequiredEvidence(rule, event) {
 			continue
 		}
+		count := recentCount(rule)
+		if count < rule.Threshold {
+			continue
+		}
+		family := ruleSignalFamily(rule, event)
+		current, exists := winners[family]
+		if exists && (current.rule.Score > rule.Score || (current.rule.Score == rule.Score && riskActionRank(current.rule.Action) >= riskActionRank(rule.Action))) {
+			continue
+		}
+		if !exists {
+			order = append(order, family)
+		}
+		winners[family] = matchedRule{rule: rule, count: count}
+	}
+	for _, family := range order {
+		match := winners[family]
+		rule, count := match.rule, match.count
 		decision.Score += maxInt(rule.Score, 0)
 		if riskLevelRank(rule.RiskLevel) > riskLevelRank(decision.RiskLevel) {
 			decision.RiskLevel = normalizeRiskLevel(rule.RiskLevel)
@@ -67,6 +99,19 @@ func evaluateRulesWithMode(rules []Rule, event EventReport, recentCount func(Rul
 	return decision
 }
 
+func ruleSignalFamily(rule Rule, event EventReport) string {
+	switch normalizeCountStrategy(rule.CountStrategy) {
+	case countStrategyEmailSubjectEvents:
+		return "registration_email_flow"
+	case countStrategyIPDistinctSuccessUsers, countStrategyBrowserDistinctSuccessUsers, countStrategyIPBrowserCooccurrence:
+		return "registration_identity"
+	case countStrategyAPIClientDistinctUsers:
+		return "api_client_observation"
+	default:
+		return "user_event:" + event.EventType
+	}
+}
+
 func formatRuleReason(rule Rule, event EventReport, count int) string {
 	name := strings.TrimSpace(rule.Name)
 	if name == "" {
@@ -83,10 +128,16 @@ func formatRuleReason(rule Rule, event EventReport, count int) string {
 	}
 	occurrence := fmt.Sprintf("%d 次事件", count)
 	switch normalizeCountStrategy(rule.CountStrategy) {
-	case countStrategySubjectDeviceEvents:
-		occurrence = fmt.Sprintf("同邮箱或设备注册事件 %d 次", count)
-	case countStrategyIPDistinctSubjects:
+	case countStrategyEmailSubjectEvents:
+		occurrence = fmt.Sprintf("同一账号标识事件 %d 次", count)
+	case countStrategyIPDistinctSuccessUsers:
 		occurrence = fmt.Sprintf("同 IP 注册 %d 个账号", count)
+	case countStrategyBrowserDistinctSuccessUsers:
+		occurrence = fmt.Sprintf("同浏览器实例注册 %d 个账号", count)
+	case countStrategyAPIClientDistinctUsers:
+		occurrence = fmt.Sprintf("同 API 客户端关联 %d 个账号", count)
+	case countStrategyIPBrowserCooccurrence:
+		occurrence = fmt.Sprintf("同 IP 与浏览器实例共同注册 %d 个账号", count)
 	default:
 		switch event.EventType {
 		case "login_failure":

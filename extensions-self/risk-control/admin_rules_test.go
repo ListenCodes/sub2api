@@ -14,6 +14,7 @@ func validTestRule() Rule {
 		Name:          "自定义登录失败",
 		Description:   "短时间内连续登录失败",
 		EventTypes:    []string{"login_failure"},
+		CountStrategy: countStrategyUserEvents,
 		Enabled:       true,
 		WindowSeconds: 300,
 		Threshold:     5,
@@ -34,7 +35,8 @@ func TestValidateRuleConfigRejectsUnsafeAndInvalidValues(t *testing.T) {
 		{name: "unknown event", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"unknown"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "event type"},
 		{name: "normal api observation", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"api_request"}, WindowSeconds: 1, Threshold: 1, Score: 0, RiskLevel: "low", Action: "observe"}, want: "event type"},
 		{name: "unknown count strategy", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, CountStrategy: "global_magic", WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "count strategy"},
-		{name: "invalid score", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 101, RiskLevel: "low", Action: "observe"}, want: "score"},
+		{name: "missing count strategy", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, WindowSeconds: 1, Threshold: 1, Score: 1, RiskLevel: "low", Action: "observe"}, want: "count strategy"},
+		{name: "invalid score", rule: Rule{Code: "safe_code", Name: "名称", EventTypes: []string{"login_failure"}, CountStrategy: countStrategyUserEvents, WindowSeconds: 1, Threshold: 1, Score: 101, RiskLevel: "low", Action: "observe"}, want: "score"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,7 +121,7 @@ func TestSQLRepositoryCreatesRule(t *testing.T) {
 func TestAdminRuleCreateWritesAuditRecord(t *testing.T) {
 	repo := NewMemoryRepository(nil)
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, repo)
-	body := []byte(`{"code":"custom_login_failure","name":"自定义登录失败","description":"短时间内连续登录失败","event_types":["login_failure"],"enabled":true,"window_seconds":300,"threshold":5,"score":80,"risk_level":"high","action":"review","reason":"上线前验证"}`)
+	body := []byte(`{"code":"custom_login_failure","name":"自定义登录失败","description":"短时间内连续登录失败","event_types":["login_failure"],"count_strategy":"user_events","enabled":true,"window_seconds":300,"threshold":5,"score":80,"risk_level":"high","action":"review","reason":"上线前验证"}`)
 	request := signedRequest(http.MethodPost, "/api/v1/admin/rules", body, testSecret, "nonce-create-rule", time.Now())
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	response := serveJSON(server, request)

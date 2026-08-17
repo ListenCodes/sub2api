@@ -32,14 +32,18 @@ test('identity V2 is additive, default-off, and permanently Shadow', { skip: !id
   assert.match(schema, /pg_get_constraintdef\(oid\) NOT LIKE '%account%'/)
   const repository = read('extensions-self/risk-control/identity_db.go')
   assert.match(repository, /INSERT INTO risk_identity_signal_history[\s\S]*WHERE domain IN \('ip','device','composite'\)[\s\S]*DELETE FROM risk_identity_signals WHERE domain IN \('ip','device','composite'\)/)
-  assert.match(repository, /event\.EventType != "registration_attempt"[\s\S]*email_lookup_key=\$1[\s\S]*domain,rule_code,score[\s\S]*'account'/)
+  assert.match(repository, /rule\.subjectKind != "api_client" && event\.EventClass != "registration"/)
+  assert.match(repository, /event\.EventType != "registration_attempt" \|\| event\.EmailLookupKey == ""[\s\S]*email_lookup_key=\$1/)
+  assert.match(repository, /INSERT INTO risk_identity_signals\(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score[\s\S]*VALUES \(\$1,0,'account'/)
   assert.match(main, /if cfg\.Identity\.RulesEnabled \{[\s\S]*EnsureShadowActivation[\s\S]*ActivateShadowRules/)
-  assert.doesNotMatch(schema, /UPDATE risk_rules[\s\S]{0,400}api_request_observation/)
+	assert.doesNotMatch(schema, /WHERE code IN \('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation'\)/)
+	assert.match(schema, /AND code NOT IN \('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation'\)/)
+	assert.match(repository, /DELETE FROM risk_rules WHERE code IN \('registration_abuse','registration_identity_abuse','registration_ip_multi_account','api_request_observation'\)/)
 })
 
 test('compose passes independent identity secrets without weak defaults', { skip: !identityImplementationPresent }, () => {
   const compose = `${read('deploy/docker-compose.custom.yml')}\n${read('deploy/docker-compose.custom.local.yml')}`
-  for (const key of ['RISK_IDENTITY_V2_ENABLED', 'RISK_IDENTITY_IP_COLLECTION_ENABLED', 'RISK_IDENTITY_DEVICE_COLLECTION_ENABLED', 'RISK_IDENTITY_ADMIN_ENABLED', 'RISK_IDENTITY_RULES_ENABLED', 'RISK_IDENTITY_IP_RULES_ENABLED', 'RISK_IDENTITY_DEVICE_RULES_ENABLED', 'RISK_IDENTITY_COMPOSITE_RULES_ENABLED']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-false\\}`))
+  for (const key of ['RISK_IDENTITY_V2_ENABLED', 'RISK_IDENTITY_IP_COLLECTION_ENABLED', 'RISK_IDENTITY_DEVICE_COLLECTION_ENABLED', 'RISK_IDENTITY_ADMIN_ENABLED', 'RISK_IDENTITY_RULES_ENABLED', 'RISK_IDENTITY_IP_RULES_ENABLED', 'RISK_IDENTITY_DEVICE_RULES_ENABLED', 'RISK_IDENTITY_COMPOSITE_RULES_ENABLED', 'RISK_IDENTITY_CURRENT_SCORE_ENABLED', 'RISK_IDENTITY_CASES_ENABLED', 'RISK_IDENTITY_EXPLAIN_ENABLED', 'RISK_IDENTITY_DELIVERY_ENABLED']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-false\\}`))
   for (const key of ['RISK_IDENTITY_HMAC_KEY', 'RISK_IDENTITY_ENCRYPTION_KEY', 'RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY', 'RISK_DEVICE_COOKIE_SIGNING_KEY', 'RISK_DEVICE_COOKIE_SIGNING_PREVIOUS_KEY']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-\\}`))
   for (const key of ['RISK_IDENTITY_ENCRYPTION_KEY_ID', 'RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY_ID', 'RISK_DEVICE_COOKIE_SIGNING_KEY_ID', 'RISK_DEVICE_COOKIE_SIGNING_PREVIOUS_KEY_ID']) assert.match(compose, new RegExp(`${key}: \\$\\{${key}:-\\}`))
   assert.doesNotMatch(compose, /RISK_IDENTITY_(?:HMAC|ENCRYPTION)_KEY:.*change_this/)
@@ -75,6 +79,10 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   assert.match(apply, /IDENTITY_TRANSITION" == stage4-geo/)
   assert.match(prepare, /stage4-geo[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS false[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true[\s\S]*RISK_IDENTITY_GEO_SOURCE cloudflare_verified/)
   assert.match(apply, /identity\.geo_source == \$geo_source/)
+	for (const field of ['configured_rule_count', 'prospective_rule_count', 'effective_rule_count', 'quality_domains', 'gap_sources', 'stale_sources', 'queue_depth', 'dropped']) assert.match(`${prepare}\n${apply}`, new RegExp(field))
+	assert.match(apply, /stage3-rules[\s\S]*effective_rule_count >= 5/)
+	assert.doesNotMatch(apply, /effective_rule_count >= 1/)
+	assert.match(prepare, /validate_stage3_prerequisites/)
   assert.match(ledger, /identity-config/)
   assert.match(ledger, /identity_transition/)
   assert.match(common, /PREPARED_ROOT="\$\{SUB2API_PREPARED_ROOT:-\/var\/lib\/sub2api-release\/prepared\}"/)
@@ -89,6 +97,13 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   assert.doesNotMatch(prepare, /> "\$MANIFEST_DIR\/manifest\.(?:json|sha256)"/)
   assert.match(apply, /restore_interrupted_base_runtime/)
   assert.match(apply, /"\$UPDATE_KIND" == identity-config && "\$IDENTITY_TRANSITION" != stage1-\*/)
+	assert.match(apply, /"\$IDENTITY_TRANSITION" != stage4-geo/)
+	const preSwitch = apply.lastIndexOf("validate_identity_pre_switch || fail_before_mutation")
+	const rollbackStart = apply.indexOf('rollback_started=true', preSwitch)
+	const switchingExtensions = apply.indexOf('switching_extensions "Beginning extension switch', rollbackStart)
+	const checkout = apply.indexOf('release_checkout_exact_commit "$TARGET_COMMIT"', switchingExtensions)
+	const install = apply.indexOf('release_install_snapshot_artifacts "$TARGET_DIR"', checkout)
+	assert.ok(preSwitch >= 0 && preSwitch < rollbackStart && rollbackStart < switchingExtensions && switchingExtensions < checkout && checkout < install)
 })
 
 test('bounded identity delivery exposes enqueue, outcome, drop, and latency metrics', { skip: !identityImplementationPresent }, () => {
@@ -201,18 +216,22 @@ test('composite admin evidence matches successful quality-valid V2 facts', { ski
   assert.match(repository, /mine\.outcome='success' AND other\.outcome='success'/)
   assert.match(repository, /mine\.ip_quality_valid AND other\.ip_quality_valid/)
   assert.match(repository, /mine\.device_quality_valid AND other\.device_quality_valid/)
-  assert.match(repository, /COUNT\(DISTINCT other\.id\)::int/)
+  assert.match(repository, /COUNT\(DISTINCT other_event_id\)::int/)
+	assert.match(repository, /window_seconds FROM risk_identity_rules WHERE code='v2_registration_composite_accounts'/)
+	assert.match(repository, /ABS\(EXTRACT\(EPOCH FROM\(other\.occurred_at-mine\.occurred_at\)\)\)<=parameters\.overlap_window/)
 })
 
 test('identity rules exclude invalid facts and coarse profiles from strong links', { skip: !identityImplementationPresent }, () => {
   const repository = read('extensions-self/risk-control/identity_db.go')
 
   assert.match(repository, /event_class='registration' AND outcome='success' AND ip_quality_valid AND network_identity_id=\$1/)
-  assert.match(repository, /event_class='registration' AND outcome='success' AND device_quality_valid AND \(browser_identity_id=\$1 OR api_client_identity_id=\$1\)/)
+	assert.match(repository, /event_class='registration' AND outcome='success' AND device_quality_valid AND browser_identity_id=\$1/)
+	assert.match(repository, /outcome='success' AND api_client_identity_id=\$1/)
   assert.match(repository, /outcome='success' AND ip_quality_valid AND device_quality_valid AND network_identity_id=\$1 AND browser_identity_id=\$2/)
   assert.match(repository, /device\.strong && !fact\.DeviceQualityValid/)
   assert.match(repository, /networkID > 0 && fact\.IPQualityValid/)
-  assert.equal((repository.match(/identity\.identity_kind IN \('browser_instance','api_client'\)/g) ?? []).length, 3)
+	assert.ok((repository.match(/identity\.identity_kind IN \('browser_instance','api_client'\)/g) ?? []).length >= 1)
+	assert.doesNotMatch(repository, /identity_kind IN \('browser_instance','browser_profile'/)
 })
 
 test('admin list identity enrichment is batched and returns masked networks only', { skip: !identityImplementationPresent }, () => {

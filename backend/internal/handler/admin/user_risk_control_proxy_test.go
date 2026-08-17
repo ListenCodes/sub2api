@@ -75,6 +75,12 @@ func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
 	if !allowedRiskControlPath(http.MethodPost, "/users/42/processed") {
 		t.Fatal("POST /users/:id/processed must be allowlisted")
 	}
+	if !allowedRiskControlPath(http.MethodPost, "/identity-rules/v2_registration_ip_accounts/disable") {
+		t.Fatal("POST /identity-rules/:code/disable must be allowlisted")
+	}
+	if allowedRiskControlPath(http.MethodPost, "/identity-rules/v2_registration_ip_accounts/enable") {
+		t.Fatal("online identity rule enable must remain blocked")
+	}
 	if allowedRiskControlPath(http.MethodPost, "/users/not-an-id/processed") {
 		t.Fatal("processed path must require a numeric user id")
 	}

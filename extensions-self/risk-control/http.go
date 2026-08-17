@@ -124,7 +124,7 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
-	if r.URL.Path == "/api/v1/internal/identity-events" {
+	if r.URL.Path == "/api/v1/internal/identity-events" || r.URL.Path == "/api/v1/internal/identity-delivery" {
 		if int64(len(body)) > s.cfg.Identity.MaxBodyBytes {
 			writeError(w, http.StatusRequestEntityTooLarge, errors.New("identity request body too large"))
 			return
@@ -184,6 +184,8 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleEvaluateEvent(w, r, body, false)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/identity-events":
 		s.handleIdentityEvent(w, r, body)
+	case r.Method == http.MethodPost && path == "/api/v1/internal/identity-delivery":
+		s.handleIdentityDelivery(w, r, body)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/audit":
 		s.handleAuditIngest(w, r, body)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/overview":
@@ -214,6 +216,20 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleIdentityHealth(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-rules":
 		s.handleIdentityRules(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-rule-effects":
+		s.handleIdentityRuleEffects(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/versions"):
+		s.handleIdentityRuleVersions(w, r, path)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/disable"):
+		s.handleIdentityRuleDisable(w, r, path, body)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/review-cases":
+		s.handleReviewCases(w, r)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/claim"):
+		s.handleReviewCaseClaim(w, r, path)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/feedback"):
+		s.handleReviewCaseFeedback(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/network-identities/") && strings.HasSuffix(path, "/label"):
+		s.handleNetworkIdentityLabel(w, r, path, body)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds/dry-run":
 		s.handleIdentityRebuild(w, r, true)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds":
@@ -243,10 +259,42 @@ func (s *HTTPServer) handleIdentityEvent(w http.ResponseWriter, r *http.Request,
 	}
 	duplicate, err := s.identity.Ingest(r.Context(), input)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		if errors.Is(err, ErrInvalidIdentity) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "duplicate": duplicate, "mode": "shadow"})
+}
+
+func (s *HTTPServer) handleIdentityDelivery(w http.ResponseWriter, r *http.Request, body []byte) {
+	if s.identity == nil || s.identity.repo == nil || !s.cfg.Identity.DeliveryEnabled {
+		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": false, "disabled": true})
+		return
+	}
+	var input IdentityDeliveryReport
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, errors.New("delivery request must contain one JSON object"))
+		return
+	}
+	accepted, err := s.identity.repo.RecordDeliveryHeartbeat(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, ErrInvalidIdentity) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": accepted})
 }
 
 func (s *HTTPServer) handleEvaluateEvent(w http.ResponseWriter, r *http.Request, body []byte, includeDecision bool) {

@@ -129,15 +129,38 @@ func allowedRiskControlPath(method, path string) bool {
 		return false
 	}
 	switch {
-	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/identity-rules" || path == "/audit"):
+	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/identity-rules" || strings.HasPrefix(path, "/identity-rules/") || path == "/identity-rule-effects" || path == "/review-cases" || path == "/audit"):
 		return true
 	case method == http.MethodPut && strings.HasPrefix(path, "/rules/"):
 		return true
-	case method == http.MethodPost && (path == "/rules" || path == "/rules/test" || isProcessedUserPath(path)):
+	case method == http.MethodPost && (path == "/rules" || path == "/rules/test" || isProcessedUserPath(path) || isReviewCaseActionPath(path) || isNetworkLabelPath(path) || isIdentityRuleDisablePath(path)):
 		return true
 	default:
 		return false
 	}
+}
+
+func isIdentityRuleDisablePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 3 && parts[0] == "identity-rules" && parts[1] != "" && parts[2] == "disable"
+}
+
+func isReviewCaseActionPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "review-cases" || (parts[2] != "claim" && parts[2] != "feedback") {
+		return false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	return err == nil && id > 0
+}
+
+func isNetworkLabelPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "network-identities" || parts[2] != "label" {
+		return false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	return err == nil && id > 0
 }
 
 func normalizeRiskControlPath(rawPath string) (string, bool) {

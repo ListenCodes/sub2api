@@ -56,13 +56,23 @@ func (s *RiskService) EvaluateEvent(ctx context.Context, input EventReport) (Dec
 	if err != nil {
 		return Decision{}, err
 	}
+	if isReliabilityOnlyEvent(input.EventType) {
+		// Reliability events remain observable in the event stream, but they can
+		// never produce a user-risk decision even if an old rule is re-enabled.
+		rules = nil
+	}
+	eligibleRules := make([]Rule, 0, len(rules))
 	recentCounts := make(map[string]int, len(rules))
 	for _, rule := range rules {
+		if !rule.Enabled || validateRuleConfig(rule) != nil || !ruleMatchesEvent(rule, input) || !ruleHasRequiredEvidence(rule, input) {
+			continue
+		}
+		eligibleRules = append(eligibleRules, rule)
 		since := now.Add(-time.Duration(rule.WindowSeconds) * time.Second)
 		count := 0
 		eventTypes := rule.EventTypes
-		if len(eventTypes) == 0 {
-			eventTypes = []string{input.EventType}
+		if isDistinctSubjectStrategy(rule.CountStrategy) {
+			eventTypes = eventTypes[:1]
 		}
 		for _, eventType := range eventTypes {
 			previous, countErr := s.repo.CountRecent(ctx, userID, subjectID, input.IPHash, input.DeviceHash, eventType, rule.CountStrategy, since)
@@ -71,12 +81,10 @@ func (s *RiskService) EvaluateEvent(ctx context.Context, input EventReport) (Dec
 			}
 			count += previous
 		}
-		if ruleMatchesEvent(rule, input) {
-			count++
-		}
+		count++
 		recentCounts[rule.Code] = count
 	}
-	decision := evaluateRulesWithMode(rules, input, func(rule Rule) int {
+	decision := evaluateRulesWithMode(eligibleRules, input, func(rule Rule) int {
 		return recentCounts[rule.Code]
 	}, s.cfg.Mode)
 	decision.Mode = s.cfg.Mode
@@ -111,15 +119,34 @@ func (s *RiskService) EvaluateEvent(ctx context.Context, input EventReport) (Dec
 		}
 		return Decision{Action: stored.Decision, Score: stored.Score, RiskLevel: stored.RiskLevel, Reason: stored.Reason, EventID: stored.ID, RuleCodes: stored.RuleCodes, Mode: s.cfg.Mode}, nil
 	}
-	if err := s.repo.UpsertSubject(ctx, record); err != nil {
-		return Decision{}, err
+	if !isReliabilityOnlyEvent(record.EventType) {
+		if err := s.repo.UpsertSubject(ctx, record); err != nil {
+			return Decision{}, err
+		}
 	}
 	decision.EventID = stored.ID
 	return decision, nil
 }
 
+func ruleHasRequiredEvidence(rule Rule, input EventReport) bool {
+	switch normalizeCountStrategy(rule.CountStrategy) {
+	case countStrategyEmailSubjectEvents:
+		return strings.TrimSpace(input.SubjectID) != ""
+	case countStrategyIPDistinctSuccessUsers:
+		return input.EventType == "registration_success" && input.UserID > 0 && strings.TrimSpace(input.IPHash) != ""
+	case countStrategyBrowserDistinctSuccessUsers:
+		return input.EventType == "registration_success" && input.UserID > 0 && strings.TrimSpace(input.DeviceHash) != ""
+	case countStrategyAPIClientDistinctUsers:
+		return input.EventType == "api_error" && input.UserID > 0 && strings.TrimSpace(input.DeviceHash) != ""
+	case countStrategyIPBrowserCooccurrence:
+		return input.EventType == "registration_success" && input.UserID > 0 && strings.TrimSpace(input.IPHash) != "" && strings.TrimSpace(input.DeviceHash) != ""
+	default:
+		return input.UserID > 0
+	}
+}
+
 func (s *RiskService) repairMissingSubject(ctx context.Context, event EventRecord) error {
-	if event.UserID <= 0 {
+	if event.UserID <= 0 || isReliabilityOnlyEvent(event.EventType) {
 		return nil
 	}
 	if _, found, err := s.repo.GetSubject(ctx, event.UserID); err != nil {
@@ -128,6 +155,15 @@ func (s *RiskService) repairMissingSubject(ctx context.Context, event EventRecor
 		return nil
 	}
 	return s.repo.UpsertSubject(ctx, event)
+}
+
+func isReliabilityOnlyEvent(eventType string) bool {
+	switch eventType {
+	case "api_request", "api_error", "upstream_error":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *RiskService) RecordAudit(ctx context.Context, report AuditReport) error {
@@ -145,10 +181,10 @@ func (s *RiskService) RecordAudit(ctx context.Context, report AuditReport) error
 
 func defaultRules() []Rule {
 	return []Rule{
-		{ID: 1, Code: "login_failure_burst", Name: "登录失败爆发", EventTypes: []string{"login_failure"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 5, Score: 70, RiskLevel: "high", Action: "review", Revision: 1},
-		{ID: 2, Code: "api_error_burst", Name: "API 错误爆发", EventTypes: []string{"api_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 300, Threshold: 10, Score: 35, RiskLevel: "medium", Action: "observe", Revision: 1},
-		{ID: 3, Code: "content_risk", Name: "内容风险", EventTypes: []string{"content_risk"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 86400, Threshold: 1, Score: 85, RiskLevel: "high", Action: "review", Revision: 1},
-		{ID: 4, Code: "quota_abuse", Name: "配额滥用", EventTypes: []string{"quota_exceeded"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 3600, Threshold: 5, Score: 55, RiskLevel: "medium", Action: "review", Revision: 1},
-		{ID: 5, Code: "upstream_error", Name: "上游错误", EventTypes: []string{"upstream_error"}, CountStrategy: countStrategyAssociatedEvents, Enabled: true, WindowSeconds: 600, Threshold: 8, Score: 25, RiskLevel: "low", Action: "observe", Revision: 1},
+		{ID: 1, Code: "login_failure_burst", Name: "登录失败爆发", EventTypes: []string{"login_failure"}, CountStrategy: countStrategyUserEvents, Enabled: true, WindowSeconds: 600, Threshold: 5, Score: 70, RiskLevel: "high", Action: "review", Revision: 1},
+		{ID: 2, Code: "api_error_burst", Name: "API 错误爆发", EventTypes: []string{"api_error"}, CountStrategy: countStrategyUserEvents, Enabled: false, WindowSeconds: 300, Threshold: 10, Score: 35, RiskLevel: "medium", Action: "observe", Revision: 1},
+		{ID: 3, Code: "content_risk", Name: "内容风险", EventTypes: []string{"content_risk"}, CountStrategy: countStrategyUserEvents, Enabled: true, WindowSeconds: 86400, Threshold: 1, Score: 85, RiskLevel: "high", Action: "review", Revision: 1},
+		{ID: 4, Code: "quota_abuse", Name: "配额滥用", EventTypes: []string{"quota_exceeded"}, CountStrategy: countStrategyUserEvents, Enabled: true, WindowSeconds: 3600, Threshold: 5, Score: 55, RiskLevel: "medium", Action: "review", Revision: 1},
+		{ID: 5, Code: "upstream_error", Name: "上游错误", EventTypes: []string{"upstream_error"}, CountStrategy: countStrategyUserEvents, Enabled: false, WindowSeconds: 600, Threshold: 8, Score: 25, RiskLevel: "low", Action: "observe", Revision: 1},
 	}
 }

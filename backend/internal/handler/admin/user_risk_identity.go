@@ -151,13 +151,13 @@ func (h *CustomUserHandler) enrichAssociatedUsers(ctx context.Context, body []by
 				user := &accounts[index]
 				users[user.ID] = identityAccountPayload(user)
 			}
-			attachIdentityAccounts(payload.Items, users)
+			attachIdentityAccounts(payload.Items, users, true)
 			if encoded, marshalErr := json.Marshal(payload); marshalErr == nil {
 				return encoded
 			}
 		}
 	}
-	attachIdentityAccounts(payload.Items, users)
+	attachIdentityAccounts(payload.Items, users, false)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return body
@@ -166,15 +166,23 @@ func (h *CustomUserHandler) enrichAssociatedUsers(ctx context.Context, body []by
 }
 
 func identityAccountPayload(user *service.User) map[string]any {
-	return map[string]any{"id": user.ID, "email": user.Email, "username": user.Username, "status": user.Status, "deleted": user.DeletedAt != nil, "created_at": user.CreatedAt.UTC().Format(time.RFC3339Nano)}
+	availability := "available"
+	if user.DeletedAt != nil {
+		availability = "deleted"
+	}
+	return map[string]any{"id": user.ID, "email": user.Email, "username": user.Username, "status": user.Status, "availability": availability, "deleted": user.DeletedAt != nil, "created_at": user.CreatedAt.UTC().Format(time.RFC3339Nano)}
 }
 
-func attachIdentityAccounts(items []map[string]any, users map[int64]map[string]any) {
+func attachIdentityAccounts(items []map[string]any, users map[int64]map[string]any, lookupAvailable bool) {
 	for _, item := range items {
 		if raw, ok := item["user_id"].(float64); ok {
 			account := users[int64(raw)]
 			if account == nil {
-				account = map[string]any{"id": int64(raw), "email": "", "username": "", "status": "unavailable", "deleted": true, "created_at": ""}
+				availability, reason := "unavailable", "account_lookup_failed"
+				if lookupAvailable {
+					availability, reason = "deleted", "account_record_not_found"
+				}
+				account = map[string]any{"id": int64(raw), "email": "", "username": "", "status": "", "availability": availability, "unavailable_reason": reason, "deleted": availability == "deleted", "created_at": ""}
 			}
 			item["account"] = account
 		}

@@ -28,6 +28,12 @@ export interface RiskUserRow {
   last_risk_at?: string | null
   created_at?: string
   identity?: IdentityListSummary
+	case_id?: number
+	case_status?: RiskCaseStatus
+	assignee_id?: number
+	evidence_strength?: EvidenceStrength
+	decision_id?: string
+	historical_max_score?: number
 }
 
 export interface MainAdminUser {
@@ -83,21 +89,31 @@ export interface RiskAuditRecord {
   failure_reason?: string
   batch_id?: string
   request_id?: string
+	metadata?: Record<string, unknown>
 }
 
 export interface RiskListResponse<T> { items: T[]; total: number; page?: number; page_size?: number }
 export type IdentityDomain = 'ip' | 'device' | 'composite'
-export type IdentityDomainState = 'healthy' | 'degraded' | 'paused' | 'disabled'
-export interface IdentitySignalSummary { rule_code: string; score: number; evidence_count: number; occurred_at: string }
-export interface IdentityDomainSummary { domain: IdentityDomain; state: IdentityDomainState; score: number; signal_count: number; associated_account_count: number; signals: IdentitySignalSummary[] }
-export interface IdentitySummary { user_id: number; identity_version: 'v2'; mode: 'shadow'; overall_score: number; legacy_notice: string; domains: IdentityDomainSummary[] }
-export interface IdentityHealth { enabled: boolean; admin_enabled: boolean; mode: 'shadow'; shadow_until?: string; schema: string; key_id?: string; geo_source: string; domains: Record<IdentityDomain, IdentityDomainState>; quality_24h: { events?: number; valid_ip?: number; valid_device?: number; linked_users?: number; max_network_users?: number; minimum_events?: number; minimum_coverage_percent?: number; maximum_ip_share_percent?: number }; ingest_queue?: { state?: string; queued?: number; capacity?: number; enqueued?: number; succeeded?: number; failed?: number; dropped?: number; average_latency_ms?: number } }
-export interface IPIdentity { id: number; ip: string; ip_family: 4 | 6; ip_source: string; is_public: boolean; country_code: string; region: string; city: string; asn: number; geo_source: string; geo_verified: boolean; first_seen_at: string; last_seen_at: string; registration_success_count: number; login_success_count: number; api_success_count: number; associated_account_count: number }
+export type IdentityDomainState = 'healthy' | 'degraded' | 'not_evaluable' | 'paused' | 'disabled'
+export type EvidenceAvailability = 'available' | 'unavailable' | 'not_evaluable' | 'deleted'
+export type EvidenceStrength = 'observation' | 'weak' | 'medium_high' | 'high'
+export type RiskCaseStatus = 'pending' | 'in_review' | 'observing' | 'resolved'
+export type RiskCaseView = 'pending' | 'my' | 'observing' | 'resolved' | 'all'
+export type RiskFeedback = 'confirmed_abuse' | 'legitimate_shared' | 'insufficient_evidence' | 'data_error' | 'business_violation'
+export interface IdentitySignalSummary { rule_code: string; rule_revision?: number; signal_family?: string; status?: 'active' | 'expired' | 'resolved' | 'superseded'; decision_id?: string; score: number; evidence_count: number; evidence_snapshot?: Record<string, unknown>; occurred_at: string; active_until?: string }
+export interface IdentityDomainSummary { domain: IdentityDomain; state: IdentityDomainState; score: number; signal_count: number; historical_max_score?: number; historical_signal_count?: number; associated_account_count: number; signals: IdentitySignalSummary[] }
+export interface IdentitySummary { user_id: number; identity_version: 'v2'; mode: 'shadow'; overall_score: number; historical_max_score?: number; historical_signal_count?: number; legacy_notice: string; domains: IdentityDomainSummary[] }
+export interface IdentityHealth { enabled: boolean; admin_enabled: boolean; mode: 'shadow'; shadow_until?: string; schema: string; key_id?: string; geo_source: string; domains: Record<IdentityDomain, IdentityDomainState>; quality_domains?: Record<IdentityDomain, IdentityDomainState>; quality_24h: { events?: number; valid_ip?: number; valid_device?: number; linked_users?: number; max_network_users?: number; minimum_events?: number; minimum_coverage_percent?: number; maximum_ip_share_percent?: number }; delivery?: { enabled?: boolean; sources?: number; gap_sources?: number; stale_sources?: number; queue_depth?: number; dropped?: number; failed?: number }; processing?: { pending?: number; retry?: number; failed?: number }; features?: { current_score?: boolean; cases?: boolean; explain?: boolean; delivery?: boolean }; configured_rule_count?: number; prospective_rule_count?: number; effective_rule_count?: number; ingest_queue?: { state?: string; queued?: number; capacity?: number; enqueued?: number; succeeded?: number; failed?: number; dropped?: number; average_latency_ms?: number } }
+export interface IPIdentity { id: number; ip: string; ip_family: 4 | 6; ip_source: string; is_public: boolean; country_code: string; region: string; city: string; asn: number; geo_source: string; geo_verified: boolean; availability: Exclude<EvidenceAvailability, 'deleted'>; unavailable_reason?: string; unavailable_impact?: string; data_source: string; network_label?: string; first_seen_at: string; last_seen_at: string; registration_success_count: number; login_success_count: number; api_success_count: number; associated_account_count: number }
 export interface DeviceIdentity { id: number; identity_kind: 'browser_instance' | 'browser_profile' | 'api_client'; display_code: string; confidence: 'low' | 'medium_high' | 'high'; browser_family: string; os_family: string; device_class: string; language_family: string; cookie_status: string; first_seen_at: string; last_seen_at: string; registration_success_count: number; login_success_count: number; api_success_count: number; network_count: number; associated_account_count: number }
-export interface AssociatedRiskUser { user_id: number; relation: 'ip' | 'device' | 'multi_domain' | 'composite'; shared_network_count: number; shared_device_count: number; cooccurring_evidence_count: number; evidence_strength: 'weak' | 'medium_high' | 'high'; evidence_window_seconds: number; first_seen_at: string; last_seen_at: string; account?: { id: number; email: string; username: string; status: string; deleted: boolean; created_at: string } }
+export interface AssociatedRiskUser { user_id: number; relation: 'ip' | 'browser_instance' | 'api_client' | 'multi_domain' | 'composite'; shared_network_count: number; shared_browser_instance_count: number; shared_api_client_count: number; shared_device_count: number; cooccurring_evidence_count: number; evidence_strength: EvidenceStrength; evidence_window_seconds: number; concurrent: boolean; overlap_start?: string; overlap_end?: string; first_seen_at: string; last_seen_at: string; source_event_ids: number[]; limitations: string[]; account?: { id: number; email: string; username: string; status: string; availability: EvidenceAvailability; unavailable_reason?: string; deleted: boolean; created_at: string } }
 export interface IdentityListSummary { user_id: number; latest_ip: string; country_code: string; region: string; browser_instance_count: number; api_client_count: number; associated_account_count: number; active_rule_count: number; quality_state: IdentityDomainState }
 export interface IdentityRule { code: string; domain: 'account' | IdentityDomain; configured_enabled: boolean; enabled: boolean; state: IdentityDomainState; window_seconds: number; threshold: number; score: number; mode: 'shadow'; revision: number; updated_at: string }
+export interface IdentityRuleEffect { rule_code: string; revision: number; hit_events: number; unique_subjects: number; sample_user_ids: number[]; confirmed_rate: number; legitimate_shared_rate: number; missing_signal_rate: number }
+export interface IdentityRuleVersion { revision: number; signal_family: string; domain: string; enabled: boolean; rule_snapshot: Record<string, unknown>; active_from: string; active_until?: string }
+export interface IdentityRebuildResult { id: number; dry_run: boolean; status: string; current_signal_users: number; v2_signal_users: number; current_signals: number; v2_signals: number; changed_subjects: number; rule_hits: Record<string, number>; sample_user_ids: number[]; evidence_high_water: number; rule_watermark: Record<string, number>; approved_dry_run_id?: number; started_at: string; completed_at?: string }
 export interface AuditFilters {
+	category?: 'security' | 'rules' | 'sensitive'
   action?: string
   targetUserId?: number
   target?: string
@@ -124,6 +140,7 @@ export interface UserRiskFilters {
   from?: string
   to?: string
   riskOnly?: boolean
+	view?: RiskCaseView
   sortBy?: RiskSortBy
   sortOrder?: SortOrder
 }
@@ -141,7 +158,7 @@ export interface Rule {
   revision: number
   description?: string
   eventTypes?: string[]
-  countStrategy?: 'associated_events' | 'subject_device_events' | 'ip_distinct_subjects'
+  countStrategy?: 'user_events' | 'email_subject_events' | 'ip_distinct_success_users' | 'browser_instance_distinct_success_users' | 'api_client_distinct_users' | 'ip_browser_cooccurrence'
 }
 
 export type RuleInput = Omit<Rule, 'id' | 'name'> & { code: string; name?: string }
@@ -151,80 +168,11 @@ function compactParams(params: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== '' && value !== false))
 }
 
-async function fetchAllRiskSignals(filters: UserRiskFilters, userIDs?: number[]) {
-  const items: Array<{ id: number; username?: string; account_status?: AccountStatus; risk_type?: string; risk_level?: RiskLevel; score?: number; reason?: string; last_action?: RiskAction; pending?: boolean; event_count?: number; ip_count?: number; device_count?: number; last_event_at?: string }> = []
-  let page = 1
-  while (true) {
-    const { data } = await mainAdminClient.get<{ items: typeof items; total: number }>('/admin/user-risk-control/users', {
-      params: compactParams({ risk_type: filters.riskType, risk_level: filters.riskLevel, user_ids: userIDs?.join(','), sort_by: filters.sortBy, sort_order: filters.sortOrder, limit: 1000, page }),
-    })
-    items.push(...data.items)
-    if (items.length >= data.total || data.items.length === 0) return items
-    page += 1
-  }
-}
-
-async function fetchAllMainUsers(params: Record<string, unknown>) {
-  const items: MainAdminUser[] = []
-  let page = 1
-  let total = 0
-  do {
-    const { data } = await mainAdminClient.get<{ items: MainAdminUser[]; total: number }>('/admin/users', { params: { ...params, page, page_size: 1000 } })
-    items.push(...data.items)
-    total = data.total
-    page += 1
-    if (data.items.length === 0) break
-  } while (items.length < total)
-  return { items, total }
-}
-
-async function fetchIdentityListSummaries(userIDs: number[]): Promise<IdentityListSummary[]> {
-  if (!userIDs.length) return []
-  try {
-    const { data } = await mainAdminClient.get<{ items: IdentityListSummary[] }>('/admin/identity-summaries', { params: { user_ids: userIDs.slice(0, 100).join(',') } })
-    return data.items
-  } catch {
-    return []
-  }
-}
-
-function isLegacyAPIObservation(signal?: { risk_type?: string; reason?: string } | null): boolean {
-  if (!signal) return false
-  return signal.risk_type === 'api_request' || /API 请求观察|api_request_observation/i.test(String(signal.reason || ''))
-}
-
 async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListResponse<RiskUserRow>> {
-  const params = compactParams({ search: filters.search, status: filters.status, sort_by: filters.sortBy === 'created_at' ? 'created_at' : undefined, sort_order: filters.sortBy === 'created_at' ? filters.sortOrder : undefined })
-  const riskSort = filters.sortBy && filters.sortBy !== 'created_at'
-  const filteringRisk = Boolean(filters.pendingOnly || filters.riskType || filters.riskLevel || filters.processingStatus || filters.minScore !== undefined || filters.maxScore !== undefined || filters.from || filters.to || filters.riskOnly || riskSort)
-  const main = filteringRisk
-    ? await fetchAllMainUsers(params)
-    : await mainAdminClient.get<{ items: MainAdminUser[]; total: number }>('/admin/users', { params: { ...params, page: filters.page || 1, page_size: filters.pageSize || 20 } }).then(({ data }) => data)
-  const riskItems = await fetchAllRiskSignals(filters, filteringRisk ? undefined : main.items.map((user) => user.id))
-  const riskByID = new Map(riskItems.map((item) => [item.id, item]))
-  const items: RiskUserRow[] = main.items.map((user) => {
-    const candidate = riskByID.get(user.id)
-    const signal = isLegacyAPIObservation(candidate) ? undefined : candidate
-    const riskReason = formatRiskReason(signal?.reason, { eventType: signal?.risk_type, count: signal?.event_count })
-    return { ...user, risk_type: signal?.risk_type || null, risk_level: signal?.risk_level || null, risk_score: signal?.score || 0, risk_reason: signal?.reason ? riskReason : null, last_action: signal?.last_action || null, pending: Boolean(signal?.pending), processing_status: signal?.pending ? 'pending' : signal?.last_action === 'review' ? 'reviewed' : signal?.last_action === 'ban' || signal?.last_action === 'auto_ban' ? 'banned' : signal?.last_action === 'unban' ? 'unbanned' : signal ? 'observed' : null, event_count: signal?.event_count || 0, ip_count: signal?.ip_count || 0, device_count: signal?.device_count || 0, last_event_at: signal?.last_event_at || null, last_risk_at: signal?.last_event_at || null } satisfies RiskUserRow
-  }).filter((user) => (!filters.pendingOnly || Boolean(user.pending)) && (!filters.riskOnly || Boolean(user.risk_type)) && (!filters.riskType || user.risk_type === filters.riskType) && (!filters.riskLevel || user.risk_level === filters.riskLevel) && (!filters.processingStatus || user.processing_status === filters.processingStatus) && (filters.minScore === undefined || (user.risk_score || 0) >= filters.minScore) && (filters.maxScore === undefined || (user.risk_score || 0) <= filters.maxScore))
-  if (filters.sortBy && filters.sortBy !== 'created_at') {
-    const direction = filters.sortOrder === 'asc' ? 1 : -1
-    const levelRank: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3, critical: 4 }
-    items.sort((left, right) => {
-      const leftValue = filters.sortBy === 'risk_level' ? levelRank[left.risk_level || 'none'] || 0 : filters.sortBy === 'event_count' ? left.event_count || 0 : filters.sortBy === 'last_event_at' ? Date.parse(left.last_event_at || '') || 0 : left.risk_score || 0
-      const rightValue = filters.sortBy === 'risk_level' ? levelRank[right.risk_level || 'none'] || 0 : filters.sortBy === 'event_count' ? right.event_count || 0 : filters.sortBy === 'last_event_at' ? Date.parse(right.last_event_at || '') || 0 : right.risk_score || 0
-      if (leftValue === rightValue) return left.id - right.id
-      return (leftValue < rightValue ? -1 : 1) * direction
-    })
-  }
-  const currentPage = filters.page || 1
-  const currentPageSize = filters.pageSize || 20
-  const visibleItems = filteringRisk ? items.slice((currentPage - 1) * currentPageSize, currentPage * currentPageSize) : items
-  const identityItems = await fetchIdentityListSummaries(visibleItems.map((user) => user.id))
-  const identityByID = new Map(identityItems.map((item) => [item.user_id, item]))
-  for (const user of visibleItems) user.identity = identityByID.get(user.id)
-  return { items: visibleItems, total: filteringRisk ? items.length : main.total, page: currentPage, page_size: currentPageSize }
+  const { data } = await mainAdminClient.get<RiskListResponse<RiskUserRow>>('/admin/user-risk/users', {
+		params: compactParams({ view: filters.view || 'pending', page: filters.page || 1, page_size: filters.pageSize || 20, search: filters.search, status: filters.status, risk_type: filters.riskType, risk_level: filters.riskLevel, processing_status: filters.processingStatus, risk_only: filters.riskOnly, min_score: filters.minScore, max_score: filters.maxScore, sort_by: filters.sortBy, sort_order: filters.sortOrder }),
+	})
+	return data
 }
 
 async function getUserDetail(id: number): Promise<RiskUserDetail> {
@@ -289,13 +237,44 @@ async function listIdentityRules(): Promise<IdentityRule[]> {
   return data.items
 }
 
-async function setUserStatus(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskUserRow> {
-  // Account status is authoritative in the main Sub2API users table.
-  const { data } = await mainAdminClient.post<{ user: RiskUserRow }>(`/admin/users/${id}/risk-status`, { status, reason: reason.trim(), batch_id: batchId })
-  return data.user
+async function listIdentityRuleEffects(): Promise<IdentityRuleEffect[]> {
+	const { data } = await mainAdminClient.get<{ items: IdentityRuleEffect[] }>('/admin/user-risk-control/identity-rule-effects')
+	return data.items
 }
 
-type BatchStatusResult = { id: number; status: 'success' | 'failed'; user?: RiskUserRow; reason?: string }
+async function listIdentityRuleVersions(code: string): Promise<IdentityRuleVersion[]> {
+	const { data } = await mainAdminClient.get<{ items: IdentityRuleVersion[] }>(`/admin/user-risk-control/identity-rules/${encodeURIComponent(code)}/versions`)
+	return data.items
+}
+
+async function disableIdentityRule(code: string, reason: string): Promise<{ code: string; revision: number; enabled: false }> {
+	const { data } = await mainAdminClient.post<{ code: string; revision: number; enabled: false }>(`/admin/user-risk-control/identity-rules/${encodeURIComponent(code)}/disable`, { reason: reason.trim() })
+	return data
+}
+
+async function dryRunIdentityRebuild(): Promise<IdentityRebuildResult> {
+	const { data } = await mainAdminClient.post<IdentityRebuildResult>('/admin/risk-rebuilds/dry-run', {})
+	return data
+}
+
+async function applyIdentityRebuild(): Promise<IdentityRebuildResult> {
+	const { data } = await mainAdminClient.post<IdentityRebuildResult>('/admin/risk-rebuilds', {})
+	return data
+}
+
+type RiskStatusResult = { user: RiskUserRow; result: 'success' | 'partial'; failureReason?: string }
+
+async function setUserStatusResult(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskStatusResult> {
+  // Account status is authoritative in the main Sub2API users table.
+	const { data } = await mainAdminClient.post<{ user: RiskUserRow; result?: 'success' | 'partial'; failure_reason?: string }>(`/admin/users/${id}/risk-status`, { status, reason: reason.trim(), batch_id: batchId })
+	return { user: data.user, result: data.result === 'partial' ? 'partial' : 'success', failureReason: data.failure_reason }
+}
+
+async function setUserStatus(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskUserRow> {
+	return (await setUserStatusResult(id, status, reason, batchId)).user
+}
+
+type BatchStatusResult = { id: number; status: 'success' | 'partial' | 'failed'; user?: RiskUserRow; reason?: string }
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null) {
@@ -317,8 +296,8 @@ async function batchSetUserStatus(ids: number[], status: AccountStatus, reason: 
       const index = cursor++
       const id = ids[index]
       try {
-        const user = await setUserStatus(id, status, trimmedReason, batchId)
-        results[index] = { id, status: 'success', user }
+		const outcome = await setUserStatusResult(id, status, trimmedReason, batchId)
+		results[index] = { id, status: outcome.result, user: outcome.user, reason: outcome.failureReason }
       } catch (error) {
         results[index] = { id, status: 'failed', reason: errorMessage(error) }
       }
@@ -356,7 +335,7 @@ async function markUsersProcessed(ids: number[], reason: string, concurrency = 4
 
 async function listRules(): Promise<Rule[]> {
   const { data } = await mainAdminClient.get<{ items: Array<Record<string, unknown>> }>('/admin/user-risk-control/rules')
-  return data.items.map((rule) => ({ id: Number(rule.id), code: String(rule.code), name: String(rule.name || rule.code), description: String(rule.description || ''), eventTypes: Array.isArray(rule.event_types) ? rule.event_types.map(String) : [String(rule.code)], countStrategy: String(rule.count_strategy || 'associated_events') as Rule['countStrategy'], enabled: Boolean(rule.enabled), windowSeconds: Number(rule.window_seconds || 0), threshold: Number(rule.threshold || 1), score: Number(rule.score || 0), riskLevel: String(rule.risk_level || 'low') as RiskLevel, action: String(rule.action || 'observe') as RiskAction, revision: Number(rule.revision || 1) }))
+  return data.items.map((rule) => ({ id: Number(rule.id), code: String(rule.code), name: String(rule.name || rule.code), description: String(rule.description || ''), eventTypes: Array.isArray(rule.event_types) ? rule.event_types.map(String) : [String(rule.code)], countStrategy: String(rule.count_strategy || 'user_events') as Rule['countStrategy'], enabled: Boolean(rule.enabled), windowSeconds: Number(rule.window_seconds || 0), threshold: Number(rule.threshold || 1), score: Number(rule.score || 0), riskLevel: String(rule.risk_level || 'low') as RiskLevel, action: String(rule.action || 'observe') as RiskAction, revision: Number(rule.revision || 1) }))
 }
 
 async function updateRule(_id: number, rule: RuleInput): Promise<Pick<Rule, 'id' | 'revision'>> {
@@ -382,7 +361,7 @@ async function createRule(rule: RuleCreateInput): Promise<Rule> {
     revision: rule.revision || 1,
     reason: rule.reason,
   })
-  return { id: Number(data.id), code: String(data.code || rule.code), name: String(data.name || rule.name || rule.code), description: String(data.description || rule.description || ''), eventTypes: Array.isArray(data.event_types) ? data.event_types.map(String) : rule.eventTypes, countStrategy: String(data.count_strategy || rule.countStrategy || 'associated_events') as Rule['countStrategy'], enabled: Boolean(data.enabled ?? rule.enabled), windowSeconds: Number(data.window_seconds ?? rule.windowSeconds), threshold: Number(data.threshold ?? rule.threshold), score: Number(data.score ?? rule.score), riskLevel: String(data.risk_level || rule.riskLevel) as RiskLevel, action: String(data.action || rule.action) as RiskAction, revision: Number(data.revision || 1) }
+  return { id: Number(data.id), code: String(data.code || rule.code), name: String(data.name || rule.name || rule.code), description: String(data.description || rule.description || ''), eventTypes: Array.isArray(data.event_types) ? data.event_types.map(String) : rule.eventTypes, countStrategy: String(data.count_strategy || rule.countStrategy || 'user_events') as Rule['countStrategy'], enabled: Boolean(data.enabled ?? rule.enabled), windowSeconds: Number(data.window_seconds ?? rule.windowSeconds), threshold: Number(data.threshold ?? rule.threshold), score: Number(data.score ?? rule.score), riskLevel: String(data.risk_level || rule.riskLevel) as RiskLevel, action: String(data.action || rule.action) as RiskAction, revision: Number(data.revision || 1) }
 }
 
 async function testRule(rule: Rule, input: Record<string, unknown>) {
@@ -392,36 +371,32 @@ async function testRule(rule: Rule, input: Record<string, unknown>) {
 
 async function listAudit(filters: AuditFilters = {}): Promise<RiskListResponse<RiskAuditRecord>> {
   const action = filters.action === 'rule_update' ? 'update_rule' : filters.action
-  const admins = await fetchAllMainUsers({ role: 'admin' })
-  const adminByID = new Map(admins.items.map((admin) => [admin.id, admin]))
   const actorQuery = filters.actor?.trim()
-  let actorID: number | undefined
-  if (actorQuery) {
-    if (/^\d+$/.test(actorQuery)) actorID = Number(actorQuery)
-    else {
-      const normalized = actorQuery.toLocaleLowerCase()
-      const matched = admins.items.find((admin) => admin.email.toLocaleLowerCase() === normalized || admin.username.toLocaleLowerCase() === normalized)
-      if (!matched) return { items: [], total: 0, page: filters.page || 1, page_size: filters.pageSize || 20 }
-      actorID = matched.id
-    }
-  }
+	const actorID = actorQuery && /^\d+$/.test(actorQuery) ? Number(actorQuery) : undefined
   const { data } = await mainAdminClient.get<{ items: Array<Record<string, unknown>>; total: number; page?: number; page_size?: number }>('/admin/user-risk-control/audit', {
-    params: compactParams({ action, target_user_id: filters.targetUserId, target: filters.target, actor_id: actorID, result: filters.result, from: filters.from, to: filters.to, sort_by: filters.sortBy, sort_order: filters.sortOrder, page: filters.page || 1, limit: filters.pageSize || 20 }),
+    params: compactParams({ category: filters.category || 'security', action, target_user_id: filters.targetUserId, target: filters.target, actor_id: actorID, result: filters.result, from: filters.from, to: filters.to, sort_by: filters.sortBy, sort_order: filters.sortOrder, page: filters.page || 1, limit: filters.pageSize || 20 }),
   })
   return { total: data.total, page: data.page || filters.page || 1, page_size: data.page_size || filters.pageSize || 20, items: data.items.map((record) => {
     const metadata = (record.metadata || {}) as Record<string, unknown>
     const recordActorID = Number(record.actor_id || 0)
-    const actor = adminByID.get(recordActorID)
     return {
-      id: Number(record.id), actor: actor?.email || actor?.username || (recordActorID ? String(recordActorID) : undefined),
+		id: Number(record.id), actor: recordActorID ? String(recordActorID) : undefined,
       target_type: String(record.target_type || ''), target_id: String(record.target_id || ''),
       target_user_id: record.target_type === 'user' ? Number(record.target_id || 0) : 0,
       action: String(record.action), before_status: metadata.before_status as AccountStatus | null || null,
       after_status: metadata.after_status as AccountStatus | null || null, reason: String(record.reason || ''), failure_reason: String(record.failure_reason || metadata.failure_reason || ''), batch_id: String(record.batch_id || metadata.batch_id || ''), request_id: String(record.request_id || metadata.request_id || ''),
-      result: String(record.result || 'success') as RiskAuditRecord['result'], created_at: String(record.created_at || ''),
+		metadata, result: String(record.result || 'success') as RiskAuditRecord['result'], created_at: String(record.created_at || ''),
     }
   }) }
 }
 
-export const userRiskControlV2API = { listUsers, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, listIdentityRules, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
+async function claimReviewCase(id: number): Promise<void> {
+	await mainAdminClient.post(`/admin/user-risk-control/review-cases/${id}/claim`, {})
+}
+
+async function submitReviewFeedback(id: number, feedback: RiskFeedback, reason: string): Promise<void> {
+	await mainAdminClient.post(`/admin/user-risk-control/review-cases/${id}/feedback`, { feedback, reason: reason.trim() })
+}
+
+export const userRiskControlV2API = { listUsers, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, listIdentityRules, listIdentityRuleEffects, listIdentityRuleVersions, disableIdentityRule, dryRunIdentityRebuild, applyIdentityRebuild, claimReviewCase, submitReviewFeedback, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
 export default userRiskControlV2API

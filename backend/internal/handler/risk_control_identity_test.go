@@ -230,3 +230,32 @@ func TestRiskIdentityAuthStageScope(t *testing.T) {
 		}
 	}
 }
+
+func TestRiskIdentityAuthResponseFailedDetectsOAuthRedirectErrors(t *testing.T) {
+	tests := []struct {
+		name, requestTarget, location string
+		status                        int
+		want                          bool
+	}{
+		{name: "fragment error", requestTarget: "/callback", status: http.StatusFound, location: "/login#error=access_denied", want: true},
+		{name: "query error", requestTarget: "/callback", status: http.StatusFound, location: "/login?error=access_denied", want: true},
+		{name: "successful redirect", requestTarget: "/callback", status: http.StatusFound, location: "/login#code=ok", want: false},
+		{name: "request query error", requestTarget: "/callback?error=provider_failure", status: http.StatusOK, want: true},
+		{name: "HTTP error", requestTarget: "/callback", status: http.StatusBadGateway, want: true},
+		{name: "malformed redirect", requestTarget: "/callback", status: http.StatusFound, location: "%", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodGet, test.requestTarget, nil)
+			if test.location != "" {
+				context.Header("Location", test.location)
+			}
+			context.Status(test.status)
+			if got := riskIdentityAuthResponseFailed(context); got != test.want {
+				t.Fatalf("failed = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

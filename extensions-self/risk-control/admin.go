@@ -183,6 +183,19 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 	for index := range input.EventTypes {
 		input.EventTypes[index] = strings.TrimSpace(input.EventTypes[index])
 	}
+	if strings.TrimSpace(input.CountStrategy) == "" {
+		rules, err := s.service.repo.ListRules(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		for _, current := range rules {
+			if current.Code == code {
+				input.CountStrategy = current.CountStrategy
+				break
+			}
+		}
+	}
 	if err := validateRuleFields(input.Rule); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
 		return
@@ -200,6 +213,16 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 	if err := validateRuleEventTypes(input.EventTypes, allowLegacyAPIObservation); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
 		return
+	}
+	if _, ok := validRuleCountStrategies[strings.TrimSpace(input.CountStrategy)]; !ok {
+		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
+		return
+	}
+	if !allowLegacyAPIObservation {
+		if err := validateRuleStrategy(input.Rule); err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
+			return
+		}
 	}
 	updated, err := s.service.repo.UpdateRule(r.Context(), code, input.Revision, input.Rule)
 	if errors.Is(err, ErrRuleRevisionConflict) {
@@ -236,7 +259,8 @@ func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Rule.Enabled = true
 	input.Rule.EventTypes = []string{strings.TrimSpace(input.EventType)}
-	decision := evaluateRulesWithMode([]Rule{input.Rule}, EventReport{EventType: input.EventType}, func(Rule) int { return input.Count }, "enforce")
+	testEvent := EventReport{EventType: input.EventType, UserID: 1, SubjectID: "rule-test-subject", IPHash: "rule-test-ip", DeviceHash: "rule-test-device"}
+	decision := evaluateRulesWithMode([]Rule{input.Rule}, testEvent, func(Rule) int { return input.Count }, "enforce")
 	matched := len(decision.RuleCodes) > 0
 	actor, _ := actorID(r)
 	reason := decision.Reason
@@ -255,7 +279,15 @@ func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit, offset := pagination(r)
-	filter := AuditFilter{Target: strings.TrimSpace(r.URL.Query().Get("target")), Action: strings.TrimSpace(r.URL.Query().Get("action")), Result: strings.TrimSpace(r.URL.Query().Get("result")), SortBy: strings.TrimSpace(r.URL.Query().Get("sort_by")), SortOrder: strings.TrimSpace(r.URL.Query().Get("sort_order"))}
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	if category == "" {
+		category = "security"
+	}
+	if _, ok := auditCategoryActions[category]; !ok {
+		writeError(w, http.StatusBadRequest, errors.New("invalid audit category"))
+		return
+	}
+	filter := AuditFilter{Category: category, Target: strings.TrimSpace(r.URL.Query().Get("target")), Action: strings.TrimSpace(r.URL.Query().Get("action")), Result: strings.TrimSpace(r.URL.Query().Get("result")), SortBy: strings.TrimSpace(r.URL.Query().Get("sort_by")), SortOrder: strings.TrimSpace(r.URL.Query().Get("sort_order"))}
 	if raw := strings.TrimSpace(r.URL.Query().Get("target_user_id")); raw != "" {
 		filter.TargetUserID, _ = strconv.ParseInt(raw, 10, 64)
 	}

@@ -38,14 +38,15 @@ func (s *IdentityService) Ingest(ctx context.Context, input IdentityEventReport)
 		return false, err
 	}
 	stored, duplicate, err := s.repo.Persist(ctx, fact)
-	if err != nil || duplicate {
+	if err != nil {
 		return duplicate, err
 	}
-	if err := s.repo.EvaluateAndStoreSignals(ctx, stored, s.cfg); err != nil {
-		// Signal generation is advisory and must never invalidate the stored fact.
-		return false, nil
+	if stored.ID > 0 {
+		if err := s.repo.ProcessSignalJob(ctx, input.EventKey, s.cfg); err != nil {
+			return duplicate, err
+		}
 	}
-	return false, nil
+	return duplicate, nil
 }
 
 func (s *IdentityService) prepare(input IdentityEventReport) (IdentityFact, error) {
@@ -118,6 +119,7 @@ func (s *IdentityService) prepare(input IdentityEventReport) (IdentityFact, erro
 	}
 
 	if !s.cfg.DeviceCollectionEnabled {
+		fact.EvidenceSnapshot = identityFactSnapshot(fact)
 		return fact, nil
 	}
 	if input.APIKeyID > 0 {
@@ -134,7 +136,30 @@ func (s *IdentityService) prepare(input IdentityEventReport) (IdentityFact, erro
 			fact.Profile = &IdentityDeviceFact{Kind: "browser_profile", LookupKey: s.protector.LookupKey("browser-profile", profileValue), BrowserFamily: validateIdentityText(input.BrowserFamily, 40), OSFamily: validateIdentityText(input.OSFamily, 40), DeviceClass: validateIdentityText(input.DeviceClass, 24), LanguageFamily: validateIdentityText(input.LanguageFamily, 24)}
 		}
 	}
+	fact.EvidenceSnapshot = identityFactSnapshot(fact)
 	return fact, nil
+}
+
+func identityFactSnapshot(fact IdentityFact) map[string]any {
+	snapshot := map[string]any{
+		"event_key": fact.EventKey, "event_type": fact.EventType, "event_class": fact.EventClass,
+		"outcome": fact.Outcome, "user_id": fact.UserID, "occurred_at": fact.OccurredAt.UTC().Format(time.RFC3339Nano),
+		"proxy_chain_valid": fact.ProxyChainValid, "ip_quality_valid": fact.IPQualityValid,
+		"device_quality_valid": fact.DeviceQualityValid,
+	}
+	if fact.Network != nil {
+		snapshot["network"] = map[string]any{"lookup_key": fact.Network.LookupKey, "prefix_lookup_key": fact.Network.PrefixLookupKey, "ip_family": fact.Network.Family, "ip_source": fact.Network.Source, "country_code": fact.Network.CountryCode, "region": fact.Network.Region, "city": fact.Network.City, "asn": fact.Network.ASN, "geo_source": fact.Network.GeoSource, "geo_verified": fact.Network.GeoVerified}
+	}
+	if fact.Browser != nil {
+		snapshot["browser_instance"] = map[string]any{"lookup_key": fact.Browser.LookupKey, "cookie_status": fact.Browser.CookieStatus}
+	}
+	if fact.Profile != nil {
+		snapshot["browser_profile"] = map[string]any{"lookup_key": fact.Profile.LookupKey, "browser_family": fact.Profile.BrowserFamily, "os_family": fact.Profile.OSFamily, "device_class": fact.Profile.DeviceClass, "language_family": fact.Profile.LanguageFamily}
+	}
+	if fact.APIClient != nil {
+		snapshot["api_client"] = map[string]any{"lookup_key": fact.APIClient.LookupKey}
+	}
+	return snapshot
 }
 
 func validIdentityCountryCode(value string) bool {
@@ -155,7 +180,7 @@ func (s *IdentityService) Summary(ctx context.Context, userID int64) (IdentitySu
 
 func (s *IdentityService) Health(ctx context.Context) (IdentityHealth, error) {
 	if s == nil || s.repo == nil {
-		return IdentityHealth{Enabled: false, AdminEnabled: false, Mode: "shadow", Schema: "v2", Domains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, Quality24H: map[string]any{}}, nil
+		return IdentityHealth{Enabled: false, AdminEnabled: false, Mode: "shadow", Schema: "v2", Domains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, QualityDomains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, Quality24H: map[string]any{}}, nil
 	}
 	return s.repo.Health(ctx, s.cfg)
 }

@@ -43,7 +43,7 @@ describe('UserRiskControlAuditView', () => {
     emitFilter(wrapper, 'audit-action-filter', 'ban')
     emitFilter(wrapper, 'audit-result-filter', 'failed')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: 'ban', result: 'failed', page: 1, pageSize: 20 })
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: 'ban', result: 'failed', page: 1, pageSize: 20 })
   })
 
   it('debounces actor and target text filters for 300 ms', async () => {
@@ -80,7 +80,7 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
     emitFilter(wrapper, 'audit-action-filter', 'ban')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: 'ban', result: '', page: 1, pageSize: 20 })
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: 'ban', result: '', page: 1, pageSize: 20 })
   })
 
   it('resets active audit filters and supports changing the page size', async () => {
@@ -92,11 +92,11 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="reset-audit-filters"]').trigger('click')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: '', result: '', page: 1, pageSize: 20 })
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 1, pageSize: 20 })
 
     wrapper.findComponent(Pagination).vm.$emit('update:pageSize', 50)
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: '', result: '', page: 1, pageSize: 50 })
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 1, pageSize: 50 })
   })
 
   it('moves to the next audit page using the server total', async () => {
@@ -107,7 +107,7 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
     wrapper.findComponent(Pagination).vm.$emit('update:page', 2)
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ action: '', result: '', page: 2, pageSize: 20 })
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 2, pageSize: 20 })
   })
 
   it('renders Chinese audit labels, failure detail, and batch identifiers', async () => {
@@ -127,6 +127,20 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="audit-status-change-4"]').text()).toBe('-')
+  })
+
+  it('separates audit categories and keeps identity detail metadata folded by default', async () => {
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 8, actor: '11', action: 'view_identity_detail', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', metadata: { section: 'associated-users' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+    const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } } })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('关联账号')
+    await wrapper.get('[data-testid="toggle-sensitive-audit-8"]').trigger('click')
+    expect(wrapper.text()).toContain('关联账号')
+
+    await wrapper.get('[data-testid="audit-category-rules"]').trigger('click')
+    await flushPromises()
+    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'rules', action: '' }))
   })
 
   it('passes audit sorting and extended filters to the API', async () => {

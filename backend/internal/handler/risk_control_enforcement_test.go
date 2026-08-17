@@ -14,11 +14,16 @@ func TestRiskDecisionErrorBlocksOnlyExplicitCandidateRejection(t *testing.T) {
 			t.Fatalf("action %q returned error %v", action, err)
 		}
 	}
-	if err := riskDecisionError(&service.RiskDecision{Action: "reject_candidate"}, "registration"); infraerrors.Code(err) != 403 {
+	if err := riskDecisionError(&service.RiskDecision{Action: "reject_candidate", Mode: "enforce"}, "registration"); infraerrors.Code(err) != 403 {
 		t.Fatalf("reject_candidate error = %v", err)
 	}
-	if err := riskDecisionError(&service.RiskDecision{Action: "ban"}, "registration"); infraerrors.Code(err) != 403 {
+	if err := riskDecisionError(&service.RiskDecision{Action: "ban", Mode: "enforce"}, "registration"); infraerrors.Code(err) != 403 {
 		t.Fatalf("ban error = %v", err)
+	}
+	for _, action := range []string{"reject_candidate", "ban"} {
+		if err := riskDecisionError(&service.RiskDecision{Action: action, Mode: "shadow"}, "registration"); err != nil {
+			t.Fatalf("shadow action %q returned error %v", action, err)
+		}
 	}
 }
 

@@ -12,6 +12,14 @@ const riskTypes: Record<string, string> = {
   api_request: 'API 请求',
 }
 
+const identitySignals: Record<string, string> = {
+  v2_registration_email_retries: '同邮箱注册重试观察',
+  v2_registration_ip_accounts: '同 IP 多成功注册账号',
+  v2_registration_device_accounts: '同浏览器实例多成功注册账号',
+  v2_registration_composite_accounts: '同期 IP 与浏览器综合证据',
+  v2_api_client_accounts: 'API 客户端多账号观察',
+}
+
 const riskLevels: Record<string, string> = {
   none: '无风险记录',
   low: '低风险',
@@ -32,6 +40,13 @@ const riskActions: Record<string, string> = {
   rule_test: '规则测试',
   mark_processed: '标记已处理',
   purge_legacy_v1: '清理 V1 历史数据',
+	claim_risk_review_case: '领取复核案件',
+	review_risk_case: '提交复核反馈',
+	label_shared_network: '标记共享网络',
+	disable_identity_rule: '停用身份规则',
+	identity_rebuild_dry_run: '身份信号回放预检',
+	identity_rebuild: '应用身份信号回放',
+	view_identity_detail: '查看身份详情',
 }
 
 const accountStatuses: Record<string, string> = {
@@ -48,11 +63,10 @@ const auditResults: Record<string, string> = {
 }
 
 const processingStatuses: Record<string, string> = {
-  pending: '待处理',
-  observed: '已观察',
-  reviewed: '已复核',
-  banned: '已封禁',
-  unbanned: '已解封',
+  pending: '待复核',
+  in_review: '复核中',
+  observing: '观察中',
+  resolved: '已处理',
 }
 
 const legacyRuleReasons: Record<string, string> = {
@@ -81,6 +95,7 @@ const legacyRuleNames: Record<string, string> = {
 }
 
 export const riskTypeOptions: RiskLabelOption[] = Object.entries(riskTypes).map(([value, label]) => ({ value, label }))
+export const identitySignalOptions: RiskLabelOption[] = Object.entries(identitySignals).map(([value, label]) => ({ value, label }))
 export const riskLevelOptions: RiskLabelOption[] = Object.entries(riskLevels).filter(([value]) => value !== 'none').map(([value, label]) => ({ value, label }))
 export const riskActionOptions: RiskLabelOption[] = Object.entries(riskActions).map(([value, label]) => ({ value, label }))
 export const accountStatusOptions: RiskLabelOption[] = Object.entries(accountStatuses).map(([value, label]) => ({ value, label }))
@@ -95,6 +110,10 @@ function formatMappedValue(value: unknown, mapping: Record<string, string>, cate
 
 export function formatRiskType(value: unknown): string {
   return formatMappedValue(value, riskTypes, '类型', '暂无风险记录')
+}
+
+export function formatIdentitySignal(value: unknown): string {
+  return formatMappedValue(value, identitySignals, '身份信号', '暂无身份信号')
 }
 
 export function formatRiskLevel(value: unknown): string {

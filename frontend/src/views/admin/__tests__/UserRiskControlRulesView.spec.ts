@@ -12,6 +12,11 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
     listRules: vi.fn(),
     listIdentityRules: vi.fn(),
+	listIdentityRuleEffects: vi.fn(),
+	listIdentityRuleVersions: vi.fn(),
+	disableIdentityRule: vi.fn(),
+	dryRunIdentityRebuild: vi.fn(),
+	applyIdentityRebuild: vi.fn(),
     updateRule: vi.fn(),
     createRule: vi.fn(),
     testRule: vi.fn(),
@@ -21,6 +26,8 @@ vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
 beforeEach(() => {
+	vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockResolvedValue([])
+	vi.mocked(userRiskControlV2API.listIdentityRuleVersions).mockResolvedValue([])
   vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([
     { code: 'v2_registration_email_retries', domain: 'account', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 5, score: 0, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
     { code: 'v2_registration_device_accounts', domain: 'device', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 3, score: 70, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
@@ -56,6 +63,26 @@ async function clickBody(selector: string) {
 }
 
 describe('UserRiskControlRulesView', () => {
+	it('keeps identity, event, replay, Shadow effect, and version workflows inside one page', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockResolvedValue([{ rule_code: 'v2_registration_ip_accounts', revision: 2, hit_events: 8, unique_subjects: 3, sample_user_ids: [7], confirmed_rate: 0.5, legitimate_shared_rate: 0.25, missing_signal_rate: 0 }])
+		vi.mocked(userRiskControlV2API.listIdentityRuleVersions).mockResolvedValue([{ revision: 2, signal_family: 'registration_identity', domain: 'ip', enabled: true, rule_snapshot: {}, active_from: '2026-08-17T00:00:00Z' }])
+		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 2, current_signals: 1, v2_signals: 2, changed_subjects: 1, rule_hits: { v2_registration_ip_accounts: 2 }, sample_user_ids: [7], evidence_high_water: 42, rule_watermark: { v2_registration_ip_accounts: 2 }, started_at: '2026-08-17T00:00:00Z' })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		for (const view of ['identity', 'event', 'replay', 'shadow', 'versions']) expect(wrapper.find(`[data-testid="rule-view-${view}"]`).exists()).toBe(true)
+		await wrapper.get('[data-testid="rule-view-shadow"]').trigger('click')
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-rule-effects"]').text()).toContain('50.0%')
+		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
+		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('水位 42')
+		await wrapper.get('[data-testid="rule-view-versions"]').trigger('click')
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-rule-versions"]').text()).toContain('registration_identity')
+	})
   it('uses shared responsive table and rule form controls', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
 
@@ -63,9 +90,11 @@ describe('UserRiskControlRulesView', () => {
     await flushPromises()
 
     expect(wrapper.findComponent(DataTable).exists()).toBe(true)
+	await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('同邮箱重复注册尝试')
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('同浏览器实例多账号注册')
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('已启用 · Shadow')
+	await wrapper.get('[data-testid="rule-view-event"]').trigger('click')
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
     expect(wrapper.findComponent(BaseDialog).props('show')).toBe(true)
     expect(wrapper.findComponent(BaseDialog).props('closeOnClickOutside')).toBe(true)
@@ -99,6 +128,7 @@ describe('UserRiskControlRulesView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('登录失败爆发')
+	await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
     expect(wrapper.get('[data-testid="identity-rules-error"]').text()).toContain('identity rules unavailable')
   })
 
@@ -110,6 +140,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
 
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('尚未启用')
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('配置已开 · 尚未生效')
@@ -123,6 +154,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
 
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('数据质量保护中')
     expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('数据质量异常 · 已暂停')

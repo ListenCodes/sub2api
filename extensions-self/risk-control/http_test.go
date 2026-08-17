@@ -66,6 +66,17 @@ func TestAdminRuleUpdateRequiresExpectedRevision(t *testing.T) {
 	}
 }
 
+func TestAdminRuleUpdateRejectsAmbiguousStrategySemantics(t *testing.T) {
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(defaultRules()))
+	body := []byte(`{"name":"Login failures","event_types":["login_failure"],"count_strategy":"ip_distinct_success_users","enabled":true,"window_seconds":600,"threshold":5,"score":70,"risk_level":"high","action":"review","revision":1}`)
+	request := signedRequest(http.MethodPut, "/api/v1/admin/rules/login_failure_burst", body, testSecret, "nonce-admin-strategy", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdminRuleTestTreatsSubmittedRuleAsEnabled(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(nil))
 	body := []byte(`{"event_type":"login_failure","count":5,"rule":{"code":"login_failure","threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
@@ -154,6 +165,49 @@ func TestAdminAuditSupportsActorFilterAndTargetSort(t *testing.T) {
 	decodeBody(t, response, &payload)
 	if payload.Total != 2 || len(payload.Items) != 2 || payload.Items[0].TargetID != "7" || payload.Items[1].TargetID != "42" {
 		t.Fatalf("filtered/sorted audit = %+v", payload)
+	}
+}
+
+func TestAdminAuditSeparatesSensitiveRecordsFromDefaultCategory(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	for _, audit := range []AuditRecord{
+		{ActorID: 7, Action: "ban", TargetType: "user", TargetID: "42", Result: "success"},
+		{ActorID: 7, Action: "view_identity_detail", TargetType: "user", TargetID: "42", Result: "success", Metadata: map[string]any{"section": "associated-users"}},
+	} {
+		if err := repo.InsertAudit(context.Background(), audit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "shadow"}, repo)
+
+	request := signedRequest(http.MethodGet, "/api/v1/admin/audit", nil, testSecret, "nonce-audit-default-category", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	var defaultPayload struct {
+		Items []AuditRecord `json:"items"`
+		Total int           `json:"total"`
+	}
+	decodeBody(t, response, &defaultPayload)
+	if response.Code != http.StatusOK || defaultPayload.Total != 1 || defaultPayload.Items[0].Action != "ban" {
+		t.Fatalf("default category response = %d %s", response.Code, response.Body.String())
+	}
+
+	request = signedRequest(http.MethodGet, "/api/v1/admin/audit?category=sensitive", nil, testSecret, "nonce-audit-sensitive-category", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response = serveJSON(server, request)
+	var sensitivePayload struct {
+		Items []AuditRecord `json:"items"`
+		Total int           `json:"total"`
+	}
+	decodeBody(t, response, &sensitivePayload)
+	if response.Code != http.StatusOK || sensitivePayload.Total != 1 || sensitivePayload.Items[0].Action != "view_identity_detail" {
+		t.Fatalf("sensitive category response = %d %s", response.Code, response.Body.String())
+	}
+
+	request = signedRequest(http.MethodGet, "/api/v1/admin/audit?category=unknown", nil, testSecret, "nonce-audit-invalid-category", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	if response = serveJSON(server, request); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid category status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

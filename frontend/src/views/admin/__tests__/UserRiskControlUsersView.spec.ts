@@ -105,14 +105,15 @@ describe('UserRiskControlUsersView', () => {
     const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="account-primary-7"]').text()).toBe('alice@example.com')
-    expect(wrapper.get('[data-testid="account-secondary-7"]').text()).toBe('Alice')
+		expect(wrapper.get('[data-testid="account-primary-7"]').text()).toBe('alice@example.com')
+		expect(wrapper.get('[data-testid="account-secondary-7"]').text()).toContain('Alice · #7 ·')
     expect(wrapper.get('[data-testid="user-row-7"]').classes()).toEqual(expect.arrayContaining(['max-w-[50vw]', 'sm:max-w-none']))
     expect(wrapper.get('[data-testid="risk-users-table"]').classes()).toContain('w-full')
     expect(wrapper.findComponent(DataTable).props('stickyFirstColumn')).toBe(true)
-    expect(wrapper.text()).toContain('203.0.113.0/24')
-    expect(wrapper.text()).toContain('admin.userRiskControl.identityBrowserCount')
-    expect(wrapper.text()).toContain('admin.userRiskControl.drawer.state.healthy')
+		expect(wrapper.text()).toContain('当前风险')
+		expect(wrapper.text()).toContain('主信号')
+		expect(wrapper.text()).toContain('案件状态')
+		expect(wrapper.text()).not.toContain('203.0.113.0/24')
   })
 
   it('resets to the first page when the page size changes', async () => {
@@ -192,6 +193,12 @@ describe('UserRiskControlUsersView', () => {
     await wrapper.get('[data-testid="user-row-7"]').trigger('click')
     await flushPromises()
 
+    const timeline = document.querySelector('[data-testid="legacy-risk-timeline"]') as HTMLDetailsElement
+    const history = document.querySelector('[data-testid="legacy-action-history"]') as HTMLDetailsElement
+    expect(timeline.open).toBe(false)
+    expect(history.open).toBe(false)
+    timeline.open = true
+    history.open = true
     expect(document.body.textContent).toContain('登录失败')
     expect(document.body.textContent).toContain('高风险')
     expect(document.body.textContent).toContain('命中规则：登录失败爆发')
@@ -230,6 +237,23 @@ describe('UserRiskControlUsersView', () => {
     expect(wrapper.text()).toContain('部分成功')
     expect(wrapper.text()).toContain('目标账号已被其他管理员处理')
     expect(wrapper.find('[data-testid="batch-action-bar"]').exists()).toBe(false)
+  })
+
+  it('does not batch ban or unban a mixed selection containing pending accounts', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({
+      items: [
+        { id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', risk_score: 80 },
+        { id: 8, username: 'Pending', email: 'pending@example.com', status: 'pending', risk_score: 30 },
+      ], total: 2, page: 1, page_size: 20,
+    })
+
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="select-current-page"]').setValue(true)
+
+    expect(wrapper.get('[data-testid="batch-ban"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="batch-unban"]').attributes('disabled')).toBeDefined()
+    expect(userRiskControlV2API.batchSetUserStatus).not.toHaveBeenCalled()
   })
 
   it('changes the query order when risk score sort is clicked', async () => {

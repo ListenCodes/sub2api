@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -211,11 +212,33 @@ func RiskIdentityAuthLifecycleMiddleware(client *service.RiskControlClient) gin.
 		requestRiskIdentity(c, client.IdentityDeviceEnabled())
 		c.Next()
 		outcome := "success"
-		if c.Writer.Status() >= http.StatusBadRequest || strings.TrimSpace(c.Query("error")) != "" {
+		if riskIdentityAuthResponseFailed(c) {
 			outcome = "failure"
 		}
 		enqueueRiskIdentity(c, client, eventType, eventClass, outcome, "", 0, 0)
 	}
+}
+
+func riskIdentityAuthResponseFailed(c *gin.Context) bool {
+	if c == nil || c.Writer.Status() >= http.StatusBadRequest || strings.TrimSpace(c.Query("error")) != "" {
+		return true
+	}
+	if c.Writer.Status() < http.StatusMultipleChoices || c.Writer.Status() >= http.StatusBadRequest {
+		return false
+	}
+	location := strings.TrimSpace(c.Writer.Header().Get("Location"))
+	if location == "" {
+		return false
+	}
+	redirect, err := url.Parse(location)
+	if err != nil {
+		return true
+	}
+	if strings.TrimSpace(redirect.Query().Get("error")) != "" {
+		return true
+	}
+	fragment, err := url.ParseQuery(redirect.Fragment)
+	return err != nil || strings.TrimSpace(fragment.Get("error")) != ""
 }
 
 func classifyRiskIdentityAuthStage(method, path string) (string, string, bool) {

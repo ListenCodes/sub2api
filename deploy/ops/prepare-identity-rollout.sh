@@ -80,6 +80,44 @@ require_flags() {
   done
 }
 
+identity_health() {
+	docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz
+}
+
+validate_stage3_prerequisites() {
+	local health shadow_until
+	health="$(identity_health)" || return 1
+	shadow_until="$(jq -er '.identity.shadow_until' <<< "$health")" || return 1
+	[[ "$(date -u -d "$shadow_until" +%s)" -ge "$(date -u -d '+14 days' +%s)" ]] || return 1
+	jq -e '
+		.status == "ok"
+		and .identity.enabled and .identity.admin_enabled
+		and .identity.mode == "shadow" and .identity.schema == "v2"
+		and .identity.domains.ip == "disabled"
+		and .identity.domains.device == "disabled"
+		and .identity.domains.composite == "disabled"
+		and .identity.quality_domains.ip == "healthy"
+		and .identity.quality_domains.device == "healthy"
+		and .identity.quality_domains.composite == "healthy"
+		and .identity.configured_rule_count >= 5
+		and .identity.prospective_rule_count >= 5
+		and .identity.effective_rule_count == 0
+		and .identity.features.delivery
+		and .identity.features.explain
+		and (.identity.features.current_score | not)
+		and (.identity.features.cases | not)
+		and .identity.processing.pending == 0
+		and .identity.processing.retry == 0
+		and .identity.processing.failed == 0
+		and .identity.delivery.sources > 0
+		and .identity.delivery.gap_sources == 0
+		and .identity.delivery.stale_sources == 0
+		and .identity.delivery.queue_depth == 0
+		and .identity.delivery.dropped == 0
+		and .identity.delivery.failed == 0
+	' <<< "$health" >/dev/null
+}
+
 valid_base64_key() {
   local value="$1"
   [[ -n "$value" ]] || return 1
@@ -164,6 +202,8 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED false RISK_IDENTITY_ADMIN_ENABLED false \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
+		RISK_IDENTITY_EXPLAIN_ENABLED false RISK_IDENTITY_DELIVERY_ENABLED false \
         || return 1
       [[ -z "$(env_value "$ENV_FILE" RISK_IDENTITY_SHADOW_UNTIL)" ]] || return 1
       ensure_identity_secrets || return 1
@@ -181,18 +221,26 @@ apply_transition() {
 	  set_env_value "$target" RISK_IDENTITY_IP_RULES_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_DEVICE_RULES_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_COMPOSITE_RULES_ENABLED false || return 1
+	  set_env_value "$target" RISK_IDENTITY_CURRENT_SCORE_ENABLED false || return 1
+	  set_env_value "$target" RISK_IDENTITY_CASES_ENABLED false || return 1
+	  set_env_value "$target" RISK_IDENTITY_EXPLAIN_ENABLED false || return 1
+	  set_env_value "$target" RISK_IDENTITY_DELIVERY_ENABLED false || return 1
+	  set_env_value "$target" RISK_IDENTITY_DELIVERY_SOURCE sub2api-main || return 1
 	  set_env_value "$target" RISK_IDENTITY_SHADOW_UNTIL '' || return 1
 	  set_env_value "$target" RISK_IDENTITY_V2_ENABLED true
       ;;
     stage1-ip)
       require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED false \
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED false RISK_IDENTITY_ADMIN_ENABLED false RISK_IDENTITY_RULES_ENABLED false \
+		RISK_IDENTITY_DELIVERY_ENABLED false \
         || return 1
-      set_env_value "$target" RISK_IDENTITY_IP_COLLECTION_ENABLED true
+	  set_env_value "$target" RISK_IDENTITY_IP_COLLECTION_ENABLED true || return 1
+	  set_env_value "$target" RISK_IDENTITY_DELIVERY_ENABLED true
       ;;
     stage1-device)
       require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED true \
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED false RISK_IDENTITY_ADMIN_ENABLED false RISK_IDENTITY_RULES_ENABLED false \
+		RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
       set_env_value "$target" RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true
       ;;
@@ -201,14 +249,19 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED false \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
+		RISK_IDENTITY_EXPLAIN_ENABLED false RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
-      set_env_value "$target" RISK_IDENTITY_ADMIN_ENABLED true
+	  set_env_value "$target" RISK_IDENTITY_ADMIN_ENABLED true || return 1
+	  set_env_value "$target" RISK_IDENTITY_EXPLAIN_ENABLED true
       ;;
     stage3-shadow-window)
       require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED true \
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
+		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
       [[ -z "$(env_value "$ENV_FILE" RISK_IDENTITY_SHADOW_UNTIL)" ]] || return 1
       shadow_until="$(date -u -d '+15 days' '+%Y-%m-%dT%H:%M:%SZ')" || return 1
@@ -219,19 +272,26 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
+		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
+	  validate_stage3_prerequisites || return 1
       shadow_until="$(env_value "$ENV_FILE" RISK_IDENTITY_SHADOW_UNTIL)" || return 1
       [[ -n "$shadow_until" && "$(date -u -d "$shadow_until" +%s)" -ge "$(date -u -d '+14 days' +%s)" ]] || return 1
       set_env_value "$target" RISK_IDENTITY_RULES_ENABLED true || return 1
       set_env_value "$target" RISK_IDENTITY_IP_RULES_ENABLED true || return 1
-      set_env_value "$target" RISK_IDENTITY_DEVICE_RULES_ENABLED true || return 1
-      set_env_value "$target" RISK_IDENTITY_COMPOSITE_RULES_ENABLED true
+	  set_env_value "$target" RISK_IDENTITY_DEVICE_RULES_ENABLED true || return 1
+	  set_env_value "$target" RISK_IDENTITY_COMPOSITE_RULES_ENABLED true || return 1
+	  set_env_value "$target" RISK_IDENTITY_CURRENT_SCORE_ENABLED true || return 1
+	  set_env_value "$target" RISK_IDENTITY_CASES_ENABLED true
       ;;
 	stage4-geo)
 	  require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED true \
 	    RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
 	    RISK_IDENTITY_RULES_ENABLED true RISK_IDENTITY_IP_RULES_ENABLED true \
 	    RISK_IDENTITY_DEVICE_RULES_ENABLED true RISK_IDENTITY_COMPOSITE_RULES_ENABLED true \
+		RISK_IDENTITY_CURRENT_SCORE_ENABLED true RISK_IDENTITY_CASES_ENABLED true \
+		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
 	    RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS false \
 	    || return 1
 	  set_env_value "$target" RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true

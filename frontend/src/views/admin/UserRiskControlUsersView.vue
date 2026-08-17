@@ -19,7 +19,7 @@
             <ul class="mt-3 space-y-2 text-sm">
               <li v-for="result in batchResults" :key="result.id" class="flex flex-wrap gap-x-2 gap-y-1">
                 <span class="font-medium text-gray-900 dark:text-white">#{{ result.id }}</span>
-                <span :class="result.status === 'success' ? 'text-emerald-600' : 'text-red-600'">{{ formatAuditResult(result.status) }}</span>
+				<span :class="result.status === 'success' ? 'text-emerald-600' : result.status === 'partial' ? 'text-amber-600' : 'text-red-600'">{{ formatAuditResult(result.status) }}</span>
                 <span v-if="result.reason" class="text-gray-600 dark:text-gray-300">{{ result.reason }}</span>
               </li>
             </ul>
@@ -28,7 +28,10 @@
       </template>
 
       <template #filters>
-          <section class="flex flex-wrap items-center gap-3" data-testid="risk-user-filters">
+			<div class="mb-3 inline-flex max-w-full overflow-x-auto border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800" role="tablist" aria-label="案件视图" data-testid="risk-case-views">
+				<button v-for="option in caseViews" :key="option.value" type="button" role="tab" class="min-h-9 whitespace-nowrap px-3 text-sm font-medium" :class="view === option.value ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'" :aria-selected="view === option.value" @click="setView(option.value)">{{ option.label }}</button>
+			</div>
+			<section class="flex flex-wrap items-center gap-3" data-testid="risk-user-filters">
           <SearchInput
             :model-value="draft.search || ''"
             :placeholder="t('admin.userRiskControl.searchPlaceholder')"
@@ -66,8 +69,8 @@
           <section v-if="selectedIds.size" class="flex flex-col gap-3 rounded-lg border border-primary-200 bg-primary-50 p-3 dark:border-primary-700/40 dark:bg-primary-900/20 sm:flex-row sm:items-center sm:justify-between" data-testid="batch-action-bar">
             <span class="text-sm font-medium text-primary-800 dark:text-primary-200" data-testid="selected-count">已选择 {{ selectedIds.size }} 个账号</span>
             <div class="flex flex-wrap gap-2">
-              <button type="button" class="btn btn-danger btn-sm" data-testid="batch-ban" @click="openBatchAction('disabled')">{{ formatRiskAction('ban') }}</button>
-              <button type="button" class="btn btn-primary btn-sm" data-testid="batch-unban" @click="openBatchAction('active')">{{ formatRiskAction('unban') }}</button>
+              <button type="button" class="btn btn-danger btn-sm" data-testid="batch-ban" :disabled="!canBatchBan" @click="openBatchAction('disabled')">{{ formatRiskAction('ban') }}</button>
+              <button type="button" class="btn btn-primary btn-sm" data-testid="batch-unban" :disabled="!canBatchUnban" @click="openBatchAction('active')">{{ formatRiskAction('unban') }}</button>
               <button type="button" class="btn btn-secondary btn-sm" data-testid="batch-mark-processed" @click="openBatchAction('processed')">标记已处理</button>
               <button type="button" class="btn btn-ghost btn-sm" data-testid="clear-selection" @click="clearSelection">取消选择</button>
             </div>
@@ -75,19 +78,13 @@
           <DataTable :key="`risk-users-${tableSortKey}-${sortOrder}`" :columns="columns" :data="users" :loading="loading" row-key="id" :clickable-rows="true" :server-side-sort="true" :default-sort-key="tableSortKey" :default-sort-order="sortOrder" @row-click="selectedUser = $event" @sort="handleTableSort">
             <template #header-select><input v-model="allSelected" type="checkbox" data-testid="select-current-page" class="rounded border-gray-300 text-primary-600" aria-label="选择当前页" @click.stop /></template>
             <template #cell-select="{ row: user }"><input :checked="selectedIds.has(user.id)" type="checkbox" :data-testid="`user-select-${user.id}`" class="rounded border-gray-300 text-primary-600" :aria-label="`选择账号 ${user.email || user.username || user.id}`" @click.stop @change.stop="toggleSelection(user.id)" /></template>
-            <template #cell-account="{ row: user }"><div class="min-w-0 max-w-[50vw] text-left sm:max-w-none" :data-testid="`user-row-${user.id}`"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p v-if="user.email && user.username" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :title="user.username" :data-testid="`account-secondary-${user.id}`">{{ user.username }}</p></div></template>
-            <template #cell-id="{ row: user }">#{{ user.id }}</template>
-            <template #cell-status="{ row: user }"><span class="rounded-md px-2 py-0.5 text-xs font-medium" :class="statusClass(user.status)">{{ formatAccountStatus(user.status) }}</span></template>
-            <template #cell-riskType="{ row: user }">{{ formatRiskType(user.risk_type) }}</template>
-            <template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /></template>
-            <template #cell-riskLevel="{ row: user }">{{ formatRiskLevel(user.risk_level) }}</template>
-            <template #cell-eventCount="{ row: user }"><span>{{ user.event_count ?? 0 }}</span><span class="block text-xs text-gray-400 dark:text-gray-500">IP {{ user.ip_count ?? 0 }} / 设备 {{ user.device_count ?? 0 }}</span></template>
-            <template #cell-identityNetwork="{ row: user }"><div class="whitespace-nowrap text-left"><span class="font-mono text-xs text-gray-800 dark:text-gray-200">{{ user.identity?.latest_ip || '-' }}</span><span v-if="user.identity?.country_code || user.identity?.region" class="mt-0.5 block text-xs text-gray-500">{{ [user.identity.country_code, user.identity.region].filter(Boolean).join(' · ') }}</span></div></template>
-            <template #cell-identitySources="{ row: user }"><div class="whitespace-nowrap text-left text-xs"><span>{{ t('admin.userRiskControl.identityBrowserCount', { count: user.identity?.browser_instance_count || 0 }) }}</span><span class="mt-0.5 block text-gray-500">{{ t('admin.userRiskControl.identityAPIClientCount', { count: user.identity?.api_client_count || 0 }) }}</span></div></template>
-            <template #cell-identityAssociation="{ row: user }"><div class="whitespace-nowrap text-left text-xs"><span>{{ t('admin.userRiskControl.identityAssociatedCount', { count: user.identity?.associated_account_count || 0 }) }}</span><span class="mt-0.5 block text-gray-500">{{ t('admin.userRiskControl.identityRuleCount', { count: user.identity?.active_rule_count || 0 }) }}</span><span v-if="user.identity" class="mt-1 inline-block rounded px-1.5 py-0.5 font-medium" :class="identityQualityClass(user.identity.quality_state)">{{ t(`admin.userRiskControl.drawer.state.${user.identity.quality_state}`) }}</span><span v-else class="mt-1 block text-gray-400">-</span></div></template>
+			<template #cell-account="{ row: user }"><div class="min-w-0 max-w-[50vw] text-left sm:max-w-none" :data-testid="`user-row-${user.id}`"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :data-testid="`account-secondary-${user.id}`"><span v-if="user.username">{{ user.username }} · </span>#{{ user.id }} · {{ formatAccountStatus(user.status) }}</p></div></template>
+			<template #cell-riskType="{ row: user }"><div class="max-w-sm whitespace-normal text-left"><p class="font-medium text-gray-800 dark:text-gray-200">{{ displayReason(user) }}</p><p v-if="user.risk_type" class="mt-1 font-mono text-xs text-gray-400">{{ user.risk_type }}</p></div></template>
+			<template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /><span v-if="(user.historical_max_score || 0) > (user.risk_score || 0)" class="mt-1 block text-xs text-gray-400">历史最高 {{ user.historical_max_score }}</span></template>
+			<template #cell-evidence="{ row: user }"><span class="text-sm">{{ evidenceStrengthLabel(user.evidence_strength) }}</span></template>
             <template #cell-lastEvent="{ row: user }">{{ formatDate(user.last_event_at) }}</template>
-            <template #cell-reason="{ row: user }"><p class="max-w-xl whitespace-normal break-words text-left leading-5">{{ displayReason(user) }}</p></template>
-            <template #cell-processing="{ row: user }">{{ formatProcessingStatus(user.processing_status || (user.pending ? 'pending' : user.last_action ? 'observed' : '')) }}</template>
+			<template #cell-processing="{ row: user }">{{ caseStatusLabel(user.case_status || user.processing_status) }}</template>
+			<template #cell-assignee="{ row: user }">{{ user.assignee_id ? `#${user.assignee_id}` : '未领取' }}</template>
             <template #empty><EmptyState :title="t('admin.userRiskControl.empty')" /></template>
           </DataTable>
         </div>
@@ -96,7 +93,7 @@
       <template #pagination><Pagination v-if="total" :page="page" :total="total" :page-size="pageSize" @update:page="changePage" @update:pageSize="changePageSize" /></template>
     </TablePageLayout>
 
-    <UserRiskControlUserDrawer v-if="selectedUser" :user="selectedUser" @close="selectedUser = null" @updated="handleUpdated" />
+    <UserRiskControlUserDrawer v-if="selectedUser" :user="selectedUser" @close="selectedUser = null" @case-claimed="handleCaseClaimed" @updated="handleUpdated" />
     <BaseDialog :show="Boolean(batchAction)" :title="batchDialogTitle" width="narrow" :close-on-click-outside="true" :z-index="80" @close="closeBatchAction">
       <p class="text-sm text-gray-500 dark:text-gray-400">将处理 {{ selectedIds.size }} 个账号；每个账号都会单独记录结果。</p>
       <TextArea v-model="batchReason" class="mt-4" data-testid="batch-reason" label="操作原因" required placeholder="填写操作原因（必填）" :error="batchValidationError" @update:model-value="batchValidationError = ''" />
@@ -124,8 +121,8 @@ import Toggle from '@/components/common/Toggle.vue'
 import type { Column } from '@/components/common/types'
 import { useDebouncedAction } from '@/composables/useDebouncedAction'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
-import { userRiskControlV2API, type AccountStatus, type RiskSortBy, type RiskUserRow, type UserRiskFilters } from '@/api/admin/userRiskControlV2'
-import { accountStatusOptions, formatAccountStatus, formatAuditResult, formatProcessingStatus, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType, processingStatusOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
+import { userRiskControlV2API, type RiskCaseView, type RiskSortBy, type RiskUserRow, type UserRiskFilters } from '@/api/admin/userRiskControlV2'
+import { accountStatusOptions, formatAccountStatus, formatAuditResult, formatIdentitySignal, formatRiskAction, formatRiskReason, identitySignalOptions, processingStatusOptions, riskLevelOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
 const route = inject(routeLocationKey, null)
@@ -141,25 +138,28 @@ const pageSize = ref(getPersistedPageSize(20))
 const total = ref(0)
 const sortBy = ref<RiskSortBy | undefined>(undefined)
 const sortOrder = ref<'asc' | 'desc'>('desc')
+const view = ref<RiskCaseView>('pending')
 const batchAction = ref<'disabled' | 'active' | 'processed' | null>(null)
 const batchReason = ref('')
 const batchValidationError = ref('')
-const batchResults = ref<Array<{ id: number; status: 'success' | 'failed'; reason?: string }>>([])
+const batchResults = ref<Array<{ id: number; status: 'success' | 'partial' | 'failed'; reason?: string }>>([])
 const columns: Column[] = [
   { key: 'select', label: '选择', class: 'w-12 text-center' },
   { key: 'account', label: t('admin.userRiskControl.table.account') },
-  { key: 'id', label: t('admin.userRiskControl.table.id') },
-  { key: 'status', label: t('admin.userRiskControl.table.status') },
-  { key: 'riskType', label: t('admin.userRiskControl.table.riskType') },
-  { key: 'riskScore', label: '风险分', sortable: true },
-  { key: 'riskLevel', label: t('admin.userRiskControl.level'), sortable: true },
-  { key: 'eventCount', label: '事件次数', sortable: true },
-  { key: 'identityNetwork', label: t('admin.userRiskControl.identityNetwork') },
-  { key: 'identitySources', label: t('admin.userRiskControl.identitySources') },
-  { key: 'identityAssociation', label: t('admin.userRiskControl.identityAssociation') },
-  { key: 'lastEvent', label: '最近事件', sortable: true },
-  { key: 'reason', label: t('admin.userRiskControl.table.reason') },
-  { key: 'processing', label: '处理状态' },
+	{ key: 'riskScore', label: '当前风险', sortable: true },
+	{ key: 'riskType', label: '主信号' },
+	{ key: 'evidence', label: '证据强度' },
+	{ key: 'lastEvent', label: '最近命中', sortable: true },
+	{ key: 'processing', label: '案件状态' },
+	{ key: 'assignee', label: '处理人' },
+]
+
+const caseViews: Array<{ value: RiskCaseView; label: string }> = [
+	{ value: 'pending', label: '待复核' },
+	{ value: 'my', label: '我的案件' },
+	{ value: 'observing', label: '观察中' },
+	{ value: 'resolved', label: '已处理' },
+	{ value: 'all', label: '全部用户' },
 ]
 const draft = reactive<UserRiskFilters>({ search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false })
 const activeFilters = reactive<UserRiskFilters>({ ...draft })
@@ -167,7 +167,7 @@ let loadRequestID = 0
 let writingQuery = false
 
 const accountStatusFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allStatuses') }, ...accountStatusOptions])
-const riskTypeFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allRiskTypes') }, ...riskTypeOptions])
+const riskTypeFilterOptions = computed(() => [{ value: '', label: '全部主信号' }, ...identitySignalOptions])
 const riskLevelFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allRiskLevels') }, ...riskLevelOptions])
 const processingStatusFilterOptions = computed(() => [{ value: '', label: '全部处理状态' }, ...processingStatusOptions])
 const mobileSortOptions = [
@@ -201,15 +201,12 @@ const allSelected = computed({
     selectedIds.value = next
   },
 })
+const selectedUsers = computed(() => users.value.filter((user) => selectedIds.value.has(user.id)))
+const canBatchBan = computed(() => selectedUsers.value.length > 0 && selectedUsers.value.every((user) => user.status === 'active'))
+const canBatchUnban = computed(() => selectedUsers.value.length > 0 && selectedUsers.value.every((user) => user.status === 'disabled'))
 const batchSuccessCount = computed(() => batchResults.value.filter((result) => result.status === 'success').length)
-const batchSummary = computed(() => batchSuccessCount.value === batchResults.value.length ? 'success' : batchSuccessCount.value === 0 ? 'failed' : 'partial')
+const batchSummary = computed(() => batchSuccessCount.value === batchResults.value.length ? 'success' : batchResults.value.some((result) => result.status === 'partial' || result.status === 'success') ? 'partial' : 'failed')
 const batchDialogTitle = computed(() => batchAction.value === 'disabled' ? '确认批量封禁' : batchAction.value === 'active' ? '确认批量解封' : '确认批量标记已处理')
-
-function identityQualityClass(state?: string) {
-  if (state === 'healthy') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-  if (state === 'disabled') return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
-  return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-}
 
 function errorMessage(err: unknown) {
   return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed')
@@ -227,6 +224,8 @@ function positiveInteger(value: string, fallback: number): number {
 
 function restoreRouteState() {
   if (!route) return
+	const requestedView = queryText('view') as RiskCaseView
+	view.value = caseViews.some((option) => option.value === requestedView) ? requestedView : 'pending'
   const nextSort = queryText('sort_by')
   const allowedSorts: RiskSortBy[] = ['risk_score', 'risk_level', 'event_count', 'last_event_at', 'created_at']
   Object.assign(draft, {
@@ -250,6 +249,7 @@ async function syncRouteState() {
   if (!route || !router) return
   const query: LocationQueryRaw = { ...route.query }
   const values: Record<string, string | undefined> = {
+		view: view.value === 'pending' ? undefined : view.value,
     search: String(activeFilters.search || '') || undefined,
     status: String(activeFilters.status || '') || undefined,
     risk_type: String(activeFilters.riskType || '') || undefined,
@@ -277,7 +277,7 @@ async function loadUsers() {
   loading.value = true
   error.value = ''
   try {
-    const response = await userRiskControlV2API.listUsers({ ...activeFilters, page: page.value, pageSize: pageSize.value, sortBy: sortBy.value, sortOrder: sortOrder.value })
+		const response = await userRiskControlV2API.listUsers({ ...activeFilters, view: view.value, page: page.value, pageSize: pageSize.value, sortBy: sortBy.value, sortOrder: sortOrder.value })
     if (requestID !== loadRequestID) return
     users.value = response.items
     total.value = response.total
@@ -317,6 +317,15 @@ function setFilter(key: 'status' | 'riskType' | 'riskLevel' | 'processingStatus'
 function setRiskOnly(value: boolean) {
   draft.riskOnly = value
   void runFiltersNow()
+}
+
+async function setView(next: RiskCaseView) {
+	if (view.value === next || loading.value) return
+	view.value = next
+	page.value = 1
+	clearSelection()
+	await syncRouteState()
+	await loadUsers()
 }
 
 async function setMobileSort(value: string | number | boolean | null) {
@@ -371,15 +380,23 @@ function toggleSelection(id: number) {
   selectedIds.value = next
 }
 function clearSelection() { selectedIds.value = new Set() }
-function displayReason(user: RiskUserRow) { return formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
+function displayReason(user: RiskUserRow) { return user.risk_type?.startsWith('v2_') ? formatIdentitySignal(user.risk_type) : formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
+function evidenceStrengthLabel(value?: string) { return ({ observation: '仅观察', weak: '弱', medium_high: '中高', high: '高' } as Record<string, string>)[value || ''] || '未评估' }
+function caseStatusLabel(value?: string | null) { return ({ pending: '待复核', in_review: '复核中', observing: '观察中', resolved: '已处理' } as Record<string, string>)[value || ''] || '无案件' }
 function formatDate(value?: string | null) { return value ? new Date(value).toLocaleString() : '-' }
-function statusClass(status?: AccountStatus) { return status === 'disabled' ? 'bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-300' : status === 'pending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' }
 function handleUpdated(updated: RiskUserRow) {
   const index = users.value.findIndex((user) => user.id === updated.id)
   if (index >= 0) users.value[index] = { ...users.value[index], ...updated }
   selectedUser.value = null
+  void loadUsers()
+}
+function handleCaseClaimed(updated: RiskUserRow) {
+  const index = users.value.findIndex((user) => user.id === updated.id)
+  if (index >= 0) users.value[index] = { ...users.value[index], ...updated }
+  selectedUser.value = selectedUser.value ? { ...selectedUser.value, ...updated } : null
 }
 function openBatchAction(action: 'disabled' | 'active' | 'processed') {
+  if ((action === 'disabled' && !canBatchBan.value) || (action === 'active' && !canBatchUnban.value)) return
   batchAction.value = action
   batchReason.value = ''
   batchValidationError.value = ''

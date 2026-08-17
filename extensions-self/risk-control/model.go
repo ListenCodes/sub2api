@@ -91,6 +91,7 @@ type AuditRecord struct {
 }
 
 type AuditFilter struct {
+	Category     string
 	Action       string
 	TargetUserID int64
 	Target       string
@@ -100,6 +101,31 @@ type AuditFilter struct {
 	To           time.Time
 	SortBy       string
 	SortOrder    string
+}
+
+var auditCategoryActions = map[string]map[string]struct{}{
+	"security": {
+		"ban": {}, "unban": {}, "auto_ban": {}, "mark_processed": {},
+		"claim_risk_review_case": {}, "review_risk_case": {}, "label_shared_network": {},
+	},
+	"rules": {
+		"create_rule": {}, "update_rule": {}, "rule_test": {}, "disable_identity_rule": {},
+		"purge_legacy_v1": {}, "identity_rebuild_dry_run": {}, "identity_rebuild": {},
+	},
+	"sensitive": {"view_identity_detail": {}},
+}
+
+func auditActionsForCategory(category string) ([]string, bool) {
+	actions, ok := auditCategoryActions[category]
+	if !ok {
+		return nil, false
+	}
+	result := make([]string, 0, len(actions))
+	for action := range actions {
+		result = append(result, action)
+	}
+	sort.Strings(result)
+	return result, true
 }
 
 type RiskOverview struct {
@@ -152,7 +178,7 @@ func (s *MemoryRuleStore) UpdateRule(code string, expectedRevision int, update R
 	update.ID = current.ID
 	update.Code = code
 	update.Revision = current.Revision + 1
-	update.CountStrategy = normalizeCountStrategy(current.CountStrategy)
+	update.CountStrategy = normalizeCountStrategy(update.CountStrategy)
 	s.rules[code] = update
 	return update, nil
 }
@@ -223,25 +249,29 @@ func (r *MemoryRepository) CountRecent(_ context.Context, userID int64, subjectI
 			continue
 		}
 		switch normalizeCountStrategy(countStrategy) {
-		case countStrategySubjectDeviceEvents:
-			if (subjectID != "" && event.SubjectID == subjectID) || (deviceHash != "" && event.DeviceHash == deviceHash) {
+		case countStrategyEmailSubjectEvents:
+			if subjectID != "" && event.SubjectID == subjectID {
 				count++
 			}
-		case countStrategyIPDistinctSubjects:
-			if ipHash != "" && event.IPHash == ipHash && event.SubjectID != "" && event.SubjectID != subjectID {
-				distinctSubjects[event.SubjectID] = struct{}{}
+		case countStrategyIPDistinctSuccessUsers:
+			if ipHash != "" && event.IPHash == ipHash && event.UserID > 0 && event.UserID != userID {
+				distinctSubjects[formatUserID(event.UserID)] = struct{}{}
+			}
+		case countStrategyBrowserDistinctSuccessUsers, countStrategyAPIClientDistinctUsers:
+			if deviceHash != "" && event.DeviceHash == deviceHash && event.UserID > 0 && event.UserID != userID {
+				distinctSubjects[formatUserID(event.UserID)] = struct{}{}
+			}
+		case countStrategyIPBrowserCooccurrence:
+			if ipHash != "" && deviceHash != "" && event.IPHash == ipHash && event.DeviceHash == deviceHash && event.UserID > 0 && event.UserID != userID {
+				distinctSubjects[formatUserID(event.UserID)] = struct{}{}
 			}
 		default:
-			matchesUser := userID > 0 && event.UserID == userID
-			matchesSubject := subjectID != "" && event.SubjectID == subjectID
-			matchesIP := ipHash != "" && event.IPHash == ipHash
-			matchesDevice := deviceHash != "" && event.DeviceHash == deviceHash
-			if matchesUser || matchesSubject || matchesIP || matchesDevice {
+			if userID > 0 && event.UserID == userID {
 				count++
 			}
 		}
 	}
-	if normalizeCountStrategy(countStrategy) == countStrategyIPDistinctSubjects {
+	if strategy := normalizeCountStrategy(countStrategy); strategy == countStrategyIPDistinctSuccessUsers || strategy == countStrategyBrowserDistinctSuccessUsers || strategy == countStrategyAPIClientDistinctUsers || strategy == countStrategyIPBrowserCooccurrence {
 		return len(distinctSubjects), nil
 	}
 	return count, nil
@@ -280,7 +310,7 @@ func (r *MemoryRepository) UpdateRule(_ context.Context, code string, expectedRe
 		return Rule{}, ErrRuleRevisionConflict
 	}
 	update.ID, update.Code, update.Revision = current.ID, code, current.Revision+1
-	update.CountStrategy = normalizeCountStrategy(current.CountStrategy)
+	update.CountStrategy = normalizeCountStrategy(update.CountStrategy)
 	r.rules[code] = update
 	return update, nil
 }
@@ -313,7 +343,7 @@ func (r *MemoryRepository) UpsertSubject(_ context.Context, event EventRecord) e
 		subject.Reason = event.Reason
 		subject.LastAction = event.Decision
 	}
-	subject.Pending = event.Decision == "review"
+	subject.Pending = subject.Pending || event.Decision == "review"
 	subject.EventCount++
 	subject.LastEventAt = event.OccurredAt
 	if r.userIPs[event.UserID] == nil {
@@ -436,6 +466,11 @@ func (r *MemoryRepository) ListAuditFiltered(_ context.Context, limit, offset in
 	for i := len(r.audits) - 1; i >= 0; i-- {
 		audit := r.audits[i]
 		enrichAuditRecord(&audit)
+		if actions, ok := auditCategoryActions[filter.Category]; ok {
+			if _, included := actions[audit.Action]; !included {
+				continue
+			}
+		}
 		if filter.Action != "" && audit.Action != filter.Action || filter.Result != "" && audit.Result != filter.Result {
 			continue
 		}

@@ -14,9 +14,12 @@ func TestCountRecentQueryUsesContiguousParameters(t *testing.T) {
 		strategy string
 		wantArgs int
 	}{
-		{name: "associated events", strategy: countStrategyAssociatedEvents, wantArgs: 6},
-		{name: "subject or device", strategy: countStrategySubjectDeviceEvents, wantArgs: 4},
-		{name: "distinct subjects by IP", strategy: countStrategyIPDistinctSubjects, wantArgs: 4},
+		{name: "user events", strategy: countStrategyUserEvents, wantArgs: 3},
+		{name: "email subject events", strategy: countStrategyEmailSubjectEvents, wantArgs: 3},
+		{name: "distinct successful users by IP", strategy: countStrategyIPDistinctSuccessUsers, wantArgs: 3},
+		{name: "distinct successful users by browser", strategy: countStrategyBrowserDistinctSuccessUsers, wantArgs: 3},
+		{name: "distinct users by API client", strategy: countStrategyAPIClientDistinctUsers, wantArgs: 4},
+		{name: "IP and browser cooccurrence", strategy: countStrategyIPBrowserCooccurrence, wantArgs: 4},
 	}
 
 	for _, test := range tests {

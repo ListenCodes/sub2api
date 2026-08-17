@@ -23,6 +23,8 @@ const (
 	maxHomepageProxyBody  = 1 << 20
 	riskIdentityQueueSize = 1024
 	riskIdentityWorkers   = 2
+	riskIdentityAttempts  = 3
+	riskIdentityHeartbeat = 5 * time.Second
 )
 
 var (
@@ -38,18 +40,28 @@ type HomepageAsset struct {
 }
 
 type RiskControlClient struct {
-	baseURL               string
-	secret                []byte
-	http                  *http.Client
-	identityEnabled       bool
-	identityIPEnabled     bool
-	identityDeviceEnabled bool
-	identityQueue         chan RiskIdentityReport
-	identityEnqueued      atomic.Uint64
-	identitySucceeded     atomic.Uint64
-	identityFailed        atomic.Uint64
-	identityLatencyNanos  atomic.Uint64
-	identityDropped       atomic.Uint64
+	baseURL                   string
+	secret                    []byte
+	http                      *http.Client
+	identityEnabled           bool
+	identityIPEnabled         bool
+	identityDeviceEnabled     bool
+	identityDeliveryEnabled   bool
+	identitySource            string
+	identityGeneration        string
+	identityStartedAt         time.Time
+	identityQueue             chan RiskIdentityReport
+	identityEnqueued          atomic.Uint64
+	identitySucceeded         atomic.Uint64
+	identityFailed            atomic.Uint64
+	identityLatencyNanos      atomic.Uint64
+	identityDropped           atomic.Uint64
+	identityDeliveryReady     atomic.Bool
+	identityHeartbeatSequence atomic.Uint64
+	identityLastEventAt       atomic.Int64
+	identityLastSuccessAt     atomic.Int64
+	identityLastFailureAt     atomic.Int64
+	identityLastDropAt        atomic.Int64
 }
 
 // RiskEventReport is the redacted event contract sent to the standalone risk service.
@@ -114,6 +126,23 @@ type RiskIdentityReport struct {
 	APIKeyID            int64     `json:"api_key_id,omitempty"`
 }
 
+type RiskIdentityDeliveryReport struct {
+	Source        string `json:"source"`
+	Generation    string `json:"generation"`
+	StartedAt     string `json:"started_at"`
+	Sequence      uint64 `json:"sequence"`
+	Enqueued      uint64 `json:"enqueued"`
+	Succeeded     uint64 `json:"succeeded"`
+	Failed        uint64 `json:"failed"`
+	Dropped       uint64 `json:"dropped"`
+	QueueDepth    int    `json:"queue_depth"`
+	LastEventAt   string `json:"last_event_at,omitempty"`
+	LastSuccessAt string `json:"last_success_at,omitempty"`
+	LastFailureAt string `json:"last_failure_at,omitempty"`
+	LastDropAt    string `json:"last_drop_at,omitempty"`
+	GeneratedAt   string `json:"generated_at"`
+}
+
 type RiskDecision struct {
 	Action    string   `json:"decision"`
 	Score     int      `json:"score"`
@@ -134,10 +163,23 @@ func NewRiskControlClientFromEnv() *RiskControlClient {
 	client.identityEnabled = envBoolValue("RISK_IDENTITY_V2_ENABLED")
 	client.identityIPEnabled = envBoolValue("RISK_IDENTITY_IP_COLLECTION_ENABLED")
 	client.identityDeviceEnabled = envBoolValue("RISK_IDENTITY_DEVICE_COLLECTION_ENABLED")
+	client.identityDeliveryEnabled = envBoolValue("RISK_IDENTITY_DELIVERY_ENABLED")
+	client.identitySource = strings.TrimSpace(os.Getenv("RISK_IDENTITY_DELIVERY_SOURCE"))
+	if client.identitySource == "" {
+		client.identitySource = "sub2api"
+	}
+	client.identityGeneration, _ = randomToken(16)
+	if client.identityGeneration == "" {
+		client.identityGeneration = fmt.Sprintf("startup-%x", time.Now().UTC().UnixNano())
+	}
+	client.identityStartedAt = time.Now().UTC()
 	if client.identityEnabled {
 		client.identityQueue = make(chan RiskIdentityReport, riskIdentityQueueSize)
 		for range riskIdentityWorkers {
 			go client.runIdentityWorker()
+		}
+		if client.identityDeliveryEnabled {
+			go client.runIdentityHeartbeat()
 		}
 	}
 	return client
@@ -163,12 +205,14 @@ func (c *RiskControlClient) EnqueueIdentity(input RiskIdentityReport) bool {
 	if input.OccurredAt.IsZero() {
 		input.OccurredAt = time.Now().UTC()
 	}
+	c.identityLastEventAt.Store(input.OccurredAt.UTC().UnixNano())
 	select {
 	case c.identityQueue <- input:
 		c.identityEnqueued.Add(1)
 		return true
 	default:
 		c.identityDropped.Add(1)
+		c.identityLastDropAt.Store(time.Now().UTC().UnixNano())
 		return false
 	}
 }
@@ -193,26 +237,102 @@ func (c *RiskControlClient) IdentityQueueHealth() map[string]any {
 	if processed > 0 {
 		averageLatencyMS = float64(c.identityLatencyNanos.Load()) / float64(processed) / float64(time.Millisecond)
 	}
-	return map[string]any{"state": state, "queued": len(c.identityQueue), "capacity": cap(c.identityQueue), "enqueued": c.identityEnqueued.Load(), "succeeded": c.identitySucceeded.Load(), "failed": c.identityFailed.Load(), "dropped": c.identityDropped.Load(), "average_latency_ms": averageLatencyMS}
+	return map[string]any{"state": state, "queued": len(c.identityQueue), "capacity": cap(c.identityQueue), "enqueued": c.identityEnqueued.Load(), "succeeded": c.identitySucceeded.Load(), "failed": c.identityFailed.Load(), "dropped": c.identityDropped.Load(), "average_latency_ms": averageLatencyMS, "last_event_at": atomicTime(c.identityLastEventAt.Load()), "last_success_at": atomicTime(c.identityLastSuccessAt.Load()), "last_failure_at": atomicTime(c.identityLastFailureAt.Load()), "last_drop_at": atomicTime(c.identityLastDropAt.Load())}
 }
 
 func (c *RiskControlClient) runIdentityWorker() {
 	for input := range c.identityQueue {
 		body, err := json.Marshal(input)
 		if err != nil {
+			c.identityFailed.Add(1)
+			c.identityLastFailureAt.Store(time.Now().UTC().UnixNano())
 			continue
 		}
 		started := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		_, status, _, requestErr := c.identitySignedRequestOnce(ctx, http.MethodPost, "/api/v1/internal/identity-events", body)
-		cancel()
+		var status int
+		var requestErr error
+		for attempt := 0; attempt < riskIdentityAttempts; attempt++ {
+			if c.identityDeliveryEnabled && !c.identityDeliveryReady.Load() {
+				ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+				requestErr = c.sendIdentityHeartbeat(ctx)
+				cancel()
+				if requestErr != nil {
+					if attempt < riskIdentityAttempts-1 {
+						time.Sleep(time.Duration(25*(1<<attempt)) * time.Millisecond)
+					}
+					continue
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+			_, nextStatus, retryable, nextErr := c.identitySignedRequestOnce(ctx, http.MethodPost, "/api/v1/internal/identity-events", body)
+			cancel()
+			status, requestErr = nextStatus, nextErr
+			if requestErr == nil && status >= 200 && status < 300 {
+				break
+			}
+			if !retryable || attempt == riskIdentityAttempts-1 {
+				break
+			}
+			time.Sleep(time.Duration(25*(1<<attempt)) * time.Millisecond)
+		}
 		c.identityLatencyNanos.Add(uint64(time.Since(started)))
 		if requestErr == nil && status >= 200 && status < 300 {
 			c.identitySucceeded.Add(1)
+			c.identityLastSuccessAt.Store(time.Now().UTC().UnixNano())
 		} else {
 			c.identityFailed.Add(1)
+			c.identityLastFailureAt.Store(time.Now().UTC().UnixNano())
 		}
 	}
+}
+
+func (c *RiskControlClient) runIdentityHeartbeat() {
+	ticker := time.NewTicker(riskIdentityHeartbeat)
+	defer ticker.Stop()
+	for {
+		if c == nil || !c.identityDeliveryEnabled || c.identityQueue == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+		err := c.sendIdentityHeartbeat(ctx)
+		cancel()
+		if err != nil {
+			c.identityDeliveryReady.Store(false)
+		}
+		<-ticker.C
+	}
+}
+
+func (c *RiskControlClient) sendIdentityHeartbeat(ctx context.Context) error {
+	if c == nil || !c.identityDeliveryEnabled || c.identityQueue == nil {
+		return errors.New("identity delivery is disabled")
+	}
+	report := RiskIdentityDeliveryReport{
+		Source: c.identitySource, Generation: c.identityGeneration, StartedAt: c.identityStartedAt.Format(time.RFC3339Nano), Sequence: c.identityHeartbeatSequence.Add(1), Enqueued: c.identityEnqueued.Load(),
+		Succeeded: c.identitySucceeded.Load(), Failed: c.identityFailed.Load(), Dropped: c.identityDropped.Load(),
+		QueueDepth: len(c.identityQueue), LastEventAt: atomicTime(c.identityLastEventAt.Load()), LastSuccessAt: atomicTime(c.identityLastSuccessAt.Load()),
+		LastFailureAt: atomicTime(c.identityLastFailureAt.Load()), LastDropAt: atomicTime(c.identityLastDropAt.Load()), GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	body, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	_, status, _, err := c.identitySignedRequestOnce(ctx, http.MethodPost, "/api/v1/internal/identity-delivery", body)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("identity delivery heartbeat returned status %d", status)
+	}
+	c.identityDeliveryReady.Store(true)
+	return nil
+}
+
+func atomicTime(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return time.Unix(0, value).UTC().Format(time.RFC3339Nano)
 }
 
 func (c *RiskControlClient) ProxyHomepage(ctx context.Context, method, assetPath string) (*HomepageAsset, error) {

@@ -44,6 +44,10 @@ type IdentityConfig struct {
 	IPDomainEnabled         bool
 	DeviceDomainEnabled     bool
 	CompositeDomainEnabled  bool
+	CurrentScoreEnabled     bool
+	CasesEnabled            bool
+	ExplainEnabled          bool
+	DeliveryEnabled         bool
 	HMACKey                 string
 	EncryptionKey           string
 	EncryptionKeyID         string
@@ -59,7 +63,7 @@ type IdentityConfig struct {
 }
 
 func (c IdentityConfig) active() bool {
-	return c.Enabled || c.IPCollectionEnabled || c.DeviceCollectionEnabled || c.AdminEnabled || c.RulesEnabled || c.IPDomainEnabled || c.DeviceDomainEnabled || c.CompositeDomainEnabled
+	return c.Enabled || c.IPCollectionEnabled || c.DeviceCollectionEnabled || c.AdminEnabled || c.RulesEnabled || c.IPDomainEnabled || c.DeviceDomainEnabled || c.CompositeDomainEnabled || c.CurrentScoreEnabled || c.CasesEnabled || c.ExplainEnabled || c.DeliveryEnabled
 }
 
 func (c IdentityConfig) Validate() error {
@@ -125,6 +129,10 @@ func loadConfig() Config {
 			IPDomainEnabled:         envBoolFallback("RISK_IDENTITY_IP_RULES_ENABLED", "RISK_IDENTITY_IP_DOMAIN_ENABLED", false),
 			DeviceDomainEnabled:     envBoolFallback("RISK_IDENTITY_DEVICE_RULES_ENABLED", "RISK_IDENTITY_DEVICE_DOMAIN_ENABLED", false),
 			CompositeDomainEnabled:  envBoolFallback("RISK_IDENTITY_COMPOSITE_RULES_ENABLED", "RISK_IDENTITY_COMPOSITE_DOMAIN_ENABLED", false),
+			CurrentScoreEnabled:     envBool("RISK_IDENTITY_CURRENT_SCORE_ENABLED", false),
+			CasesEnabled:            envBool("RISK_IDENTITY_CASES_ENABLED", false),
+			ExplainEnabled:          envBool("RISK_IDENTITY_EXPLAIN_ENABLED", false),
+			DeliveryEnabled:         envBool("RISK_IDENTITY_DELIVERY_ENABLED", false),
 			HMACKey:                 strings.TrimSpace(os.Getenv("RISK_IDENTITY_HMAC_KEY")),
 			EncryptionKey:           strings.TrimSpace(os.Getenv("RISK_IDENTITY_ENCRYPTION_KEY")),
 			EncryptionKeyID:         strings.TrimSpace(os.Getenv("RISK_IDENTITY_ENCRYPTION_KEY_ID")),

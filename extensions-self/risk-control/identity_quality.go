@@ -1,6 +1,11 @@
 package main
 
-type identityQualityCounts struct{ Total, ValidIP, ValidDevice, LinkedUsers, MaxNetworkUsers int64 }
+type identityQualityCounts struct {
+	Total, ValidIP, ValidDevice, LinkedUsers, MaxNetworkUsers int64
+	ProcessingPending, ProcessingRetry, ProcessingFailed      int64
+	DeliverySources, DeliveryGapSources, DeliveryStaleSources int64
+	DeliveryQueueDepth, DeliveryDropped, DeliveryFailed       int64
+}
 
 func identityDomainStates(cfg IdentityConfig, counts identityQualityCounts) map[string]string {
 	states := map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}
@@ -26,6 +31,19 @@ func identityDomainStates(cfg IdentityConfig, counts identityQualityCounts) map[
 			states["composite"] = "healthy"
 		} else {
 			states["composite"] = "paused"
+		}
+	}
+	if counts.ProcessingFailed > 0 || counts.ProcessingRetry > 0 || (cfg.DeliveryEnabled && (counts.DeliverySources == 0 || counts.DeliveryGapSources > 0 || counts.DeliveryStaleSources > 0)) {
+		for _, domain := range []string{"ip", "device", "composite"} {
+			if states[domain] != "disabled" {
+				states[domain] = "not_evaluable"
+			}
+		}
+	} else if counts.ProcessingPending > 0 {
+		for _, domain := range []string{"ip", "device", "composite"} {
+			if states[domain] == "healthy" {
+				states[domain] = "degraded"
+			}
 		}
 	}
 	return states

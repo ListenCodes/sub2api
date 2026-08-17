@@ -71,8 +71,8 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT enabled,action,name FROM risk_rules WHERE code='api_request_observation'`).Scan(&enabled, &action, &name); err != nil {
 		t.Fatal(err)
 	}
-	if !enabled || action != "review" || name != "operator override" {
-		t.Fatalf("Stage 0 changed V1 rule: enabled=%v action=%q name=%q", enabled, action, name)
+	if enabled || action != "review" || name != "operator override" {
+		t.Fatalf("retired reliability rule state: enabled=%v action=%q name=%q", enabled, action, name)
 	}
 
 	cfg := testIdentityConfig()
@@ -247,7 +247,7 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 		t.Fatalf("audit count = %d, cleanup events = %d", auditCount, cleanupEvents)
 	}
 	identityRules, err := repo.ListIdentityRules(ctx)
-	if err != nil || len(identityRules) != 4 {
+	if err != nil || len(identityRules) != 5 {
 		t.Fatalf("identity rules = %#v, error = %v", identityRules, err)
 	}
 	adminCfg := activation

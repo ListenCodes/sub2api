@@ -76,9 +76,12 @@ var validRiskEventTypes = map[string]struct{}{
 }
 
 var validRuleCountStrategies = map[string]struct{}{
-	countStrategyAssociatedEvents:    {},
-	countStrategySubjectDeviceEvents: {},
-	countStrategyIPDistinctSubjects:  {},
+	countStrategyUserEvents:                  {},
+	countStrategyEmailSubjectEvents:          {},
+	countStrategyIPDistinctSuccessUsers:      {},
+	countStrategyBrowserDistinctSuccessUsers: {},
+	countStrategyAPIClientDistinctUsers:      {},
+	countStrategyIPBrowserCooccurrence:       {},
 }
 
 func validRuleAction(action string) bool {
@@ -104,22 +107,60 @@ func validateRuleConfig(rule Rule) error {
 	if err := validateRuleEventTypes(rule.EventTypes, false); err != nil {
 		return err
 	}
-	if strategy := strings.TrimSpace(rule.CountStrategy); strategy != "" {
-		if _, ok := validRuleCountStrategies[strategy]; !ok {
-			return fmt.Errorf("invalid count strategy: %s", strategy)
-		}
+	strategy := strings.TrimSpace(rule.CountStrategy)
+	if strategy == "" {
+		return errors.New("count strategy is required")
+	}
+	if _, ok := validRuleCountStrategies[strategy]; !ok {
+		return fmt.Errorf("invalid count strategy: %s", strategy)
+	}
+	if err := validateRuleStrategy(rule); err != nil {
+		return err
 	}
 	return validateRuleFields(rule)
 }
 
 func validateRuleEventTypes(eventTypes []string, allowLegacyAPIObservation bool) error {
+	seen := make(map[string]struct{}, len(eventTypes))
 	for _, eventType := range eventTypes {
 		eventType = strings.TrimSpace(eventType)
+		if _, duplicate := seen[eventType]; duplicate {
+			return fmt.Errorf("duplicate event type: %s", eventType)
+		}
+		seen[eventType] = struct{}{}
 		if allowLegacyAPIObservation && eventType == "api_request" {
 			continue
 		}
 		if _, ok := validRiskEventTypes[eventType]; !ok {
 			return fmt.Errorf("invalid event type: %s", eventType)
+		}
+	}
+	return nil
+}
+
+func validateRuleStrategy(rule Rule) error {
+	strategy := normalizeCountStrategy(rule.CountStrategy)
+	requiresOnly := func(eventType string) bool {
+		return len(rule.EventTypes) == 1 && strings.TrimSpace(rule.EventTypes[0]) == eventType
+	}
+	switch strategy {
+	case countStrategyEmailSubjectEvents:
+		for _, eventType := range rule.EventTypes {
+			eventType = strings.TrimSpace(eventType)
+			if eventType != "registration_attempt" && eventType != "registration_success" {
+				return errors.New("email_subject_events is registration observation only")
+			}
+		}
+		if rule.Score != 0 || normalizeRiskAction(rule.Action) != "observe" {
+			return errors.New("email_subject_events is zero-score registration observation only")
+		}
+	case countStrategyIPDistinctSuccessUsers, countStrategyBrowserDistinctSuccessUsers, countStrategyIPBrowserCooccurrence:
+		if !requiresOnly("registration_success") {
+			return fmt.Errorf("%s requires registration_success", strategy)
+		}
+	case countStrategyAPIClientDistinctUsers:
+		if !requiresOnly("api_error") || rule.Score != 0 || normalizeRiskAction(rule.Action) != "observe" {
+			return errors.New("api_client_distinct_users is zero-score api_error observation only")
 		}
 	}
 	return nil

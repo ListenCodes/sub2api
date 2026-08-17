@@ -45,6 +45,9 @@ func main() {
 	}
 	defer monitorRuntime.Close()
 	monitorHandlers := NewHTTPServer(cfg, NewSQLRepository(db))
+	if monitorHandlers.identity != nil {
+		go monitorHandlers.identity.Run(ctx)
+	}
 	if monitorRuntime != nil {
 		monitorHandlers.publicGroups = monitorRuntime.source
 		monitorHandlers.monitor = monitorRuntime.handler

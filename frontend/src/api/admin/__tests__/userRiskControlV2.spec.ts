@@ -10,13 +10,33 @@ describe('userRiskControlV2API', () => {
     expect(get).toHaveBeenCalledWith('/admin/user-risk-control/identity-rules')
     expect(rules).toEqual([expect.objectContaining({ code: 'v2_registration_ip_accounts', domain: 'ip', mode: 'shadow' })])
   })
+
+	it('loads rule effects and versions and keeps replay behind Dry Run APIs', async () => {
+		const get = vi.spyOn(mainAdminClient, 'get')
+			.mockResolvedValueOnce({ data: { items: [{ rule_code: 'v2_registration_ip_accounts', revision: 2 }] } } as never)
+			.mockResolvedValueOnce({ data: { items: [{ revision: 2, enabled: true }] } } as never)
+		const post = vi.spyOn(mainAdminClient, 'post')
+			.mockResolvedValueOnce({ data: { id: 8, dry_run: true, status: 'completed' } } as never)
+			.mockResolvedValueOnce({ data: { id: 9, dry_run: false, status: 'completed', approved_dry_run_id: 8 } } as never)
+			.mockResolvedValueOnce({ data: { code: 'v2_registration_ip_accounts', revision: 3, enabled: false } } as never)
+
+		await userRiskControlV2API.listIdentityRuleEffects()
+		await userRiskControlV2API.listIdentityRuleVersions('v2_registration_ip_accounts')
+		await userRiskControlV2API.dryRunIdentityRebuild()
+		await userRiskControlV2API.applyIdentityRebuild()
+		await userRiskControlV2API.disableIdentityRule('v2_registration_ip_accounts', '数据质量复核')
+
+		expect(get).toHaveBeenNthCalledWith(1, '/admin/user-risk-control/identity-rule-effects')
+		expect(get).toHaveBeenNthCalledWith(2, '/admin/user-risk-control/identity-rules/v2_registration_ip_accounts/versions')
+		expect(post).toHaveBeenNthCalledWith(1, '/admin/risk-rebuilds/dry-run', {})
+		expect(post).toHaveBeenNthCalledWith(2, '/admin/risk-rebuilds', {})
+		expect(post).toHaveBeenNthCalledWith(3, '/admin/user-risk-control/identity-rules/v2_registration_ip_accounts/disable', { reason: '数据质量复核' })
+	})
   afterEach(() => vi.restoreAllMocks())
 
   it('requests real users with risk filters and pagination', async () => {
     const mainGet = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({
       data: { items: [{ id: 7, username: 'Alice', email: 'user@example.com', status: 'active' }], total: 1, page: 2, page_size: 20 },
-    } as never).mockResolvedValueOnce({
-      data: { items: [{ id: 7, username: 'Alice', account_status: 'active', risk_type: 'login_failure', risk_level: 'high', score: 80, reason: 'Repeated failures', last_action: 'review', pending: true }], total: 1 },
     } as never)
 
     await expect(userRiskControlV2API.listUsers({
@@ -29,39 +49,37 @@ describe('userRiskControlV2API', () => {
       pendingOnly: true,
     })).resolves.toMatchObject({ total: 1 })
 
-    expect(mainGet).toHaveBeenCalledWith('/admin/user-risk-control/users', expect.objectContaining({
+		expect(mainGet).toHaveBeenCalledTimes(1)
+		expect(mainGet).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
       params: expect.objectContaining({
+				view: 'pending',
+				page: 2,
+				page_size: 20,
+				search: 'user@example.com',
+				status: 'active',
         risk_type: 'login_failure',
         risk_level: 'high',
       }),
     }))
-    expect(mainGet).toHaveBeenCalledWith('/admin/user-risk-control/users', expect.objectContaining({
-      params: expect.not.objectContaining({ search: 'user@example.com', status: 'active' }),
-    }))
-    expect(mainGet).toHaveBeenCalledWith('/admin/users', expect.objectContaining({
-      params: expect.objectContaining({ page: 1, page_size: 1000, search: 'user@example.com', status: 'active' }),
-    }))
   })
 
-  it('loads risk signals only for the current page when no risk filter is active', async () => {
+  it('loads one server-aggregated page without browser-side stitching', async () => {
     const mainGet = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({
       data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1 },
-    } as never).mockResolvedValueOnce({ data: { items: [{ id: 7, risk_type: 'login_failure', risk_level: 'high', score: 80 }], total: 1 } } as never)
-      .mockResolvedValueOnce({ data: { items: [] } } as never)
+    } as never)
 
     await userRiskControlV2API.listUsers({ page: 1, pageSize: 20 })
 
-    expect(mainGet).toHaveBeenCalledWith('/admin/user-risk-control/users', expect.objectContaining({
-      params: expect.objectContaining({ user_ids: '7' }),
+		expect(mainGet).toHaveBeenCalledTimes(1)
+		expect(mainGet).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
+			params: expect.objectContaining({ view: 'pending', page: 1, page_size: 20 }),
     }))
   })
 
-  it('does not expose a legacy API observation as the account risk summary', async () => {
+  it('trusts the server boundary to exclude reliability observations from user risk', async () => {
     vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({
-      data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1 },
-    } as never).mockResolvedValueOnce({
-      data: { items: [{ id: 7, risk_type: 'api_request', risk_level: 'low', score: 0, reason: '命中规则：API 请求观察（24 小时内1 次事件）', event_count: 206 }], total: 1 },
-    } as never).mockResolvedValueOnce({ data: { items: [] } } as never)
+      data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', risk_type: null, risk_level: null, risk_score: 0, risk_reason: null, event_count: 0 }], total: 1 },
+		} as never)
 
     await expect(userRiskControlV2API.listUsers()).resolves.toMatchObject({
       items: [{ id: 7, risk_type: null, risk_level: null, risk_score: 0, risk_reason: null, event_count: 0 }],
@@ -99,18 +117,16 @@ describe('userRiskControlV2API', () => {
     expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules/test', expect.objectContaining({ rule: expect.objectContaining({ enabled: true }) }))
   })
 
-  it('resolves an administrator account to the audit actor id and displays the account', async () => {
-    const get = vi.spyOn(mainAdminClient, 'get')
-      .mockResolvedValueOnce({ data: { items: [{ id: 11, username: 'qa-admin', email: 'qa@example.com', status: 'active', role: 'admin' }], total: 1 } } as never)
-      .mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
+  it('filters audit records by numeric actor without pulling every admin account', async () => {
+		const get = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
 
-    await expect(userRiskControlV2API.listAudit({ actor: 'qa@example.com', action: 'ban', targetUserId: 7, result: 'success', page: 2, pageSize: 20 })).resolves.toMatchObject({
-      items: [{ actor: 'qa@example.com', target_user_id: 7, before_status: 'active', after_status: 'disabled', reason: 'Repeated failures' }],
+		await expect(userRiskControlV2API.listAudit({ actor: '11', action: 'ban', targetUserId: 7, result: 'success', page: 2, pageSize: 20 })).resolves.toMatchObject({
+			items: [{ actor: '11', target_user_id: 7, before_status: 'active', after_status: 'disabled', reason: 'Repeated failures' }],
     })
 
-    expect(get).toHaveBeenCalledWith('/admin/users', { params: expect.objectContaining({ role: 'admin', page: 1, page_size: 1000 }) })
+		expect(get).toHaveBeenCalledTimes(1)
     expect(get).toHaveBeenCalledWith('/admin/user-risk-control/audit', {
-      params: { action: 'ban', target_user_id: 7, actor_id: 11, result: 'success', page: 2, limit: 20 },
+      params: { category: 'security', action: 'ban', target_user_id: 7, actor_id: 11, result: 'success', page: 2, limit: 20 },
     })
   })
 
@@ -136,7 +152,6 @@ describe('userRiskControlV2API', () => {
       .mockResolvedValueOnce({
       data: { id: 7, username: 'Alice', email: 'alice@example.com', status: 'disabled' },
     } as never)
-      .mockResolvedValueOnce({ data: { items: [{ id: 11, username: 'qa-admin', email: 'qa@example.com', status: 'active', role: 'admin' }], total: 1 } } as never)
       .mockResolvedValueOnce({ data: { items: [{ id: 3, actor_id: 11, action: 'ban', target_type: 'user', target_id: '7', result: 'success', reason: 'Repeated failures', metadata: { before_status: 'active', after_status: 'disabled' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 } } as never)
 
     await expect(userRiskControlV2API.getUserDetail(7)).resolves.toMatchObject({
@@ -167,32 +182,22 @@ describe('userRiskControlV2API', () => {
     await expect(userRiskControlV2API.getUserDetail(9)).rejects.toThrow('main service unavailable')
   })
 
-  it('sorts risk-aware users after loading the complete candidate set', async () => {
-    const get = vi.spyOn(mainAdminClient, 'get')
-      .mockResolvedValueOnce({
+  it('delegates risk sorting to the server-paginated endpoint', async () => {
+		const get = vi.spyOn(mainAdminClient, 'get').mockResolvedValueOnce({
         data: {
           items: [
-            { id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' },
-            { id: 8, username: 'Bob', email: 'bob@example.com', status: 'active' },
+						{ id: 8, username: 'Bob', email: 'bob@example.com', status: 'active', risk_score: 90 },
+						{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', risk_score: 40 },
           ],
           total: 2,
         },
-      } as never)
-      .mockResolvedValueOnce({
-        data: {
-          items: [
-            { id: 7, risk_type: 'login_failure', risk_level: 'high', score: 40, event_count: 2 },
-            { id: 8, risk_type: 'api_error', risk_level: 'medium', score: 90, event_count: 4 },
-          ],
-          total: 2,
-        },
-      } as never)
-      .mockResolvedValueOnce({ data: { items: [] } } as never)
+			} as never)
 
     const result = await userRiskControlV2API.listUsers({ sortBy: 'risk_score', sortOrder: 'desc', page: 1, pageSize: 20 })
 
     expect(result.items.map((user) => user.id)).toEqual([8, 7])
-    expect(get).toHaveBeenCalledWith('/admin/user-risk-control/users', expect.objectContaining({
+		expect(get).toHaveBeenCalledTimes(1)
+		expect(get).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
       params: expect.objectContaining({ sort_by: 'risk_score', sort_order: 'desc' }),
     }))
   })
@@ -205,7 +210,7 @@ describe('userRiskControlV2API', () => {
       name: '登录失败爆发',
       description: '短时间内连续登录失败',
       eventTypes: ['login_failure'],
-      countStrategy: 'associated_events',
+			countStrategy: 'user_events',
       enabled: true,
       windowSeconds: 300,
       threshold: 5,
@@ -218,7 +223,7 @@ describe('userRiskControlV2API', () => {
     expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules', expect.objectContaining({
       code: 'login_failure_burst',
       event_types: ['login_failure'],
-      count_strategy: 'associated_events',
+			count_strategy: 'user_events',
       window_seconds: 300,
     }))
   })
@@ -240,6 +245,13 @@ describe('userRiskControlV2API', () => {
       status: 'disabled', reason: '批量处置：重复登录失败', batch_id: expect.any(String),
     }))
   })
+
+	it('reports token-revocation failures as partial after the account state changed', async () => {
+		vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { user: { id: 7, status: 'disabled' }, result: 'partial', failure_reason: 'Account status changed, but active sessions could not be revoked' } } as never)
+		await expect(userRiskControlV2API.batchSetUserStatus([7], 'disabled', '人工处置', 1)).resolves.toEqual([
+			expect.objectContaining({ id: 7, status: 'partial', reason: 'Account status changed, but active sessions could not be revoked' }),
+		])
+	})
 
   it('marks each processed risk subject through the risk-control proxy', async () => {
     const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValue({ data: { id: 7, processed: true } } as never)

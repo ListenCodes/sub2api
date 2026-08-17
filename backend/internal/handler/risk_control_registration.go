@@ -106,7 +106,7 @@ func (h *AuthHandler) preflightLoginRisk(c *gin.Context, req LoginRequest) error
 }
 
 func riskDecisionError(decision *service.RiskDecision, operation string) error {
-	if decision == nil || (decision.Action != "reject_candidate" && decision.Action != "ban") {
+	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Mode), "enforce") || (decision.Action != "reject_candidate" && decision.Action != "ban") {
 		return nil
 	}
 	if operation == "login" {

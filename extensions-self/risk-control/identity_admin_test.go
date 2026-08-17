@@ -65,6 +65,42 @@ func TestUniqueIdentityUserIDsDeduplicatesAndBoundsInput(t *testing.T) {
 	}
 }
 
+func TestParseOptionalScoreRejectsMalformedFilters(t *testing.T) {
+	if score, err := parseOptionalScore(""); err != nil || score != -1 {
+		t.Fatalf("empty score = %d, error=%v", score, err)
+	}
+	if score, err := parseOptionalScore("60"); err != nil || score != 60 {
+		t.Fatalf("valid score = %d, error=%v", score, err)
+	}
+	for _, input := range []string{"abc", "-1", "101"} {
+		if _, err := parseOptionalScore(input); err == nil {
+			t.Fatalf("parseOptionalScore(%q) accepted malformed input", input)
+		}
+	}
+}
+
+func TestIdentityRiskLevelRangeMatchesDisplayedRiskLevels(t *testing.T) {
+	tests := []struct {
+		level    string
+		minimum  int
+		maximum  int
+		accepted bool
+	}{
+		{level: "none", minimum: 0, maximum: 0, accepted: true},
+		{level: "low", minimum: 1, maximum: 29, accepted: true},
+		{level: "medium", minimum: 30, maximum: 59, accepted: true},
+		{level: "high", minimum: 60, maximum: 79, accepted: true},
+		{level: "critical", minimum: 80, maximum: 100, accepted: true},
+		{level: "unknown", accepted: false},
+	}
+	for _, test := range tests {
+		minimum, maximum, accepted := identityRiskLevelRange(test.level)
+		if minimum != test.minimum || maximum != test.maximum || accepted != test.accepted {
+			t.Fatalf("identityRiskLevelRange(%q) = (%d,%d,%v), want (%d,%d,%v)", test.level, minimum, maximum, accepted, test.minimum, test.maximum, test.accepted)
+		}
+	}
+}
+
 func TestIdentityAdminHealthReportsDisabledWithoutServiceFailure(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret}, NewMemoryRepository(nil))
 	request := signedRequest(http.MethodGet, "/api/v1/admin/identity-health", nil, testSecret, "nonce-disabled-health", time.Now())

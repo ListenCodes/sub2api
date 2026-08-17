@@ -30,24 +30,33 @@ describe('user risk identity API', () => {
     expect(mainAdminClient.get).toHaveBeenNthCalledWith(2, '/admin/identity-health')
   })
 
-  it('loads one bounded masked identity summary batch for the visible users', async () => {
-    vi.mocked(mainAdminClient.get)
-      .mockResolvedValueOnce({ data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1 } })
-      .mockResolvedValueOnce({ data: { items: [], total: 0 } })
-      .mockResolvedValueOnce({ data: { items: [{ user_id: 7, latest_ip: '203.0.113.0/24', country_code: 'US', region: 'CA', browser_instance_count: 2, api_client_count: 1, associated_account_count: 3, active_rule_count: 1, quality_state: 'healthy' }] } })
+  it('uses the server-side risk queue with account completion and masked identity summary', async () => {
+    vi.mocked(mainAdminClient.get).mockResolvedValueOnce({ data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', identity: { user_id: 7, latest_ip: '203.0.113.0/24', country_code: 'US', region: 'CA', browser_instance_count: 2, api_client_count: 1, associated_account_count: 3, active_rule_count: 1, quality_state: 'healthy' } }], total: 1 } })
 
     const result = await userRiskControlV2API.listUsers({ page: 1, pageSize: 20 })
 
-    expect(mainAdminClient.get).toHaveBeenNthCalledWith(3, '/admin/identity-summaries', { params: { user_ids: '7' } })
+    expect(mainAdminClient.get).toHaveBeenCalledTimes(1)
+    expect(mainAdminClient.get).toHaveBeenCalledWith('/admin/user-risk/users', { params: { view: 'pending', page: 1, page_size: 20 } })
     expect(result.items[0].identity).toMatchObject({ latest_ip: '203.0.113.0/24', browser_instance_count: 2, api_client_count: 1 })
   })
 
-  it('keeps the account list available when identity summary loading fails', async () => {
-    vi.mocked(mainAdminClient.get)
-      .mockResolvedValueOnce({ data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1 } })
-      .mockResolvedValueOnce({ data: { items: [], total: 0 } })
-      .mockRejectedValueOnce(new Error('identity service unavailable'))
+  it('does not disguise server-side account completion failures as an empty queue', async () => {
+    vi.mocked(mainAdminClient.get).mockRejectedValueOnce(new Error('account completion unavailable'))
 
-    await expect(userRiskControlV2API.listUsers({ page: 1, pageSize: 20 })).resolves.toMatchObject({ items: [{ id: 7 }] })
+    await expect(userRiskControlV2API.listUsers({ page: 1, pageSize: 20 })).rejects.toThrow('account completion unavailable')
+  })
+
+  it('keeps case feedback separate from account enforcement', async () => {
+    vi.mocked(mainAdminClient.post).mockResolvedValue({ data: {} })
+
+    await userRiskControlV2API.claimReviewCase(31)
+    await userRiskControlV2API.submitReviewFeedback(31, 'legitimate_shared', 'Corporate NAT confirmed')
+
+    expect(mainAdminClient.post).toHaveBeenNthCalledWith(1, '/admin/user-risk-control/review-cases/31/claim', {})
+    expect(mainAdminClient.post).toHaveBeenNthCalledWith(2, '/admin/user-risk-control/review-cases/31/feedback', {
+      feedback: 'legitimate_shared',
+      reason: 'Corporate NAT confirmed',
+    })
+    expect(mainAdminClient.put).not.toHaveBeenCalled()
   })
 })

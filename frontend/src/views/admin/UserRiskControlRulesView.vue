@@ -3,17 +3,20 @@
       <template #actions>
         <div class="space-y-4">
           <UserRiskControlTabs />
+		  <div class="inline-flex max-w-full overflow-x-auto border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800" role="tablist" aria-label="规则视图" data-testid="rule-views">
+			<button v-for="option in ruleViews" :key="option.value" type="button" role="tab" class="min-h-9 whitespace-nowrap px-3 text-sm font-medium" :class="activeRuleView === option.value ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'" :aria-selected="activeRuleView === option.value" :data-testid="`rule-view-${option.value}`" @click="setRuleView(option.value)">{{ option.label }}</button>
+		  </div>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div v-if="error" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700/40 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
               <div v-if="notice" class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-700/40 dark:bg-emerald-900/20 dark:text-emerald-300" data-testid="save-notice">{{ notice }}</div>
             </div>
-            <button type="button" class="btn btn-primary" data-testid="new-rule" @click="openCreateForm">
+			<button v-if="activeRuleView === 'event'" type="button" class="btn btn-primary" data-testid="new-rule" @click="openCreateForm">
               <Icon name="plus" size="sm" />
               新建规则
             </button>
           </div>
-          <section class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-v2-rules">
+		  <section v-if="activeRuleView === 'identity'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-v2-rules">
             <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 class="text-sm font-semibold text-gray-900 dark:text-white">V2 身份规则</h2>
@@ -40,11 +43,27 @@
               </table>
             </div>
           </section>
+		  <section v-else-if="activeRuleView === 'shadow'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-rule-effects">
+			<div class="mb-3 flex items-center justify-between gap-3"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Shadow 效果</h2><button type="button" class="btn btn-secondary btn-sm" :disabled="auxLoading" @click="loadEffects"><Icon name="refresh" size="sm" />刷新</button></div>
+			<p v-if="auxError" class="mb-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
+			<div class="overflow-x-auto"><table class="w-full min-w-[760px] text-left text-sm"><thead class="text-xs text-gray-500 dark:text-gray-400"><tr><th class="pb-2 pr-4">规则</th><th class="pb-2 pr-4">命中事件</th><th class="pb-2 pr-4">唯一主体</th><th class="pb-2 pr-4">人工确认率</th><th class="pb-2 pr-4">正常共享率</th><th class="pb-2">缺失信号率</th></tr></thead><tbody class="divide-y divide-gray-100 dark:divide-dark-700"><tr v-for="effect in ruleEffects" :key="`${effect.rule_code}:${effect.revision}`"><td class="py-2.5 pr-4"><span class="font-medium">{{ identityRuleName(effect.rule_code) }}</span><span class="ml-2 text-xs text-gray-400">r{{ effect.revision }}</span><p v-if="effect.sample_user_ids?.length" class="mt-1 text-xs text-gray-400">样本 {{ effect.sample_user_ids.map((id) => `#${id}`).join('、') }}</p></td><td class="py-2.5 pr-4">{{ effect.hit_events }}</td><td class="py-2.5 pr-4">{{ effect.unique_subjects }}</td><td class="py-2.5 pr-4">{{ percentage(effect.confirmed_rate) }}</td><td class="py-2.5 pr-4">{{ percentage(effect.legitimate_shared_rate) }}</td><td class="py-2.5">{{ percentage(effect.missing_signal_rate) }}</td></tr><tr v-if="!ruleEffects.length && !auxLoading"><td colspan="6" class="py-4 text-center text-gray-500">暂无效果样本</td></tr></tbody></table></div>
+		  </section>
+		  <section v-else-if="activeRuleView === 'versions'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-rule-versions">
+			<div class="flex flex-wrap gap-2"><button v-for="rule in identityRules" :key="rule.code" type="button" class="btn btn-sm" :class="selectedIdentityRule === rule.code ? 'btn-primary' : 'btn-secondary'" @click="selectIdentityRule(rule.code)">{{ identityRuleName(rule.code) }}</button></div>
+			<div v-if="selectedRule" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-3 dark:border-dark-700"><div><strong class="text-sm text-gray-900 dark:text-white">{{ identityRuleName(selectedRule.code) }}</strong><p class="mt-1 text-xs text-gray-500">{{ selectedRule.code }} · r{{ selectedRule.revision }} · {{ identityRuleStatus(selectedRule) }}</p></div><button v-if="selectedRule.configured_enabled" type="button" class="btn btn-danger btn-sm" data-testid="disable-identity-rule" @click="openDisableRule(selectedRule)">停用</button></div>
+			<p v-if="auxError" class="mt-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
+			<div class="mt-3 space-y-2"><div v-for="version in ruleVersions" :key="version.revision" class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 py-2 text-sm dark:border-dark-700"><span>r{{ version.revision }} · {{ version.signal_family }} · {{ version.domain }}</span><span :class="version.enabled ? 'text-amber-700' : 'text-gray-500'">{{ version.enabled ? 'Shadow' : '已停用' }} · {{ formatDate(version.active_from) }}<template v-if="version.active_until"> 至 {{ formatDate(version.active_until) }}</template></span></div></div>
+		  </section>
+		  <section v-else-if="activeRuleView === 'replay'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-rebuild">
+			<div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-sm font-semibold text-gray-900 dark:text-white">历史回放</h2><p v-if="rebuildResult" class="mt-1 text-xs text-gray-500">水位 {{ rebuildResult.evidence_high_water }} · 当前 {{ rebuildResult.current_signals }} 条 · 回放 {{ rebuildResult.v2_signals }} 条 · 变化主体 {{ rebuildResult.changed_subjects }}</p></div><div class="flex gap-2"><button type="button" class="btn btn-secondary btn-sm" data-testid="rebuild-dry-run" :disabled="auxLoading" @click="runRebuild(true)">Dry Run</button><button type="button" class="btn btn-primary btn-sm" data-testid="rebuild-apply" :disabled="auxLoading || !rebuildResult?.dry_run" @click="runRebuild(false)">执行回放</button></div></div>
+			<p v-if="auxError" class="mt-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
+			<div v-if="rebuildResult" class="mt-3 overflow-x-auto"><table class="w-full min-w-[560px] text-left text-sm"><thead class="text-xs text-gray-500"><tr><th class="pb-2 pr-4">规则</th><th class="pb-2">命中主体</th></tr></thead><tbody><tr v-for="(count, code) in rebuildResult.rule_hits" :key="code"><td class="py-2 pr-4">{{ identityRuleName(code) }}</td><td class="py-2">{{ count }}</td></tr></tbody></table></div>
+		  </section>
         </div>
       </template>
 
       <template #filters>
-        <div class="flex flex-wrap items-end gap-3" data-testid="rule-filters">
+		<div v-if="activeRuleView === 'event'" class="flex flex-wrap items-end gap-3" data-testid="rule-filters">
           <div class="w-full sm:w-72">
             <label class="input-label">规则名称或编码</label>
             <SearchInput v-model="ruleSearch" data-testid="rule-search" placeholder="搜索规则名称、编码或说明" />
@@ -61,7 +80,7 @@
       </template>
 
       <template #table>
-        <div data-testid="risk-rules-table">
+		<div v-if="activeRuleView === 'event'" data-testid="risk-rules-table">
           <DataTable
             :columns="columns"
             :data="filteredRules"
@@ -186,6 +205,12 @@
         <button v-if="editDraft" type="button" class="btn btn-primary" data-testid="save-rule" :disabled="saving" @click="save(editDraft)">{{ saving ? t('common.saving') : t('common.save') }}</button>
       </template>
     </BaseDialog>
+
+	<BaseDialog :show="Boolean(disableTarget)" title="停用身份规则" width="narrow" :close-on-click-outside="true" @close="closeDisableRule">
+		<p class="text-sm text-gray-600 dark:text-gray-300">{{ disableTarget ? identityRuleName(disableTarget.code) : '' }}</p>
+		<TextArea v-model="disableReason" class="mt-4" data-testid="disable-rule-reason" label="停用原因" required :error="disableValidationError" @update:model-value="disableValidationError = ''" />
+		<template #footer><button type="button" class="btn btn-secondary" @click="closeDisableRule">取消</button><button type="button" class="btn btn-danger" data-testid="confirm-disable-rule" :disabled="auxLoading" @click="disableSelectedRule">停用</button></template>
+	</BaseDialog>
 </template>
 
 <script setup lang="ts">
@@ -199,9 +224,10 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import TextArea from '@/components/common/TextArea.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
-import { userRiskControlV2API, type IdentityRule, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
+import { userRiskControlV2API, type IdentityRebuildResult, type IdentityRule, type IdentityRuleEffect, type IdentityRuleVersion, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
 import { formatRiskAction, formatRiskLevel, formatRiskType, riskActionOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
@@ -223,6 +249,18 @@ const editValidationError = ref('')
 const conflictRuleId = ref<number | null>(null)
 const testResult = ref<{ matched: boolean; score: number; riskLevel: string; action: string; conditions: string[] } | null>(null)
 const testedId = ref<number | null>(null)
+type RuleView = 'identity' | 'event' | 'replay' | 'shadow' | 'versions'
+const activeRuleView = ref<RuleView>('event')
+const ruleViews: Array<{ value: RuleView; label: string }> = [{ value: 'identity', label: '身份规则' }, { value: 'event', label: '事件规则' }, { value: 'replay', label: '历史回放' }, { value: 'shadow', label: 'Shadow 效果' }, { value: 'versions', label: '版本与停用' }]
+const ruleEffects = ref<IdentityRuleEffect[]>([])
+const ruleVersions = ref<IdentityRuleVersion[]>([])
+const selectedIdentityRule = ref('')
+const rebuildResult = ref<IdentityRebuildResult | null>(null)
+const auxLoading = ref(false)
+const auxError = ref('')
+const disableTarget = ref<IdentityRule | null>(null)
+const disableReason = ref('')
+const disableValidationError = ref('')
 const columns: Column[] = [
   { key: 'rule', label: '规则', sortable: true },
   { key: 'eventTypes', label: '事件类型' },
@@ -237,7 +275,8 @@ const enabledFilter = ref('')
 const levelFilter = ref('')
 const enabledFilterOptions = [{ value: '', label: '全部启用状态' }, { value: 'enabled', label: '已启用' }, { value: 'disabled', label: '已停用' }]
 const levelFilterOptions = [{ value: '', label: '全部风险等级' }, ...riskLevelOptions]
-const ruleEventTypeOptions = riskTypeOptions.filter((option) => option.value !== 'api_request')
+const reliabilityEventTypes = new Set(['api_request', 'api_error', 'upstream_error'])
+const ruleEventTypeOptions = riskTypeOptions.filter((option) => !reliabilityEventTypes.has(option.value))
 const filteredRules = computed(() => {
   const search = ruleSearch.value.trim().toLocaleLowerCase()
   return rules.value
@@ -247,22 +286,30 @@ const filteredRules = computed(() => {
     .map((rule) => ({ ...rule, rule: rule.name || rule.code, condition: rule.threshold, risk: rule.score }))
 })
 const identityRulesActive = computed(() => identityRules.value.some((rule) => rule.enabled))
-const identityRulesHeader = computed(() => identityRulesActive.value ? 'Shadow 观察期' : identityRules.value.some((rule) => rule.state === 'paused' || rule.state === 'degraded') ? '数据质量保护中' : '尚未启用')
+const selectedRule = computed(() => identityRules.value.find((rule) => rule.code === selectedIdentityRule.value) || null)
+const identityRulesHeader = computed(() => identityRulesActive.value ? 'Shadow 观察期' : identityRules.value.some((rule) => ['paused', 'degraded', 'not_evaluable'].includes(rule.state)) ? '数据质量保护中' : '尚未启用')
 const ruleActionOptions = riskActionOptions.filter((option) => ['observe', 'review', 'ban', 'reject_candidate', 'auto_ban'].includes(option.value))
 const ruleTemplates: RuleCreateInput[] = [
   { code: 'login_failure_burst', name: '登录失败爆发', description: '同一账号连续登录失败', eventTypes: ['login_failure'], enabled: true, windowSeconds: 600, threshold: 5, score: 70, riskLevel: 'high', action: 'review' },
-  { code: 'api_error_burst', name: 'API 错误爆发', description: '同一用户短时间内出现大量 API 错误', eventTypes: ['api_error'], enabled: true, windowSeconds: 300, threshold: 10, score: 35, riskLevel: 'medium', action: 'observe' },
   { code: 'content_risk', name: '内容风险', description: '命中内容安全策略', eventTypes: ['content_risk'], enabled: true, windowSeconds: 86400, threshold: 1, score: 85, riskLevel: 'high', action: 'review' },
   { code: 'quota_abuse', name: '配额滥用', description: '持续触发配额或计费限制', eventTypes: ['quota_exceeded'], enabled: true, windowSeconds: 3600, threshold: 5, score: 55, riskLevel: 'medium', action: 'review' },
-  { code: 'upstream_error', name: '上游错误', description: '持续触发上游错误', eventTypes: ['upstream_error'], enabled: true, windowSeconds: 600, threshold: 8, score: 25, riskLevel: 'low', action: 'observe' },
 ]
 const draft = reactive<RuleCreateInput>({ ...ruleTemplates[0], eventTypes: [...ruleTemplates[0].eventTypes] })
 
 function errorMessage(err: unknown, fallback = t('admin.userRiskControl.loadFailed')) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : fallback }
-function identityRuleName(code: string) { return ({ v2_registration_email_retries: '同邮箱重复注册尝试', v2_registration_ip_accounts: '同真实 IP 多账号注册', v2_registration_device_accounts: '同浏览器实例多账号注册', v2_registration_composite_accounts: '同 IP + 浏览器实例多账号注册' } as Record<string, string>)[code] || code }
+function identityRuleName(code: string) { return ({ v2_registration_email_retries: '同邮箱重复注册尝试', v2_registration_ip_accounts: '同真实 IP 多账号注册', v2_registration_device_accounts: '同浏览器实例多账号注册', v2_registration_composite_accounts: '同 IP + 浏览器实例多账号注册', v2_api_client_accounts: 'API 客户端观察' } as Record<string, string>)[code] || code }
 function identityDomainLabel(domain: IdentityRule['domain']) { return ({ account: '邮箱', ip: 'IP', device: '设备', composite: '综合关联' } as Record<IdentityRule['domain'], string>)[domain] }
 function identityRuleCondition(rule: IdentityRule) { const unit = rule.domain === 'account' ? '次注册尝试' : '个成功账号'; return `${Math.round(rule.window_seconds / 60)} 分钟内 ${rule.threshold} ${unit}` }
-function identityRuleStatus(rule: IdentityRule) { return rule.enabled ? '已启用 · Shadow' : rule.state === 'paused' ? '数据质量异常 · 已暂停' : rule.state === 'degraded' ? '样本不足 · 暂不计算' : rule.configured_enabled ? '配置已开 · 尚未生效' : '已停用' }
+function identityRuleStatus(rule: IdentityRule) { return rule.enabled ? '已启用 · Shadow' : rule.state === 'paused' ? '数据质量异常 · 已暂停' : rule.state === 'degraded' ? '样本不足 · 暂不计算' : rule.state === 'not_evaluable' ? '数据缺口 · 不可计算' : rule.configured_enabled ? '配置已开 · 尚未生效' : '已停用' }
+function percentage(value: number) { return `${(Number(value || 0) * 100).toFixed(1)}%` }
+function formatDate(value?: string) { return value ? new Date(value).toLocaleString() : '-' }
+async function setRuleView(view: RuleView) { activeRuleView.value = view; auxError.value = ''; if (view === 'shadow' && !ruleEffects.value.length) await loadEffects(); if (view === 'versions' && identityRules.value.length && !selectedIdentityRule.value) await selectIdentityRule(identityRules.value[0].code) }
+async function loadEffects() { auxLoading.value = true; auxError.value = ''; try { ruleEffects.value = await userRiskControlV2API.listIdentityRuleEffects() } catch (err) { auxError.value = errorMessage(err, 'Shadow 效果暂时不可用') } finally { auxLoading.value = false } }
+async function selectIdentityRule(code: string) { selectedIdentityRule.value = code; auxLoading.value = true; auxError.value = ''; try { ruleVersions.value = await userRiskControlV2API.listIdentityRuleVersions(code) } catch (err) { auxError.value = errorMessage(err, '规则版本暂时不可用') } finally { auxLoading.value = false } }
+async function runRebuild(dryRun: boolean) { auxLoading.value = true; auxError.value = ''; try { rebuildResult.value = dryRun ? await userRiskControlV2API.dryRunIdentityRebuild() : await userRiskControlV2API.applyIdentityRebuild(); notice.value = dryRun ? 'Dry Run 已完成' : '历史回放已完成' } catch (err) { auxError.value = errorMessage(err, dryRun ? 'Dry Run 失败' : '历史回放失败') } finally { auxLoading.value = false } }
+function openDisableRule(rule: IdentityRule) { disableTarget.value = rule; disableReason.value = ''; disableValidationError.value = '' }
+function closeDisableRule() { if (!auxLoading.value) disableTarget.value = null }
+async function disableSelectedRule() { if (!disableTarget.value) return; if (!disableReason.value.trim()) { disableValidationError.value = '停用原因不能为空。'; return } auxLoading.value = true; try { const code = disableTarget.value.code; await userRiskControlV2API.disableIdentityRule(code, disableReason.value); disableTarget.value = null; notice.value = '身份规则已停用'; await load(); await selectIdentityRule(code) } catch (err) { disableValidationError.value = errorMessage(err, '身份规则停用失败') } finally { auxLoading.value = false } }
 async function load() {
   loading.value = true
   error.value = ''

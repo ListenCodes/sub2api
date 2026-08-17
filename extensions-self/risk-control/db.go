@@ -119,12 +119,18 @@ func (r *SQLRepository) CountRecent(ctx context.Context, userID int64, subjectID
 
 func countRecentQuery(userID int64, subjectID, ipHash, deviceHash, eventType, countStrategy string, since time.Time) (string, []any) {
 	switch normalizeCountStrategy(countStrategy) {
-	case countStrategySubjectDeviceEvents:
-		return `SELECT COUNT(*) FROM risk_events WHERE (($1<>'' AND subject_id=$1) OR ($2<>'' AND device_hash=$2)) AND event_type=$3 AND occurred_at >= $4`, []any{subjectID, deviceHash, eventType, since}
-	case countStrategyIPDistinctSubjects:
-		return `SELECT COUNT(DISTINCT subject_id) FROM risk_events WHERE $1<>'' AND ip_hash=$1 AND subject_id<>'' AND subject_id<>$2 AND event_type=$3 AND occurred_at >= $4`, []any{ipHash, subjectID, eventType, since}
+	case countStrategyEmailSubjectEvents:
+		return `SELECT COUNT(*) FROM risk_events WHERE $1<>'' AND subject_id=$1 AND event_type=$2 AND occurred_at >= $3`, []any{subjectID, eventType, since}
+	case countStrategyIPDistinctSuccessUsers:
+		return `SELECT COUNT(DISTINCT user_id) FROM risk_events WHERE $1<>'' AND ip_hash=$1 AND user_id>0 AND user_id<>$2 AND event_type='registration_success' AND occurred_at >= $3`, []any{ipHash, userID, since}
+	case countStrategyBrowserDistinctSuccessUsers:
+		return `SELECT COUNT(DISTINCT user_id) FROM risk_events WHERE $1<>'' AND device_hash=$1 AND user_id>0 AND user_id<>$2 AND event_type='registration_success' AND occurred_at >= $3`, []any{deviceHash, userID, since}
+	case countStrategyAPIClientDistinctUsers:
+		return `SELECT COUNT(DISTINCT user_id) FROM risk_events WHERE $1<>'' AND device_hash=$1 AND user_id>0 AND user_id<>$2 AND event_type=$3 AND occurred_at >= $4`, []any{deviceHash, userID, eventType, since}
+	case countStrategyIPBrowserCooccurrence:
+		return `SELECT COUNT(DISTINCT user_id) FROM risk_events WHERE $1<>'' AND $2<>'' AND ip_hash=$1 AND device_hash=$2 AND user_id>0 AND user_id<>$3 AND event_type='registration_success' AND occurred_at >= $4`, []any{ipHash, deviceHash, userID, since}
 	default:
-		return `SELECT COUNT(*) FROM risk_events WHERE (($1>0 AND user_id=$1) OR ($2<>'' AND subject_id=$2) OR ($3<>'' AND ip_hash=$3) OR ($4<>'' AND device_hash=$4)) AND event_type=$5 AND occurred_at >= $6`, []any{userID, subjectID, ipHash, deviceHash, eventType, since}
+		return `SELECT COUNT(*) FROM risk_events WHERE $1>0 AND user_id=$1 AND event_type=$2 AND occurred_at >= $3`, []any{userID, eventType, since}
 	}
 }
 
@@ -179,7 +185,8 @@ func (r *SQLRepository) UpdateRule(ctx context.Context, code string, expectedRev
 	eventTypes, _ := json.Marshal(update.EventTypes)
 	var rule Rule
 	var raw []byte
-	err := r.db.QueryRowContext(ctx, `UPDATE risk_rules SET name=$2,description=$3,event_types=$4,enabled=$5,window_seconds=$6,threshold=$7,score=$8,risk_level=$9,action=$10,revision=revision+1,updated_at=NOW() WHERE code=$1 AND revision=$11 RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, code, update.Name, update.Description, eventTypes, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, expectedRevision).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
+	update.CountStrategy = normalizeCountStrategy(update.CountStrategy)
+	err := r.db.QueryRowContext(ctx, `UPDATE risk_rules SET name=$2,description=$3,event_types=$4,count_strategy=$5,enabled=$6,window_seconds=$7,threshold=$8,score=$9,risk_level=$10,action=$11,revision=revision+1,updated_at=NOW() WHERE code=$1 AND revision=$12 RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, code, update.Name, update.Description, eventTypes, update.CountStrategy, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, expectedRevision).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Rule{}, ErrRuleRevisionConflict
 	}
@@ -216,7 +223,7 @@ func (r *SQLRepository) UpsertSubject(ctx context.Context, event EventRecord) er
 	if !replaceSignal {
 		lastAction = current.LastAction
 	}
-	pending := event.Decision == "review"
+	pending := current.Pending || event.Decision == "review"
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO risk_subjects (user_id,username,email_hash,account_status,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,last_event_at,updated_at)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT COUNT(*) FROM risk_events WHERE user_id=$1),(SELECT COUNT(DISTINCT ip_hash) FROM risk_events WHERE user_id=$1 AND ip_hash<>''),(SELECT COUNT(DISTINCT device_hash) FROM risk_events WHERE user_id=$1 AND device_hash<>''),$9,$10,$11,NOW())
@@ -324,6 +331,15 @@ func (r *SQLRepository) ListAuditFiltered(ctx context.Context, limit, offset int
 	where := []string{"1=1"}
 	args := []any{}
 	index := 1
+	if filter.Category != "" {
+		actions, ok := auditActionsForCategory(filter.Category)
+		if !ok {
+			return nil, 0, errors.New("invalid audit category")
+		}
+		where = append(where, fmt.Sprintf("action=ANY($%d::text[])", index))
+		args = append(args, pq.Array(actions))
+		index++
+	}
 	if filter.Action != "" {
 		where = append(where, fmt.Sprintf("action=$%d", index))
 		args = append(args, filter.Action)

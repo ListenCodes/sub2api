@@ -87,7 +87,9 @@ func (r *SQLIdentityRepository) ListIdentityRules(ctx context.Context) ([]Identi
 	if r == nil || r.db == nil {
 		return nil, errors.New("identity repository unavailable")
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT code,domain,enabled,window_seconds,threshold,score,mode,revision,
+	rows, err := r.db.QueryContext(ctx, `SELECT code,domain,enabled,window_seconds,threshold,score,mode,revision,signal_family,subject_kind,
+COALESCE(to_char(active_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),''),
+COALESCE(to_char(active_until AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),''),
 COALESCE(to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'')
 FROM risk_identity_rules ORDER BY CASE domain WHEN 'account' THEN 1 WHEN 'ip' THEN 2 WHEN 'device' THEN 3 ELSE 4 END,code`)
 	if err != nil {
@@ -97,7 +99,7 @@ FROM risk_identity_rules ORDER BY CASE domain WHEN 'account' THEN 1 WHEN 'ip' TH
 	result := make([]IdentityRule, 0, 4)
 	for rows.Next() {
 		var rule IdentityRule
-		if err := rows.Scan(&rule.Code, &rule.Domain, &rule.ConfiguredEnabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.Mode, &rule.Revision, &rule.UpdatedAt); err != nil {
+		if err := rows.Scan(&rule.Code, &rule.Domain, &rule.ConfiguredEnabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.Mode, &rule.Revision, &rule.SignalFamily, &rule.SubjectKind, &rule.ActiveFrom, &rule.ActiveUntil, &rule.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, rule)
@@ -162,6 +164,36 @@ func (r *SQLIdentityRepository) Persist(ctx context.Context, fact IdentityFact) 
 		return PersistedIdentityEvent{}, false, err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, fact.EventKey); err != nil {
+		return PersistedIdentityEvent{}, false, err
+	}
+	if fact.EventClass != identityEventAPI || fact.Outcome != "success" {
+		var existing PersistedIdentityEvent
+		err := tx.QueryRowContext(ctx, `SELECT id,user_id,email_lookup_key,COALESCE(network_identity_id,0),COALESCE(browser_identity_id,0),COALESCE(profile_identity_id,0),COALESCE(api_client_identity_id,0),event_type,event_class,outcome,occurred_at,ip_quality_valid,device_quality_valid FROM risk_identity_events WHERE event_key=$1`, fact.EventKey).Scan(&existing.ID, &existing.UserID, &existing.EmailLookupKey, &existing.NetworkID, &existing.BrowserID, &existing.ProfileID, &existing.APIClientID, &existing.EventType, &existing.EventClass, &existing.Outcome, &existing.OccurredAt, &existing.IPQualityValid, &existing.DeviceQualityValid)
+		if err == nil {
+			return existing, true, tx.Commit()
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return PersistedIdentityEvent{}, false, err
+		}
+	} else {
+		if fact.UserID <= 0 {
+			return PersistedIdentityEvent{}, false, errors.New("api success identity event requires user_id")
+		}
+		var accepted bool
+		err = tx.QueryRowContext(ctx, `WITH cleaned AS (
+  DELETE FROM risk_identity_api_dedup WHERE expires_at < NOW()
+), inserted AS (
+  INSERT INTO risk_identity_api_dedup(event_key,expires_at) VALUES ($1,NOW() + interval '2 days')
+  ON CONFLICT(event_key) DO NOTHING RETURNING TRUE
+) SELECT COALESCE((SELECT TRUE FROM inserted),FALSE)`, fact.EventKey).Scan(&accepted)
+		if err != nil {
+			return PersistedIdentityEvent{}, false, err
+		}
+		if !accepted {
+			return PersistedIdentityEvent{UserID: fact.UserID, EventType: fact.EventType, EventClass: fact.EventClass, Outcome: fact.Outcome, OccurredAt: fact.OccurredAt}, true, tx.Commit()
+		}
+	}
 
 	networkID, err := upsertNetworkIdentity(ctx, tx, fact.Network, fact.OccurredAt)
 	if err != nil {
@@ -182,22 +214,6 @@ func (r *SQLIdentityRepository) Persist(ctx context.Context, fact IdentityFact) 
 
 	stored := PersistedIdentityEvent{UserID: fact.UserID, EmailLookupKey: fact.EmailLookupKey, NetworkID: networkID, BrowserID: browserID, ProfileID: profileID, APIClientID: apiClientID, EventType: fact.EventType, EventClass: fact.EventClass, Outcome: fact.Outcome, OccurredAt: fact.OccurredAt, IPQualityValid: fact.IPQualityValid, DeviceQualityValid: fact.DeviceQualityValid}
 	if fact.EventClass == identityEventAPI && fact.Outcome == "success" {
-		if fact.UserID <= 0 {
-			return PersistedIdentityEvent{}, false, errors.New("api success identity event requires user_id")
-		}
-		var accepted bool
-		err = tx.QueryRowContext(ctx, `WITH cleaned AS (
-  DELETE FROM risk_identity_api_dedup WHERE expires_at < NOW()
-), inserted AS (
-  INSERT INTO risk_identity_api_dedup(event_key,expires_at) VALUES ($1,NOW() + interval '2 days')
-  ON CONFLICT(event_key) DO NOTHING RETURNING TRUE
-) SELECT COALESCE((SELECT TRUE FROM inserted),FALSE)`, fact.EventKey).Scan(&accepted)
-		if err != nil {
-			return PersistedIdentityEvent{}, false, err
-		}
-		if !accepted {
-			return PersistedIdentityEvent{}, true, nil
-		}
 		deviceID := int64(0)
 		clientKind := "unknown"
 		if fact.DeviceQualityValid {
@@ -221,17 +237,25 @@ ON CONFLICT(activity_day,user_id,network_identity_id,device_identity_id,client_k
 		return stored, false, tx.Commit()
 	}
 
+	snapshot, _ := json.Marshal(fact.EvidenceSnapshot)
 	err = tx.QueryRowContext(ctx, `INSERT INTO risk_identity_events
-(event_key,event_type,event_class,outcome,user_id,email_lookup_key,network_identity_id,browser_identity_id,profile_identity_id,api_client_identity_id,ip_quality_valid,device_quality_valid,proxy_chain_valid,occurred_at)
-VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),NULLIF($8,0),NULLIF($9,0),NULLIF($10,0),$11,$12,$13,$14)
-	ON CONFLICT(event_key) DO NOTHING RETURNING id`, fact.EventKey, fact.EventType, fact.EventClass, fact.Outcome, fact.UserID, fact.EmailLookupKey, networkID, browserID, profileID, apiClientID, fact.IPQualityValid, fact.DeviceQualityValid, fact.ProxyChainValid, fact.OccurredAt).Scan(&stored.ID)
+(event_key,event_type,event_class,outcome,user_id,email_lookup_key,network_identity_id,browser_identity_id,profile_identity_id,api_client_identity_id,ip_quality_valid,device_quality_valid,proxy_chain_valid,evidence_snapshot,occurred_at)
+VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),NULLIF($8,0),NULLIF($9,0),NULLIF($10,0),$11,$12,$13,$14,$15)
+	ON CONFLICT(event_key) DO NOTHING RETURNING id`, fact.EventKey, fact.EventType, fact.EventClass, fact.Outcome, fact.UserID, fact.EmailLookupKey, networkID, browserID, profileID, apiClientID, fact.IPQualityValid, fact.DeviceQualityValid, fact.ProxyChainValid, snapshot, fact.OccurredAt).Scan(&stored.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return PersistedIdentityEvent{}, true, nil
+		err = tx.QueryRowContext(ctx, `SELECT id,user_id,email_lookup_key,COALESCE(network_identity_id,0),COALESCE(browser_identity_id,0),COALESCE(profile_identity_id,0),COALESCE(api_client_identity_id,0),event_type,event_class,outcome,occurred_at,ip_quality_valid,device_quality_valid FROM risk_identity_events WHERE event_key=$1`, fact.EventKey).Scan(&stored.ID, &stored.UserID, &stored.EmailLookupKey, &stored.NetworkID, &stored.BrowserID, &stored.ProfileID, &stored.APIClientID, &stored.EventType, &stored.EventClass, &stored.Outcome, &stored.OccurredAt, &stored.IPQualityValid, &stored.DeviceQualityValid)
+		if err != nil {
+			return PersistedIdentityEvent{}, false, err
+		}
+		return stored, true, tx.Commit()
 	}
 	if err != nil {
 		return PersistedIdentityEvent{}, false, err
 	}
 	if err := upsertIdentityLinks(ctx, tx, fact, networkID, browserID, profileID, apiClientID); err != nil {
+		return PersistedIdentityEvent{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_signal_processing_jobs(event_id,status,next_attempt_at) VALUES($1,'pending',NOW()) ON CONFLICT(event_id) DO NOTHING`, stored.ID); err != nil {
 		return PersistedIdentityEvent{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -283,7 +307,7 @@ func upsertIdentityLinks(ctx context.Context, tx *sql.Tx, fact IdentityFact, net
 	switch fact.EventClass {
 	case "registration":
 		registration = 1
-	case "login":
+	case "login", "oauth":
 		login = 1
 	}
 	if networkID > 0 && fact.IPQualityValid {
@@ -315,32 +339,56 @@ ON CONFLICT(user_id,device_identity_id) DO UPDATE SET first_seen_at=LEAST(risk_u
 }
 
 func (r *SQLIdentityRepository) EvaluateAndStoreSignals(ctx context.Context, event PersistedIdentityEvent, cfg IdentityConfig) error {
-	if !cfg.RulesEnabled || event.ID <= 0 || event.EventClass != "registration" {
+	if !cfg.RulesEnabled || event.ID <= 0 || (event.EventClass != "registration" && event.EventClass != identityEventAPI) {
 		return nil
 	}
-	states, _, err := r.qualityStates(ctx, cfg)
+	if _, err := r.db.ExecContext(ctx, `UPDATE risk_identity_signals signal SET status=CASE WHEN signal.active_until IS NOT NULL AND signal.active_until<=$1 THEN 'expired' ELSE 'superseded' END
+FROM risk_identity_rules rule WHERE signal.rule_code=rule.code AND signal.status='active' AND (signal.rule_revision<>rule.revision OR NOT rule.enabled OR (signal.active_until IS NOT NULL AND signal.active_until<=$1))`, event.OccurredAt); err != nil {
+		return err
+	}
+	_, qualityCounts, err := r.qualityStates(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT code,domain,window_seconds,threshold,score FROM risk_identity_rules WHERE enabled=TRUE AND mode='shadow'`)
+	// Processing gaps keep public summaries not_evaluable, but workers must be
+	// able to drain that same backlog after its external quality blockers clear.
+	qualityCounts.ProcessingPending = 0
+	qualityCounts.ProcessingRetry = 0
+	qualityCounts.ProcessingFailed = 0
+	states := identityDomainStates(cfg, qualityCounts)
+	if _, err := r.db.ExecContext(ctx, `INSERT INTO risk_rule_versions(rule_kind,rule_code,revision,signal_family,domain,active_from,active_until,enabled,rule_snapshot)
+SELECT 'identity',code,revision,signal_family,domain,active_from,active_until,enabled,
+ jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind)
+FROM risk_identity_rules ON CONFLICT(rule_kind,rule_code,revision) DO NOTHING`); err != nil {
+		return err
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT rule.code,rule.domain,rule.window_seconds,rule.threshold,rule.score,rule.revision,rule.signal_family,rule.subject_kind,version.id,version.rule_snapshot
+FROM risk_identity_rules rule JOIN risk_rule_versions version ON version.rule_kind='identity' AND version.rule_code=rule.code AND version.revision=rule.revision
+WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rule.active_until IS NULL OR rule.active_until>$1)`, event.OccurredAt)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	type rule struct {
-		code, domain             string
-		window, threshold, score int
+		code, domain, family, subjectKind  string
+		window, threshold, score, revision int
+		versionID                          int64
+		snapshot                           []byte
 	}
 	var rules []rule
 	for rows.Next() {
 		var item rule
-		if err := rows.Scan(&item.code, &item.domain, &item.window, &item.threshold, &item.score); err != nil {
+		if err := rows.Scan(&item.code, &item.domain, &item.window, &item.threshold, &item.score, &item.revision, &item.family, &item.subjectKind, &item.versionID, &item.snapshot); err != nil {
 			return err
 		}
 		rules = append(rules, item)
 	}
+	notEvaluable := false
 	for _, rule := range rules {
-		if rule.domain == "account" {
+		if rule.subjectKind != "api_client" && event.EventClass != "registration" {
+			continue
+		}
+		if rule.subjectKind == "email" {
 			if event.EventType != "registration_attempt" || event.EmailLookupKey == "" {
 				continue
 			}
@@ -351,36 +399,56 @@ func (r *SQLIdentityRepository) EvaluateAndStoreSignals(ctx context.Context, eve
 				return err
 			}
 			if count >= rule.threshold {
-				evidence, _ := json.Marshal(map[string]any{"evidence_count": count, "window_seconds": rule.window, "email_fingerprint": identityEmailDisplay(event.EmailLookupKey)})
-				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,score,evidence_count,observing,evidence,occurred_at) VALUES ($1,0,'account',$2,0,$3,TRUE,$4,$5) ON CONFLICT(event_id,user_id,rule_code) DO NOTHING`, event.ID, rule.code, count, evidence, event.OccurredAt); err != nil {
+				evidenceMap := map[string]any{"evidence_count": count, "window_seconds": rule.window, "email_fingerprint": identityEmailDisplay(event.EmailLookupKey), "rule_snapshot": json.RawMessage(rule.snapshot)}
+				evidence, _ := json.Marshal(evidenceMap)
+				decisionID := fmt.Sprintf("identity:%d:%s:r%d", event.ID, rule.code, rule.revision)
+				lifecycle := "active"
+				if !event.OccurredAt.Add(time.Duration(rule.window) * time.Second).After(time.Now().UTC()) {
+					lifecycle = "expired"
+				}
+				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,0,$2,$3,0,0,'none',$4,$5) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.ID, lifecycle, evidence, event.OccurredAt); err != nil {
+					return err
+				}
+				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at) VALUES ($1,0,'account',$2,$3,$4,$5,0,$6,TRUE,$7,$7,$8,$9,$10,$10+($11*interval '1 second'),$10,$10,$10) ON CONFLICT(event_id,user_id,rule_code) DO NOTHING`, event.ID, rule.code, rule.versionID, rule.revision, rule.family, count, evidence, decisionID, lifecycle, event.OccurredAt, rule.window); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if event.Outcome != "success" || event.UserID <= 0 || states[rule.domain] != "healthy" {
+		if event.Outcome != "success" || event.UserID <= 0 || !identityRuleDomainEnabled(cfg, rule.domain) {
+			continue
+		}
+		if states[rule.domain] != "healthy" {
+			notEvaluable = true
 			continue
 		}
 		if rule.domain == "ip" && (!cfg.IPCollectionEnabled || !cfg.IPDomainEnabled || !event.IPQualityValid || event.NetworkID == 0) {
 			continue
 		}
 		deviceID := event.BrowserID
-		if deviceID == 0 {
+		if rule.subjectKind == "api_client" {
 			deviceID = event.APIClientID
 		}
-		if rule.domain == "device" && (!cfg.DeviceCollectionEnabled || !cfg.DeviceDomainEnabled || !event.DeviceQualityValid || deviceID == 0) {
+		if rule.subjectKind == "browser_instance" && (!cfg.DeviceCollectionEnabled || !cfg.DeviceDomainEnabled || !event.DeviceQualityValid || event.BrowserID == 0) {
 			continue
 		}
-		if rule.domain == "composite" && (!cfg.CompositeDomainEnabled || !cfg.IPCollectionEnabled || !cfg.DeviceCollectionEnabled || !cfg.IPDomainEnabled || !cfg.DeviceDomainEnabled || !event.IPQualityValid || !event.DeviceQualityValid || event.NetworkID == 0 || event.BrowserID == 0) {
+		if rule.subjectKind == "api_client" && (!cfg.DeviceCollectionEnabled || !cfg.DeviceDomainEnabled || event.APIClientID == 0) {
+			continue
+		}
+		if rule.subjectKind == "ip_browser" && (!cfg.CompositeDomainEnabled || !cfg.IPCollectionEnabled || !cfg.DeviceCollectionEnabled || !cfg.IPDomainEnabled || !cfg.DeviceDomainEnabled || !event.IPQualityValid || !event.DeviceQualityValid || event.NetworkID == 0 || event.BrowserID == 0) {
 			continue
 		}
 		var count int
 		since := event.OccurredAt.Add(-time.Duration(rule.window) * time.Second)
 		switch rule.domain {
 		case "ip":
-			err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND ip_quality_valid AND network_identity_id=$1 AND user_id>0 AND occurred_at BETWEEN $2 AND $3`, event.NetworkID, since, event.OccurredAt).Scan(&count)
+			err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND ip_quality_valid AND network_identity_id=$1 AND user_id>0 AND occurred_at BETWEEN $2 AND $3 AND NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$1 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))`, event.NetworkID, since, event.OccurredAt).Scan(&count)
 		case "device":
-			err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND device_quality_valid AND (browser_identity_id=$1 OR api_client_identity_id=$1) AND user_id>0 AND occurred_at BETWEEN $2 AND $3`, deviceID, since, event.OccurredAt).Scan(&count)
+			if rule.subjectKind == "api_client" {
+				err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE outcome='success' AND api_client_identity_id=$1 AND user_id>0 AND occurred_at BETWEEN $2 AND $3`, deviceID, since, event.OccurredAt).Scan(&count)
+			} else {
+				err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND device_quality_valid AND browser_identity_id=$1 AND user_id>0 AND occurred_at BETWEEN $2 AND $3`, deviceID, since, event.OccurredAt).Scan(&count)
+			}
 		case "composite":
 			deviceID = event.BrowserID
 			err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND ip_quality_valid AND device_quality_valid AND network_identity_id=$1 AND browser_identity_id=$2 AND user_id>0 AND occurred_at BETWEEN $3 AND $4`, event.NetworkID, deviceID, since, event.OccurredAt).Scan(&count)
@@ -391,14 +459,42 @@ func (r *SQLIdentityRepository) EvaluateAndStoreSignals(ctx context.Context, eve
 		if count < rule.threshold {
 			continue
 		}
-		evidence, _ := json.Marshal(map[string]any{"evidence_count": count, "window_seconds": rule.window, "same_event_pair": rule.domain == "composite"})
-		_, err = r.db.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,occurred_at) VALUES ($1,$2,$3,$4,$5,$6,TRUE,NULLIF($7,0),NULLIF($8,0),$9,$10) ON CONFLICT(event_id,user_id,rule_code) DO NOTHING`, event.ID, event.UserID, rule.domain, rule.code, rule.score, count, event.NetworkID, deviceID, evidence, event.OccurredAt)
+		evidenceMap := map[string]any{"evidence_count": count, "window_seconds": rule.window, "source_event_id": event.ID, "network_identity_id": event.NetworkID, "device_identity_id": deviceID, "same_event_pair": rule.subjectKind == "ip_browser", "subject_kind": rule.subjectKind, "rule_snapshot": json.RawMessage(rule.snapshot)}
+		evidence, _ := json.Marshal(evidenceMap)
+		decisionID := fmt.Sprintf("identity:%d:%s:r%d", event.ID, rule.code, rule.revision)
+		riskLevel := identityRiskLevel(rule.score)
+		lifecycle := "active"
+		if !event.OccurredAt.Add(time.Duration(rule.window) * time.Second).After(time.Now().UTC()) {
+			lifecycle = "expired"
+		}
+		if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,$2,$3,$4,CASE WHEN $4='active' THEN $5 ELSE 0 END,$5,$6,$7,$8) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.UserID, event.ID, lifecycle, rule.score, riskLevel, evidence, event.OccurredAt); err != nil {
+			return err
+		}
+		var signalID int64
+		err = r.db.QueryRowContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,NULLIF($10,0),NULLIF($11,0),$12,$12,$13,$14,$15,$15+($16*interval '1 second'),$15,$15,$15
+WHERE $3<>'ip' OR NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$10 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
+ON CONFLICT(event_id,user_id,rule_code) DO UPDATE SET last_hit_at=GREATEST(risk_identity_signals.last_hit_at,EXCLUDED.last_hit_at) RETURNING id`, event.ID, event.UserID, rule.domain, rule.code, rule.versionID, rule.revision, rule.family, rule.score, count, event.NetworkID, deviceID, evidence, decisionID, lifecycle, event.OccurredAt, rule.window).Scan(&signalID)
+		if errors.Is(err, sql.ErrNoRows) {
+			_, _ = r.db.ExecContext(ctx, `UPDATE risk_decisions SET status='resolved',current_score=0 WHERE decision_id=$1`, decisionID)
+			continue
+		}
 		if err != nil {
 			return err
 		}
+		if cfg.CasesEnabled && rule.score > 0 && lifecycle == "active" {
+			if err := r.upsertIdentityReviewCase(ctx, event, signalID, decisionID, rule.family, rule.code, rule.score, evidence); err != nil {
+				return err
+			}
+		}
 	}
 	if event.UserID > 0 {
-		return r.refreshUserSummary(ctx, event.UserID)
+		if err := r.refreshUserSummary(ctx, event.UserID); err != nil {
+			return err
+		}
+	}
+	if notEvaluable {
+		return ErrIdentityNotEvaluable
 	}
 	return nil
 }
@@ -411,39 +507,138 @@ func identityEmailDisplay(lookupKey string) string {
 	return "E-" + digest
 }
 
+func identityRiskLevel(score int) string {
+	switch {
+	case score >= 80:
+		return "critical"
+	case score >= 60:
+		return "high"
+	case score >= 30:
+		return "medium"
+	case score > 0:
+		return "low"
+	default:
+		return "none"
+	}
+}
+
+func (r *SQLIdentityRepository) upsertIdentityReviewCase(ctx context.Context, event PersistedIdentityEvent, signalID int64, decisionID, family, ruleCode string, score int, evidence []byte) error {
+	status, strength := "observing", "weak"
+	if score >= 60 {
+		status, strength = "pending", "medium_high"
+	}
+	if strings.Contains(ruleCode, "composite") {
+		strength = "high"
+	}
+	var caseID int64
+	conflict := "ON CONFLICT(user_id,signal_family) WHERE status='observing'"
+	if status == "pending" {
+		conflict = "ON CONFLICT(user_id,signal_family) WHERE status IN ('pending','in_review')"
+	}
+	err := r.db.QueryRowContext(ctx, `INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,opened_at,last_hit_at)
+VALUES($1,$2,$3,$4,$5,$5,$6,$7,$8,$8)
+`+conflict+` DO UPDATE SET decision_id=EXCLUDED.decision_id,current_score=GREATEST(risk_review_cases.current_score,EXCLUDED.current_score),historical_max_score=GREATEST(risk_review_cases.historical_max_score,EXCLUDED.historical_max_score),primary_signal=CASE WHEN EXCLUDED.current_score>=risk_review_cases.current_score THEN EXCLUDED.primary_signal ELSE risk_review_cases.primary_signal END,evidence_strength=CASE WHEN EXCLUDED.current_score>=risk_review_cases.current_score THEN EXCLUDED.evidence_strength ELSE risk_review_cases.evidence_strength END,last_hit_at=GREATEST(risk_review_cases.last_hit_at,EXCLUDED.last_hit_at),updated_at=NOW()
+RETURNING id`, event.UserID, decisionID, family, status, score, ruleCode, strength, event.OccurredAt).Scan(&caseID)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO risk_case_evidence(case_id,signal_id,evidence_snapshot,occurred_at) VALUES($1,$2,$3,$4) ON CONFLICT(case_id,signal_id) DO NOTHING`, caseID, signalID, evidence, event.OccurredAt)
+	return err
+}
+
 func (r *SQLIdentityRepository) refreshUserSummary(ctx context.Context, userID int64) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO risk_identity_user_summaries(user_id,overall_score,ip_score,device_score,composite_score,ip_signal_count,device_signal_count,composite_signal_count,updated_at)
-SELECT $1,GREATEST(COALESCE(MAX(score) FILTER (WHERE domain='ip'),0),COALESCE(MAX(score) FILTER (WHERE domain='device'),0),COALESCE(MAX(score) FILTER (WHERE domain='composite'),0)),COALESCE(MAX(score) FILTER (WHERE domain='ip'),0),COALESCE(MAX(score) FILTER (WHERE domain='device'),0),COALESCE(MAX(score) FILTER (WHERE domain='composite'),0),COUNT(*) FILTER (WHERE domain='ip'),COUNT(*) FILTER (WHERE domain='device'),COUNT(*) FILTER (WHERE domain='composite'),NOW()
-FROM risk_identity_signals WHERE user_id=$1
+	return refreshIdentityUserSummary(ctx, r.db, userID)
+}
+
+type identityExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func refreshIdentityUserSummary(ctx context.Context, executor identityExecer, userID int64) error {
+	_, err := executor.ExecContext(ctx, `INSERT INTO risk_identity_user_summaries(user_id,overall_score,ip_score,device_score,composite_score,ip_signal_count,device_signal_count,composite_signal_count,updated_at)
+WITH eligible AS (
+ SELECT signal.* FROM risk_identity_signals signal
+ JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision
+ JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+ WHERE signal.user_id=$1 AND signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+), family_scores AS (SELECT signal_family,MAX(score) score FROM eligible GROUP BY signal_family)
+SELECT $1,COALESCE((SELECT MAX(score) FROM family_scores),0),COALESCE(MAX(score) FILTER (WHERE domain='ip'),0),COALESCE(MAX(score) FILTER (WHERE domain='device'),0),COALESCE(MAX(score) FILTER (WHERE domain='composite'),0),COUNT(DISTINCT rule_code) FILTER (WHERE domain='ip'),COUNT(DISTINCT rule_code) FILTER (WHERE domain='device'),COUNT(DISTINCT rule_code) FILTER (WHERE domain='composite'),NOW()
+FROM eligible
 ON CONFLICT(user_id) DO UPDATE SET overall_score=EXCLUDED.overall_score,ip_score=EXCLUDED.ip_score,device_score=EXCLUDED.device_score,composite_score=EXCLUDED.composite_score,ip_signal_count=EXCLUDED.ip_signal_count,device_signal_count=EXCLUDED.device_signal_count,composite_signal_count=EXCLUDED.composite_signal_count,updated_at=NOW()`, userID)
 	return err
 }
 
 func (r *SQLIdentityRepository) Summary(ctx context.Context, userID int64, cfg IdentityConfig) (IdentitySummary, error) {
-	result := IdentitySummary{UserID: userID, IdentityVersion: identityVersionV2, Mode: "shadow", LegacyNotice: "V1 历史数据仅保留原哈希，无法反推真实 IP，且不与 V2 混算。"}
-	var ipScore, deviceScore, compositeScore, ipSignals, deviceSignals, compositeSignals int
-	err := r.db.QueryRowContext(ctx, `SELECT overall_score,ip_score,device_score,composite_score,ip_signal_count,device_signal_count,composite_signal_count FROM risk_identity_user_summaries WHERE user_id=$1`, userID).Scan(&result.OverallScore, &ipScore, &deviceScore, &compositeScore, &ipSignals, &deviceSignals, &compositeSignals)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = nil
-	}
-	if err != nil {
+	result := IdentitySummary{UserID: userID, IdentityVersion: identityVersionV2, Mode: "shadow"}
+	var legacyCleaned bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM risk_schema_migrations WHERE version=$1)`, legacyV1CleanupMigrationVersion).Scan(&legacyCleaned); err != nil {
 		return result, err
+	}
+	if legacyCleaned {
+		result.LegacyNotice = "V1 风险事件与旧摘要已按批准迁移清理；当前风险只使用 V2 有效信号，历史证据单独展示。"
+	} else {
+		result.LegacyNotice = "V1 清理尚未执行；旧事件被隔离为历史数据，不参与当前 V2 风险。"
+	}
+	var ipScore, deviceScore, compositeScore, ipSignals, deviceSignals, compositeSignals int
+	if cfg.CurrentScoreEnabled {
+		if err := r.refreshUserSummary(ctx, userID); err != nil {
+			return result, err
+		}
+		err := r.db.QueryRowContext(ctx, `SELECT overall_score,ip_score,device_score,composite_score,ip_signal_count,device_signal_count,composite_signal_count FROM risk_identity_user_summaries WHERE user_id=$1`, userID).Scan(&result.OverallScore, &ipScore, &deviceScore, &compositeScore, &ipSignals, &deviceSignals, &compositeSignals)
+		if !errors.Is(err, sql.ErrNoRows) && err != nil {
+			return result, err
+		}
 	}
 	associated := map[string]int{}
 	var ipAssociated, deviceAssociated, compositeAssociated int
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT other.user_id) FROM risk_user_ip_links mine JOIN risk_user_ip_links other USING(network_identity_id) WHERE mine.user_id=$1 AND other.user_id<>$1`, userID).Scan(&ipAssociated)
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT other.user_id) FROM risk_user_device_links mine JOIN risk_user_device_links other USING(device_identity_id) JOIN risk_device_identities identity ON identity.id=mine.device_identity_id WHERE mine.user_id=$1 AND other.user_id<>$1 AND identity.identity_kind IN ('browser_instance','api_client')`, userID).Scan(&deviceAssociated)
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT other.user_id) FROM risk_identity_events mine JOIN risk_identity_events other ON other.network_identity_id=mine.network_identity_id AND other.browser_identity_id=mine.browser_identity_id AND ABS(EXTRACT(EPOCH FROM(other.occurred_at-mine.occurred_at)))<=600 WHERE mine.user_id=$1 AND other.user_id<>$1 AND mine.event_class='registration' AND other.event_class='registration' AND mine.outcome='success' AND other.outcome='success' AND mine.ip_quality_valid AND other.ip_quality_valid AND mine.device_quality_valid AND other.device_quality_valid AND mine.network_identity_id IS NOT NULL AND mine.browser_identity_id IS NOT NULL`, userID).Scan(&compositeAssociated)
+	if err := r.db.QueryRowContext(ctx, `WITH links AS (
+ SELECT user_id,network_identity_id FROM risk_user_ip_links
+ UNION SELECT user_id,network_identity_id FROM risk_identity_activity_daily WHERE network_identity_id>0 AND success_count>0
+) SELECT COUNT(DISTINCT other.user_id) FROM links mine JOIN links other USING(network_identity_id) WHERE mine.user_id=$1 AND other.user_id<>$1`, userID).Scan(&ipAssociated); err != nil {
+		return result, err
+	}
+	if err := r.db.QueryRowContext(ctx, `WITH links AS (
+ SELECT link.user_id,link.device_identity_id FROM risk_user_device_links link JOIN risk_device_identities identity ON identity.id=link.device_identity_id WHERE identity.identity_kind IN ('browser_instance','api_client')
+ UNION SELECT daily.user_id,daily.device_identity_id FROM risk_identity_activity_daily daily JOIN risk_device_identities identity ON identity.id=daily.device_identity_id WHERE daily.device_identity_id>0 AND daily.success_count>0 AND identity.identity_kind IN ('browser_instance','api_client')
+) SELECT COUNT(DISTINCT other.user_id) FROM links mine JOIN links other USING(device_identity_id) WHERE mine.user_id=$1 AND other.user_id<>$1`, userID).Scan(&deviceAssociated); err != nil {
+		return result, err
+	}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT other.user_id) FROM risk_identity_events mine JOIN risk_identity_events other ON other.network_identity_id=mine.network_identity_id AND other.browser_identity_id=mine.browser_identity_id
+WHERE mine.user_id=$1 AND other.user_id<>$1 AND mine.event_class='registration' AND other.event_class='registration' AND mine.outcome='success' AND other.outcome='success' AND mine.ip_quality_valid AND other.ip_quality_valid AND mine.device_quality_valid AND other.device_quality_valid AND mine.network_identity_id IS NOT NULL AND mine.browser_identity_id IS NOT NULL
+AND ABS(EXTRACT(EPOCH FROM(other.occurred_at-mine.occurred_at)))<=COALESCE((SELECT window_seconds FROM risk_identity_rules WHERE code='v2_registration_composite_accounts'),600)`, userID).Scan(&compositeAssociated); err != nil {
+		return result, err
+	}
 	associated["ip"], associated["device"], associated["composite"] = ipAssociated, deviceAssociated, compositeAssociated
 	states, _, stateErr := r.qualityStates(ctx, cfg)
 	if stateErr != nil {
 		return result, stateErr
 	}
+	historicalScores := map[string]int{"ip": 0, "device": 0, "composite": 0}
+	historicalCounts := map[string]int{"ip": 0, "device": 0, "composite": 0}
+	if err := r.db.QueryRowContext(ctx, `WITH historical AS (
+ SELECT domain,score,rule_code FROM risk_identity_signals WHERE user_id=$1 AND domain IN ('ip','device','composite') AND score>0
+ UNION ALL SELECT domain,score,rule_code FROM risk_identity_signal_history WHERE user_id=$1 AND domain IN ('ip','device','composite') AND score>0
+) SELECT COALESCE(MAX(score),0),COUNT(*)::int FROM historical`).Scan(&result.HistoricalMaxScore, &result.HistoricalSignalCount); err != nil {
+		return result, err
+	}
+	for _, domain := range []string{"ip", "device", "composite"} {
+		var maxScore, signalCount int
+		if err := r.db.QueryRowContext(ctx, `WITH historical AS (
+ SELECT domain,score,rule_code FROM risk_identity_signals WHERE user_id=$1 AND domain=$2 AND score>0
+ UNION ALL SELECT domain,score,rule_code FROM risk_identity_signal_history WHERE user_id=$1 AND domain=$2 AND score>0
+) SELECT COALESCE(MAX(score),0),COUNT(*)::int FROM historical`, userID, domain).Scan(&maxScore, &signalCount); err != nil {
+			return result, err
+		}
+		historicalScores[domain], historicalCounts[domain] = maxScore, signalCount
+	}
 	signals := map[string][]IdentitySignalSummary{"ip": {}, "device": {}, "composite": {}}
-	rows, signalErr := r.db.QueryContext(ctx, `SELECT domain,rule_code,score,evidence_count,occurred_at FROM (
- SELECT domain,rule_code,score,evidence_count,occurred_at,ROW_NUMBER() OVER(PARTITION BY domain ORDER BY score DESC,occurred_at DESC) row_number
- FROM risk_identity_signals WHERE user_id=$1 AND domain IN ('ip','device','composite')
-) ranked WHERE row_number<=20 ORDER BY domain,score DESC,occurred_at DESC`, userID)
+	rows, signalErr := r.db.QueryContext(ctx, `SELECT domain,rule_code,rule_revision,signal_family,status,COALESCE(decision_id,''),score,evidence_count,evidence_snapshot,occurred_at,active_until FROM (
+ SELECT signal.domain,signal.rule_code,signal.rule_revision,signal.signal_family,signal.status,signal.decision_id,signal.score,signal.evidence_count,signal.evidence_snapshot,signal.occurred_at,signal.active_until,ROW_NUMBER() OVER(PARTITION BY signal.domain ORDER BY signal.score DESC,signal.occurred_at DESC) row_number
+ FROM risk_identity_signals signal
+ JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision
+ JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+ WHERE signal.user_id=$1 AND signal.domain IN ('ip','device','composite') AND signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+ ) ranked WHERE row_number<=20 ORDER BY domain,score DESC,occurred_at DESC`, userID)
 	if signalErr != nil {
 		return result, signalErr
 	}
@@ -452,10 +647,19 @@ func (r *SQLIdentityRepository) Summary(ctx context.Context, userID int64, cfg I
 		var domain string
 		var item IdentitySignalSummary
 		var occurredAt time.Time
-		if err := rows.Scan(&domain, &item.RuleCode, &item.Score, &item.EvidenceCount, &occurredAt); err != nil {
+		var activeUntil sql.NullTime
+		var evidence []byte
+		if err := rows.Scan(&domain, &item.RuleCode, &item.RuleRevision, &item.SignalFamily, &item.Status, &item.DecisionID, &item.Score, &item.EvidenceCount, &evidence, &occurredAt, &activeUntil); err != nil {
 			return result, err
 		}
+		item.EvidenceSnapshot = map[string]any{}
+		if cfg.ExplainEnabled {
+			_ = json.Unmarshal(evidence, &item.EvidenceSnapshot)
+		}
 		item.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
+		if activeUntil.Valid {
+			item.ActiveUntil = activeUntil.Time.UTC().Format(time.RFC3339Nano)
+		}
 		signals[domain] = append(signals[domain], item)
 	}
 	if err := rows.Err(); err != nil {
@@ -470,7 +674,7 @@ func (r *SQLIdentityRepository) Summary(ctx context.Context, userID int64, cfg I
 		{name: "device", score: &deviceScore, count: &deviceSignals},
 		{name: "composite", score: &compositeScore, count: &compositeSignals},
 	} {
-		if !cfg.RulesEnabled || states[domain.name] != "healthy" {
+		if !cfg.CurrentScoreEnabled || !cfg.RulesEnabled || states[domain.name] != "healthy" {
 			*domain.score = 0
 			*domain.count = 0
 			signals[domain.name] = []IdentitySignalSummary{}
@@ -478,9 +682,9 @@ func (r *SQLIdentityRepository) Summary(ctx context.Context, userID int64, cfg I
 	}
 	result.OverallScore = max(ipScore, deviceScore, compositeScore)
 	result.Domains = []IdentityDomainSummary{
-		{Domain: "ip", State: states["ip"], Score: ipScore, SignalCount: ipSignals, AssociatedAccountCount: associated["ip"], Signals: signals["ip"]},
-		{Domain: "device", State: states["device"], Score: deviceScore, SignalCount: deviceSignals, AssociatedAccountCount: associated["device"], Signals: signals["device"]},
-		{Domain: "composite", State: states["composite"], Score: compositeScore, SignalCount: compositeSignals, AssociatedAccountCount: associated["composite"], Signals: signals["composite"]},
+		{Domain: "ip", State: states["ip"], Score: ipScore, SignalCount: ipSignals, AssociatedAccountCount: associated["ip"], Signals: signals["ip"], HistoricalMaxScore: historicalScores["ip"], HistoricalSignalCount: historicalCounts["ip"]},
+		{Domain: "device", State: states["device"], Score: deviceScore, SignalCount: deviceSignals, AssociatedAccountCount: associated["device"], Signals: signals["device"], HistoricalMaxScore: historicalScores["device"], HistoricalSignalCount: historicalCounts["device"]},
+		{Domain: "composite", State: states["composite"], Score: compositeScore, SignalCount: compositeSignals, AssociatedAccountCount: associated["composite"], Signals: signals["composite"], HistoricalMaxScore: historicalScores["composite"], HistoricalSignalCount: historicalCounts["composite"]},
 	}
 	return result, nil
 }
@@ -504,12 +708,12 @@ SELECT COUNT(*) FROM grouped l JOIN risk_network_identities n ON n.id=l.network_
 ), grouped AS (
  SELECT network_identity_id,MIN(first_seen_at) first_seen_at,MAX(last_seen_at) last_seen_at,SUM(registration_success_count) registration_success_count,SUM(login_success_count) login_success_count,SUM(api_success_count) api_success_count FROM links GROUP BY network_identity_id
 )
-SELECT n.id,n.lookup_key,n.ip_ciphertext,n.ip_nonce,n.encryption_key_id,n.ip_family,n.ip_source,n.is_public,n.country_code,n.region,n.city,n.asn,n.geo_source,n.geo_verified,l.first_seen_at,l.last_seen_at,l.registration_success_count,l.login_success_count,l.api_success_count,
+SELECT n.id,n.lookup_key,n.ip_ciphertext,n.ip_nonce,n.encryption_key_id,n.ip_family,n.ip_source,n.is_public,n.country_code,n.region,n.city,n.asn,n.geo_source,n.geo_verified,COALESCE(label.label,''),l.first_seen_at,l.last_seen_at,l.registration_success_count,l.login_success_count,l.api_success_count,
 (SELECT COUNT(DISTINCT linked.user_id) FROM (
  SELECT user_id FROM risk_user_ip_links WHERE network_identity_id=n.id
  UNION ALL SELECT user_id FROM risk_identity_activity_daily WHERE network_identity_id=n.id
 ) linked)
-FROM grouped l JOIN risk_network_identities n ON n.id=l.network_identity_id WHERE ($2='' OR n.lookup_key=$2) ORDER BY l.last_seen_at DESC LIMIT $3 OFFSET $4`, userID, lookupKey, limit, offset)
+FROM grouped l JOIN risk_network_identities n ON n.id=l.network_identity_id LEFT JOIN risk_shared_network_labels label ON label.network_identity_id=n.id WHERE ($2='' OR n.lookup_key=$2) ORDER BY l.last_seen_at DESC LIMIT $3 OFFSET $4`, userID, lookupKey, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -518,8 +722,28 @@ FROM grouped l JOIN risk_network_identities n ON n.id=l.network_identity_id WHER
 	for rows.Next() {
 		var item NetworkIdentityRow
 		var first, last time.Time
-		if err := rows.Scan(&item.ID, &item.LookupKey, &item.Ciphertext, &item.Nonce, &item.KeyID, &item.IPFamily, &item.IPSource, &item.Public, &item.CountryCode, &item.Region, &item.City, &item.ASN, &item.GeoSource, &item.GeoVerified, &first, &last, &item.RegistrationSuccesses, &item.LoginSuccesses, &item.APISuccesses, &item.AssociatedAccountCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.LookupKey, &item.Ciphertext, &item.Nonce, &item.KeyID, &item.IPFamily, &item.IPSource, &item.Public, &item.CountryCode, &item.Region, &item.City, &item.ASN, &item.GeoSource, &item.GeoVerified, &item.NetworkLabel, &first, &last, &item.RegistrationSuccesses, &item.LoginSuccesses, &item.APISuccesses, &item.AssociatedAccountCount); err != nil {
 			return nil, 0, err
+		}
+		item.DataSource = strings.TrimSpace(item.GeoSource)
+		if item.DataSource == "" {
+			item.DataSource = "none"
+		}
+		switch {
+		case item.GeoVerified:
+			item.Availability = "available"
+		case !item.Public:
+			item.Availability = "not_evaluable"
+			item.UnavailableReason = "non_public_address"
+			item.UnavailableImpact = "location_not_used_for_risk"
+		case item.GeoSource == "" || item.GeoSource == "none":
+			item.Availability = "unavailable"
+			item.UnavailableReason = "geo_source_not_configured"
+			item.UnavailableImpact = "location_context_missing"
+		default:
+			item.Availability = "unavailable"
+			item.UnavailableReason = "geo_lookup_unverified"
+			item.UnavailableImpact = "location_context_missing"
 		}
 		item.FirstSeenAt = first.UTC().Format(time.RFC3339Nano)
 		item.LastSeenAt = last.UTC().Format(time.RFC3339Nano)
@@ -573,14 +797,55 @@ SELECT d.id,d.identity_kind,d.lookup_key,d.browser_family,d.os_family,d.device_c
 }
 
 func (r *SQLIdentityRepository) ListAssociatedUsers(ctx context.Context, userID int64, limit, offset int) ([]AssociatedUserRow, int, error) {
-	query := `WITH relations AS (
- SELECT other.user_id,COUNT(DISTINCT mine.network_identity_id)::int shared_ip,0::int shared_device,0::int cooccur,MIN(other.first_seen_at) first_seen,MAX(other.last_seen_at) last_seen FROM risk_user_ip_links mine JOIN risk_user_ip_links other USING(network_identity_id) WHERE mine.user_id=$1 AND other.user_id<>$1 GROUP BY other.user_id
+	query := `WITH parameters AS (
+ SELECT COALESCE((SELECT window_seconds FROM risk_identity_rules WHERE code='v2_registration_composite_accounts'),600)::int overlap_window
+), ip_links AS (
+ SELECT user_id,network_identity_id,MIN(first_seen_at) first_seen_at,MAX(last_seen_at) last_seen_at FROM (
+  SELECT user_id,network_identity_id,first_seen_at,last_seen_at FROM risk_user_ip_links
+  UNION ALL
+  SELECT user_id,network_identity_id,first_seen_at,last_seen_at FROM risk_identity_activity_daily WHERE network_identity_id>0 AND success_count>0
+ ) source GROUP BY user_id,network_identity_id
+), device_links AS (
+ SELECT user_id,device_identity_id,identity_kind,MIN(first_seen_at) first_seen_at,MAX(last_seen_at) last_seen_at FROM (
+  SELECT link.user_id,link.device_identity_id,identity.identity_kind,link.first_seen_at,link.last_seen_at
+  FROM risk_user_device_links link JOIN risk_device_identities identity ON identity.id=link.device_identity_id
+  WHERE identity.identity_kind IN ('browser_instance','api_client')
+  UNION ALL
+  SELECT daily.user_id,daily.device_identity_id,identity.identity_kind,daily.first_seen_at,daily.last_seen_at
+  FROM risk_identity_activity_daily daily JOIN risk_device_identities identity ON identity.id=daily.device_identity_id
+  WHERE daily.device_identity_id>0 AND daily.success_count>0 AND identity.identity_kind IN ('browser_instance','api_client')
+ ) source GROUP BY user_id,device_identity_id,identity_kind
+), relations AS (
+ SELECT other.user_id,COUNT(DISTINCT mine.network_identity_id)::int shared_ip,0::int shared_browser,0::int shared_api,BOOL_OR(COALESCE(label.label IN ('home','company','school','trusted_egress','mobile_cgnat'),FALSE)) known_shared,MIN(other.first_seen_at) first_seen,MAX(other.last_seen_at) last_seen
+ FROM ip_links mine JOIN ip_links other USING(network_identity_id) LEFT JOIN risk_shared_network_labels label ON label.network_identity_id=mine.network_identity_id
+ WHERE mine.user_id=$1 AND other.user_id<>$1 GROUP BY other.user_id
  UNION ALL
- SELECT other.user_id,0,COUNT(DISTINCT mine.device_identity_id)::int,0,MIN(other.first_seen_at),MAX(other.last_seen_at) FROM risk_user_device_links mine JOIN risk_user_device_links other USING(device_identity_id) JOIN risk_device_identities identity ON identity.id=mine.device_identity_id WHERE mine.user_id=$1 AND other.user_id<>$1 AND identity.identity_kind IN ('browser_instance','api_client') GROUP BY other.user_id
- UNION ALL
- SELECT other.user_id,0,0,COUNT(DISTINCT other.id)::int,MIN(other.occurred_at),MAX(other.occurred_at) FROM risk_identity_events mine JOIN risk_identity_events other ON other.network_identity_id=mine.network_identity_id AND other.browser_identity_id=mine.browser_identity_id AND ABS(EXTRACT(EPOCH FROM(other.occurred_at-mine.occurred_at)))<=600 WHERE mine.user_id=$1 AND other.user_id<>$1 AND mine.event_class='registration' AND other.event_class='registration' AND mine.outcome='success' AND other.outcome='success' AND mine.ip_quality_valid AND other.ip_quality_valid AND mine.device_quality_valid AND other.device_quality_valid AND mine.network_identity_id IS NOT NULL AND mine.browser_identity_id IS NOT NULL GROUP BY other.user_id
-), grouped AS (SELECT user_id,SUM(shared_ip)::int shared_ip,SUM(shared_device)::int shared_device,SUM(cooccur)::int cooccur,MIN(first_seen) first_seen,MAX(last_seen) last_seen FROM relations GROUP BY user_id)
-SELECT user_id,shared_ip,shared_device,cooccur,first_seen,last_seen,COUNT(*) OVER() FROM grouped ORDER BY cooccur DESC,shared_ip+shared_device DESC,last_seen DESC LIMIT $2 OFFSET $3`
+ SELECT other.user_id,0,COUNT(DISTINCT mine.device_identity_id) FILTER(WHERE mine.identity_kind='browser_instance')::int,COUNT(DISTINCT mine.device_identity_id) FILTER(WHERE mine.identity_kind='api_client')::int,FALSE,MIN(other.first_seen_at),MAX(other.last_seen_at)
+ FROM device_links mine JOIN device_links other USING(device_identity_id,identity_kind)
+ WHERE mine.user_id=$1 AND other.user_id<>$1 GROUP BY other.user_id
+), grouped AS (
+ SELECT user_id,SUM(shared_ip)::int shared_ip,SUM(shared_browser)::int shared_browser,SUM(shared_api)::int shared_api,BOOL_OR(known_shared) known_shared,MIN(first_seen) first_seen,MAX(last_seen) last_seen FROM relations GROUP BY user_id
+), event_pairs AS (
+ SELECT other.user_id,mine.id mine_event_id,other.id other_event_id,LEAST(mine.occurred_at,other.occurred_at) overlap_start,GREATEST(mine.occurred_at,other.occurred_at) overlap_end,parameters.overlap_window
+ FROM risk_identity_events mine JOIN risk_identity_events other ON other.network_identity_id=mine.network_identity_id AND other.browser_identity_id=mine.browser_identity_id CROSS JOIN parameters
+ WHERE mine.user_id=$1 AND other.user_id<>$1 AND mine.event_class='registration' AND other.event_class='registration' AND mine.outcome='success' AND other.outcome='success'
+ AND mine.ip_quality_valid AND other.ip_quality_valid AND mine.device_quality_valid AND other.device_quality_valid
+ AND mine.network_identity_id IS NOT NULL AND mine.browser_identity_id IS NOT NULL AND ABS(EXTRACT(EPOCH FROM(other.occurred_at-mine.occurred_at)))<=parameters.overlap_window
+), overlap AS (
+ SELECT user_id,COUNT(DISTINCT other_event_id)::int cooccur,MIN(overlap_start) overlap_start,MAX(overlap_end) overlap_end,MAX(overlap_window)::int overlap_window,array_agg(DISTINCT mine_event_id)||array_agg(DISTINCT other_event_id) source_ids
+ FROM event_pairs GROUP BY user_id
+), relation_sources AS (
+ SELECT other.user_id,array_agg(DISTINCT mine.id)||array_agg(DISTINCT other.id) source_ids
+ FROM risk_identity_events mine JOIN risk_identity_events other ON (
+  (mine.ip_quality_valid AND other.ip_quality_valid AND mine.network_identity_id IS NOT NULL AND other.network_identity_id=mine.network_identity_id)
+  OR (mine.device_quality_valid AND other.device_quality_valid AND mine.browser_identity_id IS NOT NULL AND other.browser_identity_id=mine.browser_identity_id)
+ )
+ WHERE mine.user_id=$1 AND other.user_id<>$1 AND mine.outcome='success' AND other.outcome='success'
+ GROUP BY other.user_id
+)
+SELECT grouped.user_id,grouped.shared_ip,grouped.shared_browser,grouped.shared_api,grouped.known_shared,COALESCE(overlap.cooccur,0),grouped.first_seen,grouped.last_seen,overlap.overlap_start,overlap.overlap_end,COALESCE(overlap.overlap_window,0),COALESCE(relation_sources.source_ids,'{}'::bigint[])||COALESCE(overlap.source_ids,'{}'::bigint[]),COUNT(*) OVER()
+FROM grouped LEFT JOIN overlap USING(user_id) LEFT JOIN relation_sources USING(user_id)
+ORDER BY COALESCE(overlap.cooccur,0) DESC,grouped.shared_browser DESC,grouped.shared_ip DESC,grouped.last_seen DESC LIMIT $2 OFFSET $3`
 	rows, err := r.db.QueryContext(ctx, query, userID, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -591,29 +856,68 @@ SELECT user_id,shared_ip,shared_device,cooccur,first_seen,last_seen,COUNT(*) OVE
 	for rows.Next() {
 		var item AssociatedUserRow
 		var first, last time.Time
-		if err := rows.Scan(&item.UserID, &item.SharedNetworkCount, &item.SharedDeviceCount, &item.CooccurringEvidenceCount, &first, &last, &total); err != nil {
+		var overlapStart, overlapEnd sql.NullTime
+		var sourceIDs pq.Int64Array
+		var knownSharedNetwork bool
+		if err := rows.Scan(&item.UserID, &item.SharedNetworkCount, &item.SharedBrowserInstanceCount, &item.SharedAPIClientCount, &knownSharedNetwork, &item.CooccurringEvidenceCount, &first, &last, &overlapStart, &overlapEnd, &item.EvidenceWindowSeconds, &sourceIDs, &total); err != nil {
 			return nil, 0, err
 		}
+		item.SharedDeviceCount = item.SharedBrowserInstanceCount + item.SharedAPIClientCount
 		item.FirstSeenAt = first.UTC().Format(time.RFC3339Nano)
 		item.LastSeenAt = last.UTC().Format(time.RFC3339Nano)
+		item.SourceEventIDs = uniqueInt64s([]int64(sourceIDs))
+		if overlapStart.Valid && overlapEnd.Valid {
+			item.Concurrent = true
+			item.OverlapStart = overlapStart.Time.UTC().Format(time.RFC3339Nano)
+			item.OverlapEnd = overlapEnd.Time.UTC().Format(time.RFC3339Nano)
+		}
 		switch {
 		case item.CooccurringEvidenceCount > 0:
 			item.Relation = "composite"
 			item.EvidenceStrength = "high"
-			item.EvidenceWindowSeconds = 600
-		case item.SharedNetworkCount > 0 && item.SharedDeviceCount > 0:
-			item.Relation = "multi_domain"
+			item.Limitations = []string{"same_ip_and_browser_instance_within_window", "shared_context_requires_manual_review"}
+		case item.SharedBrowserInstanceCount > 0:
+			item.Relation = "browser_instance"
 			item.EvidenceStrength = "medium_high"
+			item.Limitations = []string{"historical_relationship_not_proof_of_concurrency", "browser_instance_can_be_shared"}
+		case item.SharedNetworkCount > 0 && item.SharedAPIClientCount > 0:
+			item.Relation = "multi_domain"
+			item.EvidenceStrength = "weak"
+			item.Limitations = []string{"api_client_is_observation_only", "historical_relationship_not_proof_of_concurrency"}
 		case item.SharedNetworkCount > 0:
 			item.Relation = "ip"
 			item.EvidenceStrength = "weak"
+			item.Limitations = []string{"ip_only_is_weak_evidence", "historical_relationship_not_proof_of_concurrency"}
 		default:
-			item.Relation = "device"
-			item.EvidenceStrength = "medium_high"
+			item.Relation = "api_client"
+			item.EvidenceStrength = "observation"
+			item.Limitations = []string{"api_client_is_observation_only", "daily_aggregate_has_no_event_ids", "historical_relationship_not_proof_of_concurrency"}
+		}
+		if item.SharedAPIClientCount > 0 && item.Relation != "api_client" {
+			item.Limitations = append(item.Limitations, "daily_aggregate_has_no_event_ids")
+		}
+		if knownSharedNetwork {
+			item.Limitations = append(item.Limitations, "known_shared_network_label")
 		}
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+func uniqueInt64s(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func identityDeviceDisplay(kind, lookupKey string) (string, string) {
@@ -647,26 +951,36 @@ func (r *SQLIdentityRepository) ListSummaries(ctx context.Context, userIDs []int
 	qualityState := combinedIdentityState(states)
 	healthyDomains := make([]string, 0, 3)
 	for _, domain := range []string{"ip", "device", "composite"} {
-		if cfg.RulesEnabled && states[domain] == "healthy" {
+		if cfg.CurrentScoreEnabled && cfg.RulesEnabled && states[domain] == "healthy" {
 			healthyDomains = append(healthyDomains, domain)
 		}
 	}
 	rows, err := r.db.QueryContext(ctx, `WITH requested AS (SELECT DISTINCT UNNEST($1::bigint[]) user_id),
+ip_links AS (
+ SELECT user_id,network_identity_id,MAX(last_seen_at) last_seen_at FROM (
+  SELECT user_id,network_identity_id,last_seen_at FROM risk_user_ip_links
+  UNION ALL SELECT user_id,network_identity_id,last_seen_at FROM risk_identity_activity_daily WHERE network_identity_id>0 AND success_count>0
+ ) source GROUP BY user_id,network_identity_id
+), device_links AS (
+ SELECT user_id,device_identity_id FROM risk_user_device_links
+ UNION SELECT user_id,device_identity_id FROM risk_identity_activity_daily WHERE device_identity_id>0 AND success_count>0
+),
 latest_network AS (
  SELECT DISTINCT ON (l.user_id) l.user_id,n.lookup_key,n.ip_ciphertext,n.ip_nonce,n.encryption_key_id,n.country_code,n.region
- FROM risk_user_ip_links l JOIN risk_network_identities n ON n.id=l.network_identity_id JOIN requested r USING(user_id)
+ FROM ip_links l JOIN risk_network_identities n ON n.id=l.network_identity_id JOIN requested r USING(user_id)
  ORDER BY l.user_id,l.last_seen_at DESC
 ), device_counts AS (
  SELECT l.user_id,COUNT(*) FILTER(WHERE d.identity_kind='browser_instance')::int browsers,COUNT(*) FILTER(WHERE d.identity_kind='api_client')::int api_clients
- FROM risk_user_device_links l JOIN risk_device_identities d ON d.id=l.device_identity_id JOIN requested r USING(user_id) GROUP BY l.user_id
+ FROM device_links l JOIN risk_device_identities d ON d.id=l.device_identity_id JOIN requested r USING(user_id) GROUP BY l.user_id
 ), associated AS (
  SELECT user_id,COUNT(DISTINCT other_user_id)::int associated_accounts FROM (
-  SELECT mine.user_id,other.user_id other_user_id FROM risk_user_ip_links mine JOIN risk_user_ip_links other USING(network_identity_id) JOIN requested r ON r.user_id=mine.user_id WHERE other.user_id<>mine.user_id
+  SELECT mine.user_id,other.user_id other_user_id FROM ip_links mine JOIN ip_links other USING(network_identity_id) JOIN requested r ON r.user_id=mine.user_id WHERE other.user_id<>mine.user_id
   UNION ALL
-  SELECT mine.user_id,other.user_id FROM risk_user_device_links mine JOIN risk_user_device_links other USING(device_identity_id) JOIN risk_device_identities identity ON identity.id=mine.device_identity_id JOIN requested r ON r.user_id=mine.user_id WHERE other.user_id<>mine.user_id AND identity.identity_kind IN ('browser_instance','api_client')
+  SELECT mine.user_id,other.user_id FROM device_links mine JOIN device_links other USING(device_identity_id) JOIN risk_device_identities identity ON identity.id=mine.device_identity_id JOIN requested r ON r.user_id=mine.user_id WHERE other.user_id<>mine.user_id AND identity.identity_kind IN ('browser_instance','api_client')
  ) relations GROUP BY user_id
 ), active_rules AS (
- SELECT s.user_id,COUNT(DISTINCT s.rule_code)::int active_rules FROM risk_identity_signals s JOIN risk_identity_rules rule ON rule.code=s.rule_code AND rule.enabled AND rule.mode='shadow' JOIN requested r USING(user_id) WHERE s.domain=ANY($2::text[]) GROUP BY s.user_id
+ SELECT s.user_id,COUNT(DISTINCT s.rule_code)::int active_rules FROM risk_identity_signals s JOIN risk_identity_rules rule ON rule.code=s.rule_code AND rule.revision=s.rule_revision JOIN requested r USING(user_id)
+ WHERE s.domain=ANY($2::text[]) AND s.score>0 AND s.status='active' AND s.active_from<=NOW() AND (s.active_until IS NULL OR s.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) GROUP BY s.user_id
 )
 SELECT requested.user_id,latest_network.user_id IS NOT NULL,COALESCE(latest_network.lookup_key,''),latest_network.ip_ciphertext,latest_network.ip_nonce,COALESCE(latest_network.encryption_key_id,''),COALESCE(latest_network.country_code,''),COALESCE(latest_network.region,''),COALESCE(device_counts.browsers,0),COALESCE(device_counts.api_clients,0),COALESCE(associated.associated_accounts,0),COALESCE(active_rules.active_rules,0)
 FROM requested LEFT JOIN latest_network USING(user_id) LEFT JOIN device_counts USING(user_id) LEFT JOIN associated USING(user_id) LEFT JOIN active_rules USING(user_id) ORDER BY requested.user_id`, pq.Array(userIDs), pq.Array(healthyDomains))
@@ -699,8 +1013,14 @@ func combinedIdentityState(states map[string]string) string {
 		switch states[domain] {
 		case "paused":
 			return "paused"
+		case "not_evaluable":
+			if result != "paused" {
+				result = "not_evaluable"
+			}
 		case "degraded":
-			result = "degraded"
+			if result != "not_evaluable" {
+				result = "degraded"
+			}
 		case "healthy":
 			if result == "disabled" {
 				result = "healthy"
@@ -724,7 +1044,12 @@ func maskIdentityIP(raw string) string {
 }
 
 func (r *SQLIdentityRepository) Health(ctx context.Context, cfg IdentityConfig) (IdentityHealth, error) {
-	result := IdentityHealth{Enabled: cfg.Enabled, AdminEnabled: cfg.AdminEnabled, Mode: "shadow", Schema: "v2", KeyID: cfg.EncryptionKeyID, GeoSource: cfg.GeoSource, Domains: map[string]string{}, Quality24H: map[string]any{}}
+	result := IdentityHealth{Enabled: cfg.Enabled, AdminEnabled: cfg.AdminEnabled, Mode: "shadow", Schema: "v2", KeyID: cfg.EncryptionKeyID, GeoSource: cfg.GeoSource, Domains: map[string]string{}, Quality24H: map[string]any{}, Delivery: map[string]any{}, Processing: map[string]any{}, Features: map[string]bool{
+		"current_score": cfg.CurrentScoreEnabled,
+		"cases":         cfg.CasesEnabled,
+		"explain":       cfg.ExplainEnabled,
+		"delivery":      cfg.DeliveryEnabled,
+	}}
 	if !cfg.ShadowUntil.IsZero() {
 		result.ShadowUntil = cfg.ShadowUntil.Format(time.RFC3339)
 	}
@@ -733,7 +1058,20 @@ func (r *SQLIdentityRepository) Health(ctx context.Context, cfg IdentityConfig) 
 		return result, err
 	}
 	result.Domains = states
+	qualityConfig := cfg
+	qualityConfig.IPDomainEnabled = true
+	qualityConfig.DeviceDomainEnabled = true
+	qualityConfig.CompositeDomainEnabled = true
+	result.QualityDomains = identityDomainStates(qualityConfig, counts)
 	result.Quality24H = map[string]any{"events": counts.Total, "valid_ip": counts.ValidIP, "valid_device": counts.ValidDevice, "linked_users": counts.LinkedUsers, "max_network_users": counts.MaxNetworkUsers, "minimum_events": cfg.QualityMinEvents, "minimum_coverage_percent": cfg.QualityMinCoverage, "maximum_ip_share_percent": cfg.QualityMaxIPShare}
+	result.Processing = map[string]any{"pending": counts.ProcessingPending, "retry": counts.ProcessingRetry, "failed": counts.ProcessingFailed}
+	result.Delivery = map[string]any{"enabled": cfg.DeliveryEnabled, "sources": counts.DeliverySources, "gap_sources": counts.DeliveryGapSources, "stale_sources": counts.DeliveryStaleSources, "queue_depth": counts.DeliveryQueueDepth, "dropped": counts.DeliveryDropped, "failed": counts.DeliveryFailed}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE enabled AND mode='shadow' AND active_from<=NOW() AND (active_until IS NULL OR active_until>NOW())) FROM risk_identity_rules`).Scan(&result.ConfiguredRuleCount, &result.ProspectiveRuleCount); err != nil {
+		return result, err
+	}
+	if cfg.RulesEnabled {
+		result.EffectiveRuleCount = result.ProspectiveRuleCount
+	}
 	return result, nil
 }
 
@@ -745,7 +1083,13 @@ func queryIdentityQualityStates(ctx context.Context, queryer identityQueryer, cf
 	var counts identityQualityCounts
 	err := queryer.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE ip_quality_valid),COUNT(*) FILTER(WHERE device_quality_valid) FROM risk_identity_events WHERE occurred_at>=NOW()-interval '24 hours'`).Scan(&counts.Total, &counts.ValidIP, &counts.ValidDevice)
 	if err == nil {
-		err = queryer.QueryRowContext(ctx, `SELECT COALESCE((SELECT COUNT(DISTINCT user_id) FROM risk_user_ip_links),0),COALESCE(MAX(user_count),0) FROM (SELECT network_identity_id,COUNT(DISTINCT user_id) user_count FROM risk_user_ip_links GROUP BY network_identity_id) grouped`).Scan(&counts.LinkedUsers, &counts.MaxNetworkUsers)
+		err = queryer.QueryRowContext(ctx, `SELECT COALESCE((SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE occurred_at>=NOW()-interval '24 hours' AND network_identity_id IS NOT NULL),0),COALESCE(MAX(user_count),0) FROM (SELECT event.network_identity_id,COUNT(DISTINCT event.user_id) user_count FROM risk_identity_events event LEFT JOIN risk_shared_network_labels label ON label.network_identity_id=event.network_identity_id WHERE event.occurred_at>=NOW()-interval '24 hours' AND event.network_identity_id IS NOT NULL AND (label.label IS NULL OR label.label NOT IN ('home','company','school','trusted_egress','mobile_cgnat')) GROUP BY event.network_identity_id) grouped`).Scan(&counts.LinkedUsers, &counts.MaxNetworkUsers)
+	}
+	if err == nil {
+		err = queryer.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE status IN ('pending','processing')),COUNT(*) FILTER(WHERE status='retry'),COUNT(*) FILTER(WHERE status='failed') FROM risk_signal_processing_jobs`).Scan(&counts.ProcessingPending, &counts.ProcessingRetry, &counts.ProcessingFailed)
+	}
+	if err == nil {
+		err = queryer.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE gap_until>NOW()),COUNT(*) FILTER(WHERE generated_at<NOW()-interval '2 minutes'),COALESCE(SUM(queue_depth),0),COALESCE(SUM(dropped),0),COALESCE(SUM(failed),0) FROM risk_delivery_watermarks`).Scan(&counts.DeliverySources, &counts.DeliveryGapSources, &counts.DeliveryStaleSources, &counts.DeliveryQueueDepth, &counts.DeliveryDropped, &counts.DeliveryFailed)
 	}
 	return identityDomainStates(cfg, counts), counts, err
 }
@@ -756,6 +1100,7 @@ func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryR
 		return RebuildResult{}, err
 	}
 	defer tx.Rollback()
+	approvedDryRunID := int64(0)
 	if !dryRun {
 		if !cfg.RulesEnabled {
 			return RebuildResult{}, errors.New("identity rules are not enabled")
@@ -773,11 +1118,12 @@ func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryR
 		if time.Now().UTC().Before(shadowUntil.UTC()) {
 			return RebuildResult{}, fmt.Errorf("identity Shadow period is active until %s", shadowUntil.UTC().Format(time.RFC3339))
 		}
-		var dryRunID int64
+		var dryRunID, evidenceHighWater int64
 		var dryRunCompleted time.Time
-		if err := tx.QueryRowContext(ctx, `SELECT id,completed_at FROM risk_identity_rebuild_jobs
+		var ruleWatermark []byte
+		if err := tx.QueryRowContext(ctx, `SELECT id,completed_at,evidence_high_water,rule_watermark FROM risk_identity_rebuild_jobs
 WHERE dry_run=TRUE AND status='completed' AND requested_by=$1 AND completed_at IS NOT NULL
-ORDER BY completed_at DESC,id DESC LIMIT 1`, actorID).Scan(&dryRunID, &dryRunCompleted); err != nil {
+ORDER BY completed_at DESC,id DESC LIMIT 1`, actorID).Scan(&dryRunID, &dryRunCompleted, &evidenceHighWater, &ruleWatermark); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return RebuildResult{}, errors.New("a completed Dry Run by the same administrator is required")
 			}
@@ -786,23 +1132,51 @@ ORDER BY completed_at DESC,id DESC LIMIT 1`, actorID).Scan(&dryRunID, &dryRunCom
 		if age := time.Since(dryRunCompleted.UTC()); age < 0 || age > 30*time.Minute {
 			return RebuildResult{}, fmt.Errorf("Dry Run %d is older than 30 minutes", dryRunID)
 		}
-		var changed bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
- SELECT 1 FROM risk_identity_events WHERE created_at>$1
-) OR EXISTS(
- SELECT 1 FROM risk_identity_rules WHERE updated_at>$1
-)`, dryRunCompleted.UTC()).Scan(&changed); err != nil {
+		var matches bool
+		if err := tx.QueryRowContext(ctx, `SELECT
+ COALESCE((SELECT MAX(id) FROM risk_identity_events),0)=$1
+ AND COALESCE((SELECT jsonb_object_agg(code,revision ORDER BY code) FROM risk_identity_rules),'{}'::jsonb)=$2::jsonb`, evidenceHighWater, ruleWatermark).Scan(&matches); err != nil {
 			return RebuildResult{}, err
 		}
-		if changed {
+		if !matches {
 			return RebuildResult{}, fmt.Errorf("identity evidence or rules changed after Dry Run %d", dryRunID)
 		}
+		approvedDryRunID = dryRunID
 	}
 	states, _, err := queryIdentityQualityStates(ctx, tx, cfg)
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	result := RebuildResult{DryRun: dryRun, Status: "completed", RuleHits: map[string]int64{}, SampleUserIDs: []int64{}, StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if !dryRun {
+		if !cfg.CurrentScoreEnabled {
+			return RebuildResult{}, errors.New("current identity score reading is disabled")
+		}
+		for _, domain := range []string{"ip", "device", "composite"} {
+			if identityRuleDomainEnabled(cfg, domain) && states[domain] != "healthy" {
+				return RebuildResult{}, fmt.Errorf("identity domain %s is %s", domain, states[domain])
+			}
+		}
+	}
+	result := RebuildResult{DryRun: dryRun, Status: "completed", RuleHits: map[string]int64{}, RuleWatermark: map[string]int{}, SampleUserIDs: []int64{}, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), ApprovedDryRunID: approvedDryRunID}
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM risk_identity_events`).Scan(&result.EvidenceHighWater); err != nil {
+		return result, err
+	}
+	ruleWatermarkRows, watermarkErr := tx.QueryContext(ctx, `SELECT code,revision FROM risk_identity_rules ORDER BY code`)
+	if watermarkErr != nil {
+		return result, watermarkErr
+	}
+	for ruleWatermarkRows.Next() {
+		var code string
+		var revision int
+		if err = ruleWatermarkRows.Scan(&code, &revision); err != nil {
+			ruleWatermarkRows.Close()
+			return result, err
+		}
+		result.RuleWatermark[code] = revision
+	}
+	if err = ruleWatermarkRows.Close(); err != nil {
+		return result, err
+	}
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_subjects WHERE risk_type='api_request' OR reason ILIKE '%API 请求观察%'`).Scan(&result.LegacyAPISubjects); err != nil {
 		return result, err
 	}
@@ -811,28 +1185,32 @@ ORDER BY completed_at DESC,id DESC LIMIT 1`, actorID).Scan(&dryRunID, &dryRunCom
 	}
 	_, err = tx.ExecContext(ctx, `CREATE TEMP TABLE identity_rebuild_candidates ON COMMIT DROP AS
 WITH rules AS (
- SELECT code,domain,window_seconds,threshold,score,revision FROM risk_identity_rules
- WHERE enabled AND mode='shadow'
-   AND (($1 AND domain='ip') OR ($2 AND domain='device') OR ($3 AND domain='composite'))
+ SELECT rule.code,rule.domain,rule.signal_family,rule.subject_kind,rule.window_seconds,rule.threshold,rule.score,rule.revision,rule.active_from,rule.active_until,version.id rule_version_id,version.rule_snapshot
+ FROM risk_identity_rules rule JOIN risk_rule_versions version ON version.rule_kind='identity' AND version.rule_code=rule.code AND version.revision=rule.revision
+ WHERE rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW())
+   AND (($1 AND rule.domain='ip') OR ($2 AND rule.domain='device') OR ($3 AND rule.domain='composite'))
 ), anchors AS (
  SELECT id,user_id,network_identity_id,browser_identity_id,api_client_identity_id,ip_quality_valid,device_quality_valid,occurred_at
  FROM risk_identity_events
  WHERE event_class='registration' AND outcome='success' AND user_id>0
 )
-SELECT anchor.id event_id,anchor.user_id,rule.domain,rule.code rule_code,rule.score,counts.evidence_count,
- anchor.network_identity_id,CASE WHEN rule.domain='composite' THEN anchor.browser_identity_id ELSE COALESCE(anchor.browser_identity_id,anchor.api_client_identity_id) END device_identity_id,
-	jsonb_build_object('evidence_count',counts.evidence_count,'window_seconds',rule.window_seconds,'source_event_id',anchor.id,'network_identity_id',anchor.network_identity_id,'device_identity_id',CASE WHEN rule.domain='composite' THEN anchor.browser_identity_id ELSE COALESCE(anchor.browser_identity_id,anchor.api_client_identity_id) END,'rule_revision',rule.revision,'same_event_pair',rule.domain='composite') evidence,
- anchor.occurred_at
+SELECT anchor.id event_id,anchor.user_id,rule.domain,rule.code rule_code,rule.rule_version_id,rule.revision rule_revision,rule.signal_family,rule.score,counts.evidence_count,
+ anchor.network_identity_id,CASE rule.subject_kind WHEN 'browser_instance' THEN anchor.browser_identity_id WHEN 'api_client' THEN anchor.api_client_identity_id WHEN 'ip_browser' THEN anchor.browser_identity_id ELSE NULL END device_identity_id,
+	jsonb_build_object('evidence_count',counts.evidence_count,'window_seconds',rule.window_seconds,'source_event_id',anchor.id,'network_identity_id',anchor.network_identity_id,'device_identity_id',CASE rule.subject_kind WHEN 'browser_instance' THEN anchor.browser_identity_id WHEN 'api_client' THEN anchor.api_client_identity_id WHEN 'ip_browser' THEN anchor.browser_identity_id ELSE NULL END,'rule_revision',rule.revision,'signal_family',rule.signal_family,'same_event_pair',rule.subject_kind='ip_browser','rule_snapshot',rule.rule_snapshot) evidence_snapshot,
+	'rebuild:'||anchor.id||':'||rule.code||':'||rule.revision decision_id,anchor.occurred_at active_from,anchor.occurred_at+(rule.window_seconds*interval '1 second') active_until,
+	CASE WHEN anchor.occurred_at+(rule.window_seconds*interval '1 second')>NOW() THEN 'active' ELSE 'expired' END status,anchor.occurred_at
 FROM anchors anchor CROSS JOIN rules rule
 CROSS JOIN LATERAL (
  SELECT COUNT(DISTINCT evidence.user_id)::int evidence_count
  FROM risk_identity_events evidence
  WHERE evidence.event_class='registration' AND evidence.outcome='success' AND evidence.user_id>0
    AND evidence.occurred_at BETWEEN anchor.occurred_at-(rule.window_seconds*interval '1 second') AND anchor.occurred_at
-   AND CASE rule.domain
+   AND CASE rule.subject_kind
      WHEN 'ip' THEN anchor.ip_quality_valid AND anchor.network_identity_id IS NOT NULL AND evidence.ip_quality_valid AND evidence.network_identity_id=anchor.network_identity_id
-     WHEN 'device' THEN anchor.device_quality_valid AND COALESCE(anchor.browser_identity_id,anchor.api_client_identity_id) IS NOT NULL AND evidence.device_quality_valid AND (evidence.browser_identity_id=COALESCE(anchor.browser_identity_id,anchor.api_client_identity_id) OR evidence.api_client_identity_id=COALESCE(anchor.browser_identity_id,anchor.api_client_identity_id))
-     WHEN 'composite' THEN anchor.ip_quality_valid AND anchor.device_quality_valid AND anchor.network_identity_id IS NOT NULL AND anchor.browser_identity_id IS NOT NULL AND evidence.ip_quality_valid AND evidence.device_quality_valid AND evidence.network_identity_id=anchor.network_identity_id AND evidence.browser_identity_id=anchor.browser_identity_id
+       AND NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=anchor.network_identity_id AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
+     WHEN 'browser_instance' THEN anchor.device_quality_valid AND anchor.browser_identity_id IS NOT NULL AND evidence.device_quality_valid AND evidence.browser_identity_id=anchor.browser_identity_id
+     WHEN 'api_client' THEN anchor.api_client_identity_id IS NOT NULL AND evidence.api_client_identity_id=anchor.api_client_identity_id
+     WHEN 'ip_browser' THEN anchor.ip_quality_valid AND anchor.device_quality_valid AND anchor.network_identity_id IS NOT NULL AND anchor.browser_identity_id IS NOT NULL AND evidence.ip_quality_valid AND evidence.device_quality_valid AND evidence.network_identity_id=anchor.network_identity_id AND evidence.browser_identity_id=anchor.browser_identity_id
      ELSE FALSE
    END
 ) counts
@@ -874,10 +1252,16 @@ WHERE counts.evidence_count>=rule.threshold`, cfg.RulesEnabled && states["ip"] =
 	if err = rows.Close(); err != nil {
 		return result, err
 	}
-	if err = tx.QueryRowContext(ctx, `WITH current_summary AS (
- SELECT user_id,MAX(score) FILTER(WHERE domain='ip') ip_score,MAX(score) FILTER(WHERE domain='device') device_score,MAX(score) FILTER(WHERE domain='composite') composite_score,COUNT(*) FILTER(WHERE domain='ip') ip_count,COUNT(*) FILTER(WHERE domain='device') device_count,COUNT(*) FILTER(WHERE domain='composite') composite_count FROM risk_identity_signals WHERE domain IN ('ip','device','composite') GROUP BY user_id
+	if err = tx.QueryRowContext(ctx, `WITH current_families AS (
+ SELECT signal.user_id,signal.domain,signal.signal_family,MAX(signal.score) score FROM risk_identity_signals signal JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+ WHERE signal.domain IN ('ip','device','composite') AND signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW())
+ AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW()) GROUP BY signal.user_id,signal.domain,signal.signal_family
+), desired_families AS (
+ SELECT user_id,domain,signal_family,MAX(score) score FROM identity_rebuild_candidates WHERE status='active' AND score>0 GROUP BY user_id,domain,signal_family
+), current_summary AS (
+ SELECT user_id,MAX(score) FILTER(WHERE domain='ip') ip_score,MAX(score) FILTER(WHERE domain='device') device_score,MAX(score) FILTER(WHERE domain='composite') composite_score,COUNT(*) FILTER(WHERE domain='ip') ip_count,COUNT(*) FILTER(WHERE domain='device') device_count,COUNT(*) FILTER(WHERE domain='composite') composite_count FROM current_families GROUP BY user_id
 ), desired_summary AS (
- SELECT user_id,MAX(score) FILTER(WHERE domain='ip') ip_score,MAX(score) FILTER(WHERE domain='device') device_score,MAX(score) FILTER(WHERE domain='composite') composite_score,COUNT(*) FILTER(WHERE domain='ip') ip_count,COUNT(*) FILTER(WHERE domain='device') device_count,COUNT(*) FILTER(WHERE domain='composite') composite_count FROM identity_rebuild_candidates GROUP BY user_id
+ SELECT user_id,MAX(score) FILTER(WHERE domain='ip') ip_score,MAX(score) FILTER(WHERE domain='device') device_score,MAX(score) FILTER(WHERE domain='composite') composite_score,COUNT(*) FILTER(WHERE domain='ip') ip_count,COUNT(*) FILTER(WHERE domain='device') device_count,COUNT(*) FILTER(WHERE domain='composite') composite_count FROM desired_families GROUP BY user_id
 )
 SELECT COUNT(*) FROM current_summary current FULL OUTER JOIN desired_summary desired USING(user_id)
 WHERE ROW(current.ip_score,current.device_score,current.composite_score,current.ip_count,current.device_count,current.composite_count) IS DISTINCT FROM ROW(desired.ip_score,desired.device_score,desired.composite_score,desired.ip_count,desired.device_count,desired.composite_count)`).Scan(&result.ChangedSubjects); err != nil {
@@ -886,8 +1270,9 @@ WHERE ROW(current.ip_score,current.device_score,current.composite_score,current.
 	result.ChangedSubjects += result.LegacyAPISubjects
 	ruleHits, _ := json.Marshal(result.RuleHits)
 	sampleUsers, _ := json.Marshal(result.SampleUserIDs)
+	ruleWatermark, _ := json.Marshal(result.RuleWatermark)
 	var completedAt time.Time
-	err = tx.QueryRowContext(ctx, `INSERT INTO risk_identity_rebuild_jobs(dry_run,status,requested_by,legacy_api_subjects,current_signal_users,v2_signal_users,current_signals,v2_signals,changed_subjects,rule_hits,sample_user_ids,completed_at) VALUES($1,'completed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()) RETURNING id,completed_at`, dryRun, actorID, result.LegacyAPISubjects, result.CurrentSignalUsers, result.V2SignalUsers, result.CurrentSignals, result.V2Signals, result.ChangedSubjects, ruleHits, sampleUsers).Scan(&result.ID, &completedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO risk_identity_rebuild_jobs(dry_run,status,requested_by,legacy_api_subjects,current_signal_users,v2_signal_users,current_signals,v2_signals,changed_subjects,rule_hits,sample_user_ids,evidence_high_water,rule_watermark,approved_dry_run_id,completed_at) VALUES($1,'completed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW()) RETURNING id,completed_at`, dryRun, actorID, result.LegacyAPISubjects, result.CurrentSignalUsers, result.V2SignalUsers, result.CurrentSignals, result.V2Signals, result.ChangedSubjects, ruleHits, sampleUsers, result.EvidenceHighWater, ruleWatermark, nullablePositiveInt64(result.ApprovedDryRunID)).Scan(&result.ID, &completedAt)
 	if err != nil {
 		return result, err
 	}
@@ -909,23 +1294,64 @@ UPDATE risk_subjects s SET username=r.username_snapshot,email_hash=r.email_hash,
 		if _, err = tx.ExecContext(ctx, `DELETE FROM risk_subjects s WHERE (s.risk_type='api_request' OR s.reason ILIKE '%API 请求观察%') AND NOT EXISTS(SELECT 1 FROM risk_events e WHERE e.user_id=s.user_id AND e.event_type<>'api_request')`); err != nil {
 			return result, err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_signal_history(original_signal_id,event_id,user_id,domain,rule_code,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,occurred_at,original_created_at)
-SELECT id,event_id,user_id,domain,rule_code,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,occurred_at,created_at FROM risk_identity_signals
+		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_signal_history(original_signal_id,event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,occurred_at,original_created_at)
+SELECT id,event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,'superseded',active_from,active_until,occurred_at,created_at FROM risk_identity_signals
 WHERE domain IN ('ip','device','composite')
 ON CONFLICT(original_signal_id) DO NOTHING`); err != nil {
+			return result, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='superseded',current_score=0
+WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.domain IN ('ip','device','composite'))`); err != nil {
 			return result, err
 		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM risk_identity_signals WHERE domain IN ('ip','device','composite')`); err != nil {
 			return result, err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,occurred_at)
-SELECT event_id,user_id,domain,rule_code,score,evidence_count,TRUE,network_identity_id,device_identity_id,evidence,occurred_at FROM identity_rebuild_candidates`); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,mode,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at)
+SELECT decision_id,user_id,event_id,'shadow',status,CASE WHEN status='active' THEN score ELSE 0 END,score,CASE WHEN score>=85 THEN 'critical' WHEN score>=60 THEN 'high' WHEN score>=30 THEN 'medium' WHEN score>0 THEN 'low' ELSE 'none' END,evidence_snapshot,occurred_at FROM identity_rebuild_candidates
+ON CONFLICT(decision_id) DO UPDATE SET status=EXCLUDED.status,current_score=EXCLUDED.current_score,historical_max_score=GREATEST(risk_decisions.historical_max_score,EXCLUDED.historical_max_score)`); err != nil {
 			return result, err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at)
+SELECT event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,TRUE,network_identity_id,device_identity_id,evidence_snapshot,evidence_snapshot,decision_id,status,active_from,active_until,active_from,active_from,occurred_at FROM identity_rebuild_candidates`); err != nil {
+			return result, err
+		}
+		if cfg.CasesEnabled {
+			if _, err = tx.ExecContext(ctx, `WITH chosen AS (
+ SELECT DISTINCT ON (user_id,signal_family) user_id,decision_id,signal_family,score,rule_code,evidence_snapshot,occurred_at
+ FROM identity_rebuild_candidates WHERE status='active' AND score>=60
+ ORDER BY user_id,signal_family,score DESC,occurred_at DESC,event_id DESC
+)
+INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,opened_at,last_hit_at)
+SELECT user_id,decision_id,signal_family,'pending',score,score,rule_code,CASE WHEN rule_code LIKE '%composite%' THEN 'high' ELSE 'medium_high' END,occurred_at,occurred_at FROM chosen
+ON CONFLICT(user_id,signal_family) WHERE status IN ('pending','in_review') DO UPDATE SET decision_id=EXCLUDED.decision_id,current_score=EXCLUDED.current_score,historical_max_score=GREATEST(risk_review_cases.historical_max_score,EXCLUDED.historical_max_score),primary_signal=EXCLUDED.primary_signal,evidence_strength=EXCLUDED.evidence_strength,last_hit_at=GREATEST(risk_review_cases.last_hit_at,EXCLUDED.last_hit_at),updated_at=NOW()`); err != nil {
+				return result, err
+			}
+			if _, err = tx.ExecContext(ctx, `WITH chosen AS (
+ SELECT DISTINCT ON (user_id,signal_family) user_id,decision_id,signal_family,score,rule_code,evidence_snapshot,occurred_at
+ FROM identity_rebuild_candidates WHERE status='active' AND score>0 AND score<60
+ ORDER BY user_id,signal_family,score DESC,occurred_at DESC,event_id DESC
+)
+INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,opened_at,last_hit_at)
+SELECT user_id,decision_id,signal_family,'observing',score,score,rule_code,'weak',occurred_at,occurred_at FROM chosen
+ON CONFLICT(user_id,signal_family) WHERE status='observing' DO UPDATE SET decision_id=EXCLUDED.decision_id,current_score=EXCLUDED.current_score,historical_max_score=GREATEST(risk_review_cases.historical_max_score,EXCLUDED.historical_max_score),primary_signal=EXCLUDED.primary_signal,last_hit_at=GREATEST(risk_review_cases.last_hit_at,EXCLUDED.last_hit_at),updated_at=NOW()`); err != nil {
+				return result, err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO risk_case_evidence(case_id,signal_id,evidence_snapshot,occurred_at)
+SELECT case_row.id,signal.id,signal.evidence_snapshot,signal.occurred_at
+FROM risk_identity_signals signal JOIN risk_review_cases case_row ON case_row.user_id=signal.user_id AND case_row.signal_family=signal.signal_family
+WHERE signal.status='active' AND signal.score>0 AND case_row.status IN ('pending','in_review','observing')
+  AND case_row.id=(SELECT candidate_case.id FROM risk_review_cases candidate_case WHERE candidate_case.user_id=signal.user_id AND candidate_case.signal_family=signal.signal_family AND candidate_case.status IN ('pending','in_review','observing') ORDER BY CASE candidate_case.status WHEN 'in_review' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END,candidate_case.id DESC LIMIT 1)
+ON CONFLICT(case_id,signal_id) DO NOTHING`); err != nil {
+				return result, err
+			}
 		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM risk_identity_user_summaries`); err != nil {
 			return result, err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_user_summaries(user_id,overall_score,ip_score,device_score,composite_score,ip_signal_count,device_signal_count,composite_signal_count) SELECT user_id,GREATEST(COALESCE(MAX(score) FILTER(WHERE domain='ip'),0),COALESCE(MAX(score) FILTER(WHERE domain='device'),0),COALESCE(MAX(score) FILTER(WHERE domain='composite'),0)),COALESCE(MAX(score) FILTER(WHERE domain='ip'),0),COALESCE(MAX(score) FILTER(WHERE domain='device'),0),COALESCE(MAX(score) FILTER(WHERE domain='composite'),0),COUNT(*) FILTER(WHERE domain='ip'),COUNT(*) FILTER(WHERE domain='device'),COUNT(*) FILTER(WHERE domain='composite') FROM risk_identity_signals GROUP BY user_id`); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_user_summaries(user_id,overall_score,ip_score,device_score,composite_score,ip_signal_count,device_signal_count,composite_signal_count)
+WITH families AS (SELECT user_id,domain,signal_family,MAX(score) score FROM risk_identity_signals WHERE score>0 AND status='active' AND active_from<=NOW() AND (active_until IS NULL OR active_until>NOW()) GROUP BY user_id,domain,signal_family)
+SELECT user_id,GREATEST(COALESCE(MAX(score) FILTER(WHERE domain='ip'),0),COALESCE(MAX(score) FILTER(WHERE domain='device'),0),COALESCE(MAX(score) FILTER(WHERE domain='composite'),0)),COALESCE(MAX(score) FILTER(WHERE domain='ip'),0),COALESCE(MAX(score) FILTER(WHERE domain='device'),0),COALESCE(MAX(score) FILTER(WHERE domain='composite'),0),COUNT(*) FILTER(WHERE domain='ip'),COUNT(*) FILTER(WHERE domain='device'),COUNT(*) FILTER(WHERE domain='composite') FROM families GROUP BY user_id`); err != nil {
 			return result, err
 		}
 	}
@@ -937,8 +1363,9 @@ func (r *SQLIdentityRepository) GetRebuild(ctx context.Context, id int64) (Rebui
 	var result RebuildResult
 	var started time.Time
 	var completed sql.NullTime
-	var ruleHits, sampleUsers []byte
-	err := r.db.QueryRowContext(ctx, `SELECT id,dry_run,status,legacy_api_subjects,current_signal_users,v2_signal_users,current_signals,v2_signals,changed_subjects,rule_hits,sample_user_ids,started_at,completed_at FROM risk_identity_rebuild_jobs WHERE id=$1`, id).Scan(&result.ID, &result.DryRun, &result.Status, &result.LegacyAPISubjects, &result.CurrentSignalUsers, &result.V2SignalUsers, &result.CurrentSignals, &result.V2Signals, &result.ChangedSubjects, &ruleHits, &sampleUsers, &started, &completed)
+	var ruleHits, sampleUsers, ruleWatermark []byte
+	var approvedDryRunID sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `SELECT id,dry_run,status,legacy_api_subjects,current_signal_users,v2_signal_users,current_signals,v2_signals,changed_subjects,rule_hits,sample_user_ids,evidence_high_water,rule_watermark,approved_dry_run_id,started_at,completed_at FROM risk_identity_rebuild_jobs WHERE id=$1`, id).Scan(&result.ID, &result.DryRun, &result.Status, &result.LegacyAPISubjects, &result.CurrentSignalUsers, &result.V2SignalUsers, &result.CurrentSignals, &result.V2Signals, &result.ChangedSubjects, &ruleHits, &sampleUsers, &result.EvidenceHighWater, &ruleWatermark, &approvedDryRunID, &started, &completed)
 	if err != nil {
 		return result, err
 	}
@@ -947,9 +1374,14 @@ func (r *SQLIdentityRepository) GetRebuild(ctx context.Context, id int64) (Rebui
 		result.CompletedAt = completed.Time.UTC().Format(time.RFC3339Nano)
 	}
 	result.RuleHits = map[string]int64{}
+	result.RuleWatermark = map[string]int{}
 	result.SampleUserIDs = []int64{}
 	_ = json.Unmarshal(ruleHits, &result.RuleHits)
+	_ = json.Unmarshal(ruleWatermark, &result.RuleWatermark)
 	_ = json.Unmarshal(sampleUsers, &result.SampleUserIDs)
+	if approvedDryRunID.Valid {
+		result.ApprovedDryRunID = approvedDryRunID.Int64
+	}
 	return result, nil
 }
 
@@ -963,4 +1395,10 @@ func validateIdentityText(value string, max int) string {
 func identityPage(limit, offset int) map[string]int {
 	return map[string]int{"page": offset/limit + 1, "page_size": limit}
 }
-func identityErr(field string) error { return fmt.Errorf("invalid identity field: %s", field) }
+func identityErr(field string) error { return fmt.Errorf("%w: %s", ErrInvalidIdentity, field) }
+func nullablePositiveInt64(value int64) any {
+	if value > 0 {
+		return value
+	}
+	return nil
+}

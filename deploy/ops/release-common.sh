@@ -478,7 +478,7 @@ release_create_complete_backup() {
   printf '%s\n' "sub2api:rollback-$job_id" "extensions-self:rollback-$job_id" > "$backup_dir/rollback-tags.txt" || return 1
 
   docker exec sub2api-postgres pg_dump -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -Fc > "$backup_dir/sub2api_db.dump" || return 1
-  docker exec risk-control-postgres pg_dump -U "${RISK_POSTGRES_USER:-risk_control_app}" -d "${RISK_POSTGRES_DB:-risk_control}" -Fc > "$backup_dir/risk_control_db.dump" || return 1
+  docker exec risk-control-postgres pg_dump -U "${RISK_CONTROL_POSTGRES_USER:-risk_control_app}" -d "${RISK_CONTROL_POSTGRES_DB:-risk_control}" -Fc > "$backup_dir/risk_control_db.dump" || return 1
   docker exec -i sub2api-postgres pg_restore --list < "$backup_dir/sub2api_db.dump" > "$backup_dir/sub2api_db.list" || return 1
   docker exec -i risk-control-postgres pg_restore --list < "$backup_dir/risk_control_db.dump" > "$backup_dir/risk_control_db.list" || return 1
   docker ps -a --no-trunc > "$backup_dir/docker-containers.txt" || return 1

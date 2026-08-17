@@ -81,4 +81,27 @@ describe('UserRiskIdentityDetail', () => {
     expect(wrapper.text()).toContain('risk identity service unavailable')
     expect(wrapper.text()).toContain('admin.userRiskControl.retry')
   })
+
+  it('shows account availability, source events, and a follow-up investigation link', async () => {
+    vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({
+      items: [{
+        user_id: 9, relation: 'composite', shared_network_count: 1, shared_browser_instance_count: 1,
+        shared_api_client_count: 0, shared_device_count: 1, cooccurring_evidence_count: 2,
+        evidence_strength: 'high', evidence_window_seconds: 600, concurrent: true,
+        overlap_start: '2026-08-12T00:00:00Z', overlap_end: '2026-08-12T00:01:00Z',
+        first_seen_at: '2026-08-12T00:00:00Z', last_seen_at: '2026-08-12T00:01:00Z',
+        source_event_ids: [101, 102], limitations: ['shared_context_requires_manual_review'],
+        account: { id: 9, email: 'related@example.com', username: 'Related', status: '', availability: 'deleted', deleted: true, created_at: '' },
+      }],
+      total: 1,
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+    await wrapper.findAll('[role="tab"]')[3].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.userRiskControl.drawer.deletedAccount')
+    expect(wrapper.text()).toContain('来源事件：101, 102')
+    expect(wrapper.get('a').attributes('href')).toContain('search=9')
+  })
 })
