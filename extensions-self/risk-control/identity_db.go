@@ -23,6 +23,8 @@ const minimumIdentityShadowDuration = 14 * 24 * time.Hour
 
 const legacyV1CleanupMigrationVersion = 3
 
+const riskSchemaAdvisoryLockID int64 = 7357811167603551941
+
 func NewSQLIdentityRepository(db *sql.DB) *SQLIdentityRepository {
 	return &SQLIdentityRepository{db: db}
 }
@@ -41,11 +43,23 @@ func (r *SQLIdentityRepository) CleanupLegacyV1(ctx context.Context) (LegacyV1Cl
 		return LegacyV1CleanupResult{}, err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, riskSchemaAdvisoryLockID); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	var applied bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM risk_schema_migrations WHERE version=$1)`, legacyV1CleanupMigrationVersion).Scan(&applied); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
+	if applied {
+		return LegacyV1CleanupResult{}, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return LegacyV1CleanupResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE risk_schema_migrations IN EXCLUSIVE MODE`); err != nil {
 		return LegacyV1CleanupResult{}, err
 	}
 
-	var applied bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM risk_schema_migrations WHERE version=$1)`, legacyV1CleanupMigrationVersion).Scan(&applied); err != nil {
 		return LegacyV1CleanupResult{}, err
 	}

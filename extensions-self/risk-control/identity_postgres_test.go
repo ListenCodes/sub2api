@@ -53,6 +53,25 @@ func openIsolatedRiskTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func openRiskTestSession(t *testing.T, schema, applicationName string) *sql.DB {
+	t.Helper()
+	parsed, err := url.Parse(strings.TrimSpace(os.Getenv("RISK_CONTROL_TEST_DATABASE_URL")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	query.Set("application_name", applicationName)
+	parsed.RawQuery = query.Encode()
+	db, err := sql.Open("postgres", parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
 func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	ctx := context.Background()
 	db := openIsolatedRiskTestDB(t)
@@ -268,6 +287,271 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	}
 	if _, err := repo.Rebuild(ctx, 7, false, activation); err == nil || !strings.Contains(err.Error(), "Shadow period") {
 		t.Fatalf("write rebuild before Shadow deadline error = %v", err)
+	}
+}
+
+func TestPostCleanupLegacyEventsAreReclassifiedWithoutDeletion(t *testing.T) {
+	ctx := context.Background()
+	db := openIsolatedRiskTestDB(t)
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Truncate(time.Second)
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at,identity_version) VALUES ('pre-cleanup-legacy','login_failure',700,'login_failure','pre-cleanup evidence',$1,'legacy_v1')`, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var legacyEvents, migrationSix int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_events WHERE identity_version='legacy_v1'`).Scan(&legacyEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_schema_migrations WHERE version=6`).Scan(&migrationSix); err != nil {
+		t.Fatal(err)
+	}
+	if legacyEvents != 1 || migrationSix != 0 {
+		t.Fatalf("pre-cleanup state = legacy events:%d migration six:%d", legacyEvents, migrationSix)
+	}
+	repo := NewSQLIdentityRepository(db)
+	cleanup, err := repo.CleanupLegacyV1(ctx)
+	if err != nil || !cleanup.Applied || cleanup.EventsDeleted != 1 {
+		t.Fatalf("cleanup before reclassification = %+v, error = %v", cleanup, err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TRIGGER risk_normalize_post_cleanup_event_version ON risk_events`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at,identity_version) VALUES
+('post-cleanup-mislabeled','login_failure',701,'login_failure','post-cleanup evidence',$1,'legacy_v1'),
+('post-cleanup-current','login_success',702,'login_success','current evidence',$1,'event_v2')`, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var totalEvents, currentEvents, auditCount, reclassified int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE identity_version='event_v2'),COUNT(*) FILTER(WHERE identity_version='legacy_v1') FROM risk_events`).Scan(&totalEvents, &currentEvents, &legacyEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX((metadata->>'events_reclassified')::int),0) FROM risk_audit_logs WHERE action='reclassify_post_cleanup_v1_events'`).Scan(&auditCount, &reclassified); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_schema_migrations WHERE version=6`).Scan(&migrationSix); err != nil {
+		t.Fatal(err)
+	}
+	if totalEvents != 2 || currentEvents != 2 || legacyEvents != 0 || auditCount != 1 || reclassified != 1 || migrationSix != 1 {
+		t.Fatalf("post-cleanup migration = total:%d current:%d legacy:%d audits:%d reclassified:%d version:%d", totalEvents, currentEvents, legacyEvents, auditCount, reclassified, migrationSix)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at,identity_version) VALUES ('post-marker-explicit-legacy','login_failure',703,'login_failure','guarded evidence',$1,'legacy_v1')`, base); err != nil {
+		t.Fatal(err)
+	}
+	var guardedVersion string
+	if err := db.QueryRowContext(ctx, `SELECT identity_version FROM risk_events WHERE event_key='post-marker-explicit-legacy'`).Scan(&guardedVersion); err != nil {
+		t.Fatal(err)
+	}
+	if guardedVersion != "event_v2" {
+		t.Fatalf("post-marker explicit version = %q, want event_v2", guardedVersion)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE risk_events SET identity_version='legacy_v1' WHERE event_key='post-marker-explicit-legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT identity_version FROM risk_events WHERE event_key='post-marker-explicit-legacy'`).Scan(&guardedVersion); err != nil {
+		t.Fatal(err)
+	}
+	if guardedVersion != "event_v2" {
+		t.Fatalf("post-marker updated version = %q, want event_v2", guardedVersion)
+	}
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_audit_logs WHERE action='reclassify_post_cleanup_v1_events'`).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("idempotent post-cleanup audit count = %d, want 1", auditCount)
+	}
+}
+
+func TestLegacyCleanupSerializesWithUncommittedLegacyWriter(t *testing.T) {
+	ctx := context.Background()
+	db := openIsolatedRiskTestDB(t)
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var schema string
+	if err := db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	applicationName := fmt.Sprintf("risk_cleanup_race_%d", time.Now().UTC().UnixNano())
+	cleanupDB := openRiskTestSession(t, schema, applicationName)
+
+	writer, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	writerTx, err := writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writerTx.Rollback()
+	if _, err := writerTx.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at,identity_version) VALUES ('cleanup-race-legacy','login_failure',704,'login_failure','concurrent cleanup evidence',NOW(),'legacy_v1')`); err != nil {
+		t.Fatal(err)
+	}
+
+	type cleanupResult struct {
+		result LegacyV1CleanupResult
+		err    error
+	}
+	done := make(chan cleanupResult, 1)
+	go func() {
+		result, cleanupErr := NewSQLIdentityRepository(cleanupDB).CleanupLegacyV1(ctx)
+		done <- cleanupResult{result: result, err: cleanupErr}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case completed := <-done:
+			t.Fatalf("cleanup completed before the legacy writer committed: result=%+v error=%v", completed.result, completed.err)
+		default:
+		}
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM pg_locks l
+JOIN pg_stat_activity a ON a.pid=l.pid
+WHERE a.application_name=$1
+  AND l.relation='risk_events'::regclass
+  AND l.mode='ShareRowExclusiveLock'
+  AND NOT l.granted)`, applicationName).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cleanup did not wait for the active legacy writer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := writerTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-done:
+		if completed.err != nil || !completed.result.Applied || completed.result.EventsDeleted != 1 {
+			t.Fatalf("serialized cleanup = %+v, error = %v", completed.result, completed.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not finish after the writer committed")
+	}
+	var legacyEvents int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_events WHERE identity_version='legacy_v1'`).Scan(&legacyEvents); err != nil {
+		t.Fatal(err)
+	}
+	if legacyEvents != 0 {
+		t.Fatalf("legacy events after serialized cleanup = %d, want 0", legacyEvents)
+	}
+}
+
+func TestLegacyCleanupBlocksUpdatesBeforeTupleLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := openIsolatedRiskTestDB(t)
+	if err := ApplySchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at,identity_version) VALUES ('cleanup-update-race','login_failure',705,'login_failure','cleanup update evidence',NOW(),'legacy_v1')`); err != nil {
+		t.Fatal(err)
+	}
+	var schema string
+	if err := db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	blockerTx, err := blocker.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blockerTx.Rollback()
+	if _, err := blockerTx.ExecContext(ctx, `LOCK TABLE risk_schema_migrations IN ROW SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupApplication := fmt.Sprintf("risk_cleanup_first_%d", time.Now().UTC().UnixNano())
+	writerApplication := fmt.Sprintf("risk_cleanup_update_%d", time.Now().UTC().UnixNano())
+	cleanupDB := openRiskTestSession(t, schema, cleanupApplication)
+	writerDB := openRiskTestSession(t, schema, writerApplication)
+	type cleanupResult struct {
+		result LegacyV1CleanupResult
+		err    error
+	}
+	cleanupDone := make(chan cleanupResult, 1)
+	go func() {
+		result, cleanupErr := NewSQLIdentityRepository(cleanupDB).CleanupLegacyV1(ctx)
+		cleanupDone <- cleanupResult{result: result, err: cleanupErr}
+	}()
+	waitForLock := func(application, relation, mode string, granted bool) {
+		t.Helper()
+		for {
+			var found bool
+			if err := db.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM pg_locks l
+JOIN pg_stat_activity a ON a.pid=l.pid
+WHERE a.application_name=$1
+  AND l.relation=$2::regclass
+  AND l.mode=$3
+  AND l.granted=$4)`, application, relation, mode, granted).Scan(&found); err != nil {
+				t.Fatal(err)
+			}
+			if found {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("lock not observed for %s on %s: %v", application, relation, ctx.Err())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	waitForLock(cleanupApplication, "risk_events", "ShareRowExclusiveLock", true)
+	waitForLock(cleanupApplication, "risk_schema_migrations", "ExclusiveLock", false)
+
+	type writerResult struct {
+		rows int64
+		err  error
+	}
+	writerDone := make(chan writerResult, 1)
+	go func() {
+		result, updateErr := writerDB.ExecContext(ctx, `UPDATE risk_events SET identity_version='legacy_v1' WHERE event_key='cleanup-update-race'`)
+		var rows int64
+		if updateErr == nil {
+			rows, updateErr = result.RowsAffected()
+		}
+		writerDone <- writerResult{rows: rows, err: updateErr}
+	}()
+	waitForLock(writerApplication, "risk_events", "RowExclusiveLock", false)
+	if err := blockerTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-cleanupDone:
+		if completed.err != nil || !completed.result.Applied || completed.result.EventsDeleted != 1 {
+			t.Fatalf("cleanup-first update serialization = %+v, error = %v", completed.result, completed.err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("cleanup-first update did not finish: %v", ctx.Err())
+	}
+	select {
+	case completed := <-writerDone:
+		if completed.err != nil || completed.rows != 0 {
+			t.Fatalf("post-cleanup update = rows:%d error:%v", completed.rows, completed.err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("blocked update did not finish: %v", ctx.Err())
 	}
 }
 

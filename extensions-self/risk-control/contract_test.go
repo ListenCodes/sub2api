@@ -115,6 +115,55 @@ func TestLegacyV1CleanupIsActivationGatedAndAudited(t *testing.T) {
 	}
 }
 
+func TestSchemaReclassifiesOnlyPostCleanupV1Events(t *testing.T) {
+	for _, expected := range []string{
+		"SELECT pg_advisory_xact_lock(7357811167603551941)",
+		"LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE",
+		"risk_normalize_post_cleanup_event_version",
+		"BEFORE INSERT OR UPDATE OF identity_version ON risk_events",
+		"PERFORM 1 FROM risk_schema_migrations WHERE version=3 FOR SHARE",
+		"EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=3)",
+		"NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=6)",
+		"SET identity_version='event_v2'",
+		"WHERE identity_version='legacy_v1'",
+		"reclassify_post_cleanup_v1_events",
+		"jsonb_build_object('events_reclassified',corrected_events)",
+		"INSERT INTO risk_schema_migrations(version) VALUES (6)",
+	} {
+		if !strings.Contains(schemaSQL, expected) {
+			t.Fatalf("post-cleanup event reclassification is missing %q", expected)
+		}
+	}
+	if strings.Index(schemaSQL, "SELECT pg_advisory_xact_lock(7357811167603551941)") > strings.Index(schemaSQL, "CREATE TABLE IF NOT EXISTS risk_rules") {
+		t.Fatal("schema must take the shared schema/cleanup advisory lock before touching risk tables")
+	}
+	if strings.Index(schemaSQL, "LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE") > strings.Index(schemaSQL, "CREATE INDEX IF NOT EXISTS idx_risk_events_user_created") {
+		t.Fatal("schema must lock legacy writers before altering or indexing risk events")
+	}
+}
+
+func TestLegacyCleanupUsesSchemaAdvisoryLock(t *testing.T) {
+	source := identityDatabaseSourceForContract(t)
+	markerCheck := "SELECT EXISTS(SELECT 1 FROM risk_schema_migrations WHERE version=$1)"
+	for _, expected := range []string{
+		"riskSchemaAdvisoryLockID int64 = 7357811167603551941",
+		"SELECT pg_advisory_xact_lock($1)",
+		"LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE",
+		"riskSchemaAdvisoryLockID",
+		"LOCK TABLE risk_schema_migrations IN EXCLUSIVE MODE",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("legacy cleanup serialization is missing %q", expected)
+		}
+	}
+	if strings.Index(source, "LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE") > strings.Index(source, "LOCK TABLE risk_schema_migrations IN EXCLUSIVE MODE") {
+		t.Fatal("legacy cleanup must stop event writers before locking the migration marker")
+	}
+	if strings.Count(source, markerCheck) < 2 || strings.Index(source, markerCheck) > strings.Index(source, "LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE") {
+		t.Fatal("legacy cleanup must fast-path an existing marker before locking events and recheck under both locks")
+	}
+}
+
 func identityDatabaseSourceForContract(t *testing.T) string {
 	t.Helper()
 	payload, err := os.ReadFile("identity_db.go")

@@ -1,3 +1,5 @@
+SELECT pg_advisory_xact_lock(7357811167603551941);
+
 CREATE TABLE IF NOT EXISTS risk_schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS risk_events (
     occurred_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+LOCK TABLE risk_events IN SHARE ROW EXCLUSIVE MODE;
 CREATE INDEX IF NOT EXISTS idx_risk_events_user_created ON risk_events(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_risk_events_subject_created ON risk_events(subject_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_risk_events_type_created ON risk_events(event_type, created_at DESC);
@@ -103,6 +106,22 @@ DO $$ BEGIN
         ALTER TABLE risk_events ADD CONSTRAINT risk_events_identity_version_check CHECK (identity_version IN ('legacy_v1','event_v2'));
     END IF;
 END $$;
+CREATE OR REPLACE FUNCTION risk_normalize_post_cleanup_event_version() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.identity_version <> 'legacy_v1' THEN
+        RETURN NEW;
+    END IF;
+    PERFORM 1 FROM risk_schema_migrations WHERE version=3 FOR SHARE;
+    IF FOUND THEN
+        NEW.identity_version='event_v2';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS risk_normalize_post_cleanup_event_version ON risk_events;
+CREATE TRIGGER risk_normalize_post_cleanup_event_version
+BEFORE INSERT OR UPDATE OF identity_version ON risk_events
+FOR EACH ROW EXECUTE FUNCTION risk_normalize_post_cleanup_event_version();
 CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_audit_key ON risk_audit_logs(audit_key) WHERE audit_key IS NOT NULL AND audit_key <> '';
 
 CREATE TABLE IF NOT EXISTS risk_event_keys (
@@ -667,5 +686,27 @@ DO $$ BEGIN
           AND (event_types<>'["api_error"]'::jsonb OR score<>0 OR action<>'observe'))
       );
     INSERT INTO risk_schema_migrations(version) VALUES (5);
+  END IF;
+END $$;
+
+DO $$ DECLARE corrected_events BIGINT;
+BEGIN
+  IF EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=3)
+     AND NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=6) THEN
+    UPDATE risk_events
+    SET identity_version='event_v2'
+    WHERE identity_version='legacy_v1';
+    GET DIAGNOSTICS corrected_events = ROW_COUNT;
+    INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason,metadata)
+    VALUES (
+      0,
+      'reclassify_post_cleanup_v1_events',
+      'system',
+      'legacy_v1',
+      'success',
+      'Reclassified events written after the one-time V1 cleanup without deleting evidence',
+      jsonb_build_object('events_reclassified',corrected_events)
+    );
+    INSERT INTO risk_schema_migrations(version) VALUES (6);
   END IF;
 END $$;
