@@ -19,7 +19,7 @@
 		  <section v-if="activeRuleView === 'identity'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-v2-rules">
             <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">V2 身份规则</h2>
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">身份规则</h2>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">邮箱、真实 IP、浏览器实例和综合关联独立计算</p>
               </div>
               <span :class="identityRulesActive ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'" class="rounded-md px-2 py-1 text-xs font-medium">{{ identityRulesHeader }}</span>
@@ -38,7 +38,7 @@
                     <td class="py-2.5 pr-4">{{ rule.score ? rule.score : '0（仅观察）' }}</td>
                     <td class="py-2.5"><span :class="rule.enabled ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'">{{ identityRuleStatus(rule) }}</span></td>
                   </tr>
-                  <tr v-if="!identityRules.length && !loading && !identityRulesError"><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400">暂无 V2 身份规则</td></tr>
+                  <tr v-if="!identityRules.length && !loading && !identityRulesError"><td colspan="5" class="py-4 text-center text-gray-500 dark:text-gray-400">暂无身份规则</td></tr>
                 </tbody>
               </table>
             </div>
@@ -318,7 +318,7 @@ async function load() {
   if (genericResult.status === 'fulfilled') rules.value = genericResult.value
   else error.value = errorMessage(genericResult.reason)
   if (identityResult.status === 'fulfilled') identityRules.value = identityResult.value
-  else identityRulesError.value = errorMessage(identityResult.reason, 'V2 身份规则暂时不可用')
+  else identityRulesError.value = errorMessage(identityResult.reason, '身份规则暂时不可用')
   loading.value = false
 }
 function openCreateForm() { applyTemplate(ruleTemplates[0]); createOpen.value = true; notice.value = '' }
