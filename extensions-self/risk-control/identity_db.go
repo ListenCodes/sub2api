@@ -1237,7 +1237,7 @@ WHERE counts.evidence_count>=rule.threshold`, cfg.RulesEnabled && states["ip"] =
 	if err = rows.Close(); err != nil {
 		return result, err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM identity_rebuild_candidates ORDER BY md5(user_id::text),user_id LIMIT 10`)
+	rows, err = tx.QueryContext(ctx, `SELECT user_id FROM (SELECT DISTINCT user_id FROM identity_rebuild_candidates) candidates ORDER BY md5(user_id::text),user_id LIMIT 10`)
 	if err != nil {
 		return result, err
 	}

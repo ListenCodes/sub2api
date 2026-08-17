@@ -191,7 +191,7 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_identity_events`).Scan(&identityEventsBefore); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at) VALUES ('legacy-cleanup','login_failure',909,'login_failure','legacy evidence',$1)`, base); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_events(event_key,event_type,user_id,risk_type,reason,occurred_at,identity_version) VALUES ('legacy-cleanup','login_failure',909,'login_failure','legacy evidence',$1,'legacy_v1')`, base); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO risk_event_keys(event_key,event_id) VALUES ('legacy-cleanup',1)`); err != nil {

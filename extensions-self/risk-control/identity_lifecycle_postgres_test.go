@@ -47,7 +47,7 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	base := time.Now().UTC()
 	for index := range 5 {
 		if _, err := service.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("lifecycle-registration-%d", index), int64(1000+index), base.Add(time.Duration(index)*time.Second), "8.8.4.4", "shared-browser")); err != nil {
 			t.Fatalf("registration %d: %v", index, err)
@@ -210,7 +210,7 @@ func TestIdentityAggregatesOAuthAndPersistentRetryPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	base := time.Now().UTC()
 	for index, userID := range []int64{202, 203} {
 		_, err := service.Ingest(ctx, IdentityEventReport{
 			EventKey: fmt.Sprintf("api-observation-%d", userID), EventType: "api_request", EventClass: identityEventAPI, Outcome: "success",
@@ -338,7 +338,7 @@ func TestIdentityRebuildKeepsVersionedEvidenceAndCasesPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	base := time.Now().UTC()
 	for index := range 3 {
 		if _, err := service.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("rebuild-registration-%d", index), int64(3000+index), base.Add(time.Duration(index)*time.Second), "8.8.8.8", "rebuild-browser")); err != nil {
 			t.Fatal(err)
