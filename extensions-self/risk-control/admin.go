@@ -206,7 +206,7 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 	if s.cfg.Identity.Enabled && input.Enabled && isRetiredV1IdentityRule(code) {
-		writeError(w, http.StatusBadRequest, errors.New("V1 identity rule cannot be enabled while identity V2 is active"))
+		writeError(w, http.StatusBadRequest, errors.New("legacy identity rules cannot be enabled while current identity rules are active"))
 		return
 	}
 	allowLegacyAPIObservation := legacyAPIObservation && !input.Enabled

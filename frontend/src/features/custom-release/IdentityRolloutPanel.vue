@@ -100,7 +100,7 @@ const messages = {
     remaining: '{seconds}s remaining',
     failed: 'Identity rollout failed',
     transitionLabel: {
-      reset: 'Stage 0 - safe reset', v2: 'Stage 1 - V2', ip: 'Stage 1 - IP collection',
+      reset: 'Stage 0 - safe reset', v2: 'Stage 1 - identity foundation', ip: 'Stage 1 - IP collection',
       device: 'Stage 1 - device collection', admin: 'Stage 2 - admin review',
       shadow: 'Stage 3 - Shadow window', rules: 'Stage 3 - Shadow rules', geo: 'Stage 4 - verified geo'
     },
@@ -118,7 +118,7 @@ const messages = {
     remaining: '准备结果剩余 {seconds} 秒',
     failed: '身份能力发布失败',
     transitionLabel: {
-      reset: 'Stage 0 - 安全归零', v2: 'Stage 1 - V2 基础', ip: 'Stage 1 - IP 采集',
+      reset: 'Stage 0 - 安全归零', v2: 'Stage 1 - 身份基础', ip: 'Stage 1 - IP 采集',
       device: 'Stage 1 - 设备采集', admin: 'Stage 2 - 管理复核',
       shadow: 'Stage 3 - Shadow 窗口', rules: 'Stage 3 - Shadow 规则', geo: 'Stage 4 - 可信地区'
     },

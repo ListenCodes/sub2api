@@ -55,7 +55,8 @@ describe('UserRiskIdentityDetail', () => {
     const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('v2_registration_ip_accounts')
+    expect(wrapper.text()).toContain('同一公网 IP 出现多个成功注册账号')
+    expect(wrapper.text()).not.toContain('v2_registration_ip_accounts')
     expect(wrapper.text()).toContain('admin.userRiskControl.identityDataQuality')
     expect(userRiskControlV2API.listUserIPIdentities).not.toHaveBeenCalled()
   })

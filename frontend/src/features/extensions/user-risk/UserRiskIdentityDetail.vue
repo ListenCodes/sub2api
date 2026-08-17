@@ -32,12 +32,12 @@
 			<p class="font-semibold text-gray-900 dark:text-white">{{ signalExplanation(primarySignal.rule_code) }}</p>
 			<p class="mt-1 text-gray-600 dark:text-gray-300">证据强度：{{ evidenceStrength(primarySignal) }}。当前为 Shadow 人工复核，不会自动拒绝或封禁。</p>
 			<p class="mt-1 text-gray-500">建议动作：核对同期证据、共享网络标签和账号业务行为后再决定处置。</p>
-			<p class="mt-2 font-mono text-xs text-gray-400">{{ primarySignal.rule_code }}@{{ primarySignal.rule_revision || 1 }} · {{ primarySignal.decision_id || '-' }}</p>
+			<p class="mt-2 text-xs text-gray-400">规则版本 {{ primarySignal.rule_revision || 1 }} · 决策 {{ primarySignal.decision_id || '-' }}</p>
 		</div>
       <div class="mt-4 divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-700">
         <div v-for="domain in summary.domains" :key="domain.domain" class="py-3 text-sm">
           <div class="grid grid-cols-[1fr_auto_auto] items-center gap-4"><span class="font-medium text-gray-900 dark:text-white">{{ domainLabel(domain.domain) }}</span><span class="text-gray-500">{{ t('admin.userRiskControl.drawer.signals', { count: domain.signal_count }) }}</span><strong>{{ domain.score }}</strong></div>
-			<ul v-if="domain.signals?.length" class="mt-2 space-y-1 text-xs text-gray-500"><li v-for="signal in domain.signals" :key="`${signal.rule_code}-${signal.rule_revision || 1}-${signal.occurred_at}`"><span>{{ signalExplanation(signal.rule_code) }}</span> · {{ t('admin.userRiskControl.identityEvidenceCount', { count: signal.evidence_count }) }} · {{ formatDate(signal.occurred_at) }}<span class="block font-mono text-gray-400">{{ signal.rule_code }}@{{ signal.rule_revision || 1 }}</span></li></ul>
+			<ul v-if="domain.signals?.length" class="mt-2 space-y-1 text-xs text-gray-500"><li v-for="signal in domain.signals" :key="`${signal.rule_code}-${signal.rule_revision || 1}-${signal.occurred_at}`"><span>{{ signalExplanation(signal.rule_code) }}</span> · {{ t('admin.userRiskControl.identityEvidenceCount', { count: signal.evidence_count }) }} · {{ formatDate(signal.occurred_at) }}<span class="block text-gray-400">规则版本 {{ signal.rule_revision || 1 }}</span></li></ul>
 			<p v-if="(domain.historical_max_score || 0) > domain.score" class="mt-2 text-xs text-gray-400">历史最高 {{ domain.historical_max_score }} · 历史信号 {{ domain.historical_signal_count || 0 }}</p>
         </div>
       </div>

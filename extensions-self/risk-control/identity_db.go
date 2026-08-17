@@ -88,7 +88,7 @@ func (r *SQLIdentityRepository) CleanupLegacyV1(ctx context.Context) (LegacyV1Cl
 	result.RulesDeleted, _ = deleted.RowsAffected()
 	metadata, _ := json.Marshal(result)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason,metadata)
-VALUES (0,'purge_legacy_v1','system','legacy_v1','success','V2 identity rollout: removed legacy V1 events, projections, and retired rule configurations',$1)`, metadata); err != nil {
+VALUES (0,'purge_legacy_v1','system','legacy_v1','success','Identity rollout: removed legacy events, projections, and retired rule configurations',$1)`, metadata); err != nil {
 		return LegacyV1CleanupResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_schema_migrations(version) VALUES ($1)`, legacyV1CleanupMigrationVersion); err != nil {
@@ -593,9 +593,9 @@ func (r *SQLIdentityRepository) Summary(ctx context.Context, userID int64, cfg I
 		return result, err
 	}
 	if legacyCleaned {
-		result.LegacyNotice = "V1 风险事件与旧摘要已按批准迁移清理；当前风险只使用 V2 有效信号，历史证据单独展示。"
+		result.LegacyNotice = "旧风险事件与旧摘要已按批准迁移清理；当前风险只使用现行有效信号，历史证据单独展示。"
 	} else {
-		result.LegacyNotice = "V1 清理尚未执行；旧事件被隔离为历史数据，不参与当前 V2 风险。"
+		result.LegacyNotice = "旧数据清理尚未执行；旧事件被隔离为历史数据，不参与当前风险。"
 	}
 	var ipScore, deviceScore, compositeScore, ipSignals, deviceSignals, compositeSignals int
 	if cfg.CurrentScoreEnabled {
