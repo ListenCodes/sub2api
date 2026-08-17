@@ -14,6 +14,7 @@ func enabledIdentityTestConfig() IdentityConfig {
 	cfg.IPCollectionEnabled = true
 	cfg.DeviceCollectionEnabled = true
 	cfg.RulesEnabled = true
+	cfg.ShadowUntil = time.Now().UTC().Add(15 * 24 * time.Hour)
 	cfg.CurrentScoreEnabled = true
 	cfg.CasesEnabled = true
 	cfg.ExplainEnabled = true

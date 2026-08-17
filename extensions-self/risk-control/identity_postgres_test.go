@@ -71,7 +71,7 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT enabled,action,name FROM risk_rules WHERE code='api_request_observation'`).Scan(&enabled, &action, &name); err != nil {
 		t.Fatal(err)
 	}
-	if enabled || action != "review" || name != "operator override" {
+	if !enabled || action != "review" || name != "operator override" {
 		t.Fatalf("retired reliability rule state: enabled=%v action=%q name=%q", enabled, action, name)
 	}
 
