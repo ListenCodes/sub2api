@@ -409,7 +409,7 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,0,$2,$3,0,0,'none',$4,$5) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.ID, lifecycle, evidence, event.OccurredAt); err != nil {
 					return err
 				}
-				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at) VALUES ($1,0,'account',$2,$3,$4,$5,0,$6,TRUE,$7,$7,$8,$9,$10,$10+($11*interval '1 second'),$10,$10,$10) ON CONFLICT(event_id,user_id,rule_code) DO NOTHING`, event.ID, rule.code, rule.versionID, rule.revision, rule.family, count, evidence, decisionID, lifecycle, event.OccurredAt, rule.window); err != nil {
+				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at) VALUES ($1,0,'account',$2,$3,$4,$5,0,$6,TRUE,$7,$7,$8,$9::varchar,$10::timestamptz,$10::timestamptz+($11::integer*interval '1 second'),$10::timestamptz,$10::timestamptz,$10::timestamptz) ON CONFLICT(event_id,user_id,rule_code) DO NOTHING`, event.ID, rule.code, rule.versionID, rule.revision, rule.family, count, evidence, decisionID, lifecycle, event.OccurredAt, rule.window); err != nil {
 					return err
 				}
 			}
@@ -467,13 +467,13 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 		if !event.OccurredAt.Add(time.Duration(rule.window) * time.Second).After(time.Now().UTC()) {
 			lifecycle = "expired"
 		}
-		if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,$2,$3,$4,CASE WHEN $4='active' THEN $5 ELSE 0 END,$5,$6,$7,$8) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.UserID, event.ID, lifecycle, rule.score, riskLevel, evidence, event.OccurredAt); err != nil {
+		if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,$2,$3,$4::varchar,CASE WHEN $4::varchar='active' THEN $5 ELSE 0 END,$5,$6,$7,$8) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.UserID, event.ID, lifecycle, rule.score, riskLevel, evidence, event.OccurredAt); err != nil {
 			return err
 		}
 		var signalID int64
 		err = r.db.QueryRowContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at)
-SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,NULLIF($10,0),NULLIF($11,0),$12,$12,$13,$14,$15,$15+($16*interval '1 second'),$15,$15,$15
-WHERE $3<>'ip' OR NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$10 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
+SELECT $1,$2,$3::varchar,$4,$5,$6,$7,$8,$9,TRUE,NULLIF($10,0),NULLIF($11,0),$12,$12,$13,$14::varchar,$15::timestamptz,$15::timestamptz+($16::integer*interval '1 second'),$15::timestamptz,$15::timestamptz,$15::timestamptz
+WHERE $3::varchar<>'ip' OR NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$10 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
 ON CONFLICT(event_id,user_id,rule_code) DO UPDATE SET last_hit_at=GREATEST(risk_identity_signals.last_hit_at,EXCLUDED.last_hit_at) RETURNING id`, event.ID, event.UserID, rule.domain, rule.code, rule.versionID, rule.revision, rule.family, rule.score, count, event.NetworkID, deviceID, evidence, decisionID, lifecycle, event.OccurredAt, rule.window).Scan(&signalID)
 		if errors.Is(err, sql.ErrNoRows) {
 			_, _ = r.db.ExecContext(ctx, `UPDATE risk_decisions SET status='resolved',current_score=0 WHERE decision_id=$1`, decisionID)
