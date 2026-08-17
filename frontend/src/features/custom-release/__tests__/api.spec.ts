@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiClient } from '@/api/client'
 import {
   applyUpdate,
+  prepareIdentityRollout,
+  applyIdentityRollout,
   prepareUpdate,
   prepareRollback,
   applyRollback,
@@ -81,6 +83,17 @@ describe('upstream preparation jobs', () => {
 			post.mock.calls[1][2]?.headers?.['Idempotency-Key']
 		)
 	})
+
+  it('uses the administrator identity rollout prepare and apply endpoints', async () => {
+    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: { job_id: 'update-identity' } })
+    await prepareIdentityRollout('stage0-safe-reset')
+    await applyIdentityRollout('update-identity')
+    expect(post).toHaveBeenNthCalledWith(1, '/admin/system/identity-rollout/prepare', { transition: 'stage0-safe-reset' }, { headers: { 'Idempotency-Key': expect.any(String) } })
+    expect(post).toHaveBeenNthCalledWith(2, '/admin/system/identity-rollout/apply', { job_id: 'update-identity' }, { headers: { 'Idempotency-Key': expect.any(String) } })
+    expect(post.mock.calls[0][2]?.headers?.['Idempotency-Key']).not.toBe(
+      post.mock.calls[1][2]?.headers?.['Idempotency-Key']
+    )
+  })
 
   it('uses separate prepare and apply endpoints for complete snapshot rollback', async () => {
     const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: { job_id: 'rollback-1' } })

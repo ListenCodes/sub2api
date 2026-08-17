@@ -37,8 +37,9 @@
         <div
           v-if="dropdownOpen"
           ref="dropdownRef"
-          class="absolute left-0 z-50 mt-2 overflow-hidden whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
+          :style="dropdownStyle"
+          class="absolute left-0 z-50 mt-2 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
+          :class="(rollbackPanelOpen || identityPanelOpen) && isReleaseBuild ? 'w-80' : 'w-64'"
         >
           <!-- Header with refresh button -->
           <div
@@ -160,7 +161,7 @@
                 </div>
                 <button
                   @click="handleApply"
-                  :disabled="applying || preparedRemainingSeconds <= 0"
+                  :disabled="applying || identityRolloutActive || preparedRemainingSeconds <= 0"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Icon v-if="applying" name="refresh" size="sm" :stroke-width="2" class="animate-spin" />
@@ -286,7 +287,7 @@
                 <!-- Retry button -->
                 <button
                   @click="handleUpdate"
-                  :disabled="updating"
+                  :disabled="updating || identityRolloutActive"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {{ t('version.retryPreparation') }}
@@ -344,7 +345,7 @@
                 <button
                   v-if="needRestart"
                   @click="handleRestart"
-                  :disabled="restarting"
+                  :disabled="restarting || identityRolloutActive"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <svg
@@ -419,7 +420,7 @@
                 <!-- Sync button -->
                 <button
                   @click="handleUpdate"
-                  :disabled="updating"
+                  :disabled="updating || identityRolloutActive"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <svg v-if="updating" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -482,7 +483,7 @@
                 <!-- Update button -->
                 <button
                   @click="handleUpdate"
-                  :disabled="updating"
+                  :disabled="updating || identityRolloutActive"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <svg v-if="updating" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -525,7 +526,7 @@
                 <button
                   v-else-if="hasUpdate"
                   @click="handleUpdate"
-                  :disabled="updating"
+                  :disabled="updating || identityRolloutActive"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Icon name="refresh" size="sm" :stroke-width="2" />
@@ -555,6 +556,7 @@
                 <button
                   data-testid="rollback-toggle"
                   @click="toggleRollbackPanel"
+                  :disabled="identityRolloutActive || updating || Boolean(preparedJobID)"
                   class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
                 >
                   <span class="flex items-center gap-1.5">
@@ -594,6 +596,32 @@
                   </div>
                 </transition>
               </div>
+
+              <div v-if="isReleaseBuild" class="mt-2 border-t border-gray-100 pt-2 dark:border-dark-700">
+                <button
+                  data-testid="identity-rollout-toggle"
+                  @click="toggleIdentityPanel"
+                  class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
+                >
+                  <span class="flex items-center gap-1.5">
+                    <Icon name="cog" size="xs" :stroke-width="2" />
+                    {{ t('version.identityRollout') }}
+                  </span>
+                  <Icon
+                    name="chevronDown"
+                    size="xs"
+                    :stroke-width="2"
+                    class="transition-transform duration-200"
+                    :class="{ 'rotate-180': identityPanelOpen }"
+                  />
+                </button>
+                <IdentityRolloutPanel
+                  v-if="identityPanelOpen"
+                  class="mt-2"
+                  :blocked="updating || rollingBack || Boolean(preparedJobID) || Boolean(preparedRollbackJobID)"
+                  @active-change="handleIdentityActivity"
+                />
+              </div>
             </template>
           </div>
         </div>
@@ -608,11 +636,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores'
 import { useCustomReleaseStore } from './store'
 import ReleaseRollbackPanel from './ReleaseRollbackPanel.vue'
+import IdentityRolloutPanel from './IdentityRolloutPanel.vue'
 import {
   prepareUpdate,
   applyUpdate,
@@ -633,6 +662,7 @@ import Icon from '@/components/icons/Icon.vue'
 
 const RELEASE_JOB_STORAGE_KEY = 'sub2api-release-job-id'
 const UPDATE_POLL_INTERVAL_MS = 5000
+const IDENTITY_POLL_INTERVAL_MS = 3000
 const UPDATE_POLL_DEADLINE_MS = 90 * 60 * 1000
 
 const customReleaseMessages = {
@@ -656,6 +686,7 @@ const customReleaseMessages = {
       updateConflictLog: 'Diagnostic artifact',
       updateConflictCommits: 'Merge base -> stable Release',
       retryPreparation: 'Retry preparation',
+      identityRollout: 'Identity rollout',
       requiredCheck: 'Required check',
       checkConclusion: 'Conclusion',
       errorCode: 'Error code',
@@ -714,6 +745,7 @@ const customReleaseMessages = {
       updateConflictLog: '诊断资料',
       updateConflictCommits: '合并基线 -> 稳定 Release',
       retryPreparation: '重试准备',
+      identityRollout: '身份能力发布',
       requiredCheck: '必需检查',
       checkConclusion: '结论',
       errorCode: '错误代码',
@@ -767,6 +799,8 @@ const isAdmin = computed(() => authStore.isAdmin)
 
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownStyle = ref<Record<string, string>>({})
+const dropdownOffsetX = ref(0)
 
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
@@ -840,6 +874,9 @@ const applying = ref(false)
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
+const identityPanelOpen = ref(false)
+const identityRolloutActive = ref(false)
+const identityRolloutJobID = ref('')
 const rollbackReleases = ref<ReleaseIdentity[]>([])
 const rollbackOperation = ref<UpdateJob | null>(null)
 const rollbackVersionsLoading = ref(false)
@@ -847,6 +884,10 @@ const rollbackVersionsError = ref('')
 const preparedRollbackJobID = ref('')
 const rollingBack = ref(false)
 const rollbackError = ref('')
+let identityPollTimer: ReturnType<typeof setInterval> | null = null
+let identityPollGeneration = 0
+let identityPollInFlightGeneration = -1
+let identityMissingPolls = 0
 const rollbackPanelError = computed(
   () => appStore.currentReleaseError || rollbackVersionsError.value || rollbackError.value
 )
@@ -861,7 +902,12 @@ function toggleDropdown() {
     resetTerminalUpdateFeedback()
   }
   dropdownOpen.value = opening
-  if (opening) acknowledgeCurrentNotice()
+  if (opening) {
+    acknowledgeCurrentNotice()
+    dropdownOffsetX.value = 0
+    dropdownStyle.value = {}
+    void nextTick(updateDropdownGeometry)
+  }
 }
 
 function acknowledgeCurrentNotice(): void {
@@ -944,7 +990,7 @@ function resetTerminalUpdateFeedback() {
 }
 
 async function handleUpdate() {
-  if (updating.value) return
+  if (updating.value || identityRolloutActive.value) return
 
   acknowledgeCurrentNotice()
   updating.value = true
@@ -979,7 +1025,7 @@ async function handleUpdate() {
 }
 
 async function handleApply() {
-  if (applying.value || !preparedJobID.value) return
+  if (applying.value || identityRolloutActive.value || !preparedJobID.value) return
 
   acknowledgeCurrentNotice()
   applying.value = true
@@ -1196,14 +1242,29 @@ function startUpdatePolling(jobID: string, initial?: UpdateJob) {
 
 async function resumeUpdatePolling() {
   const storedJobID = localStorage.getItem(RELEASE_JOB_STORAGE_KEY) || undefined
-  const localRequest = storedJobID ? readUpdateStatus(storedJobID) : Promise.resolve(undefined)
-  const [localJob, serverJob] = await Promise.all([localRequest, readUpdateStatus(undefined)])
-  const status = selectLatestUpdateJob(localJob, serverJob)
+  const localRequest = storedJobID
+    ? readUpdateStatus(storedJobID)
+    : Promise.resolve<UpdateStatusRead>({ unavailable: false })
+  const [localResult, serverResult] = await Promise.all([localRequest, readUpdateStatus(undefined)])
+  const status = selectLatestUpdateJob(localResult.job, serverResult.job)
 
   if (!status) {
-    if (storedJobID && !localJob) localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+    if (localResult.unavailable || serverResult.unavailable) handleIdentityActivity(true)
+    else handleIdentityActivity(false, identityRolloutJobID.value || undefined)
+    if (storedJobID && !localResult.job && !localResult.unavailable) {
+      localStorage.removeItem(RELEASE_JOB_STORAGE_KEY)
+    }
     return
   }
+  await resumeResolvedUpdateJob(status, storedJobID)
+}
+
+async function resumeResolvedUpdateJob(status: UpdateJob, storedJobID?: string) {
+  if (status.update_kind === 'identity-config') {
+    handleIdentityActivity(!isTerminalUpdateStatus(status.status), status.job_id)
+    return
+  }
+  handleIdentityActivity(false, identityRolloutJobID.value || undefined)
   if (status.operation_kind === 'rollback') {
     if (!isTerminalUpdateStatus(status.status)) {
       startUpdatePolling(status.job_id, status)
@@ -1241,12 +1302,21 @@ async function resumeUpdatePolling() {
   resetTerminalUpdateFeedback()
 }
 
-async function readUpdateStatus(jobID?: string): Promise<UpdateJob | undefined> {
+interface UpdateStatusRead {
+  job?: UpdateJob
+  unavailable: boolean
+}
+
+async function readUpdateStatus(jobID?: string): Promise<UpdateStatusRead> {
   try {
-    return await getUpdateStatus(jobID)
-  } catch {
-    return undefined
+    return { job: await getUpdateStatus(jobID), unavailable: false }
+  } catch (cause: unknown) {
+    return { unavailable: !isStatusNotFound(cause) }
   }
+}
+
+function isStatusNotFound(cause: unknown): boolean {
+  return (cause as { response?: { status?: number } })?.response?.status === 404
 }
 
 function selectLatestUpdateJob(
@@ -1309,8 +1379,10 @@ function resetRollbackState() {
 }
 
 async function toggleRollbackPanel() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || identityRolloutActive.value || updating.value || preparedJobID.value) return
+  identityPanelOpen.value = false
   rollbackPanelOpen.value = !rollbackPanelOpen.value
+  void nextTick(updateDropdownGeometry)
   // Source builds only show a hint. Release builds load rollback-only data on demand.
   if (!rollbackPanelOpen.value || !isReleaseBuild.value) return
 
@@ -1322,6 +1394,78 @@ async function toggleRollbackPanel() {
     requests.push(loadRollbackVersions())
   }
   await Promise.all(requests)
+}
+
+function toggleIdentityPanel() {
+  rollbackPanelOpen.value = false
+  identityPanelOpen.value = !identityPanelOpen.value
+  void nextTick(updateDropdownGeometry)
+}
+
+function handleIdentityActivity(active: boolean, jobID?: string) {
+  const wasActive = identityRolloutActive.value
+  const previousJobID = identityRolloutJobID.value
+  if (
+    !active &&
+    identityRolloutJobID.value &&
+    (!jobID || jobID !== identityRolloutJobID.value)
+  ) {
+    return
+  }
+  identityRolloutActive.value = active
+  if (!active) {
+    identityRolloutJobID.value = ''
+    stopIdentityPolling()
+    return
+  }
+  if (jobID) identityRolloutJobID.value = jobID
+  if (!wasActive || (jobID && jobID !== previousJobID)) {
+    identityPollGeneration++
+    identityMissingPolls = 0
+  }
+  rollbackPanelOpen.value = false
+  if (!identityPollTimer) {
+    identityPollTimer = setInterval(() => void pollIdentityStatus(), IDENTITY_POLL_INTERVAL_MS)
+  }
+}
+
+function stopIdentityPolling() {
+  if (identityPollTimer) clearInterval(identityPollTimer)
+  identityPollTimer = null
+  identityPollGeneration++
+  identityMissingPolls = 0
+}
+
+async function pollIdentityStatus() {
+  if (!identityRolloutActive.value) return
+  const generation = identityPollGeneration
+  if (identityPollInFlightGeneration === generation) return
+  identityPollInFlightGeneration = generation
+  const jobID = identityRolloutJobID.value || undefined
+  try {
+    const status = await getUpdateStatus(jobID)
+    if (generation !== identityPollGeneration || jobID !== (identityRolloutJobID.value || undefined)) return
+    if (status.update_kind === 'identity-config') {
+      identityMissingPolls = 0
+      handleIdentityActivity(!isTerminalUpdateStatus(status.status), status.job_id)
+    } else {
+      await resumeResolvedUpdateJob(
+        status,
+        localStorage.getItem(RELEASE_JOB_STORAGE_KEY) || undefined
+      )
+    }
+  } catch (cause: unknown) {
+    if (
+      generation === identityPollGeneration &&
+      jobID === (identityRolloutJobID.value || undefined) &&
+      isStatusNotFound(cause) &&
+      (jobID || ++identityMissingPolls >= 2)
+    ) {
+      handleIdentityActivity(false, jobID)
+    }
+  } finally {
+    if (identityPollInFlightGeneration === generation) identityPollInFlightGeneration = -1
+  }
 }
 
 async function loadRollbackVersions() {
@@ -1349,7 +1493,7 @@ async function handleRollbackRetry() {
 }
 
 async function handlePrepareRollback(releaseID: string) {
-  if (!isAdmin.value || rollingBack.value) return
+  if (!isAdmin.value || rollingBack.value || identityRolloutActive.value) return
   acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
@@ -1365,7 +1509,7 @@ async function handlePrepareRollback(releaseID: string) {
 }
 
 async function handleApplyRollback(jobID: string) {
-  if (!isAdmin.value || rollingBack.value) return
+  if (!isAdmin.value || rollingBack.value || identityRolloutActive.value) return
   acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
@@ -1382,7 +1526,7 @@ async function handleApplyRollback(jobID: string) {
 }
 
 async function handleRollbackExpired(jobID: string) {
-  if (!isAdmin.value || rollingBack.value) return
+  if (!isAdmin.value || rollingBack.value || identityRolloutActive.value) return
   acknowledgeCurrentNotice()
   rollingBack.value = true
   rollbackError.value = ''
@@ -1416,7 +1560,7 @@ function formatConflictTarget(
 }
 
 async function handleRestart() {
-  if (restarting.value) return
+  if (restarting.value || identityRolloutActive.value) return
 
   restarting.value = true
   restartCountdown.value = 8
@@ -1468,6 +1612,27 @@ async function checkServiceAndReload() {
   window.location.reload()
 }
 
+function updateDropdownGeometry() {
+  const element = dropdownRef.value
+  if (!element || !dropdownOpen.value) return
+
+  const viewportPadding = 8
+  const rect = element.getBoundingClientRect()
+  let offsetX = dropdownOffsetX.value
+  if (rect.right > window.innerWidth - viewportPadding) {
+    offsetX -= rect.right - (window.innerWidth - viewportPadding)
+  }
+  if (rect.left < viewportPadding) {
+    offsetX += viewportPadding - rect.left
+  }
+  dropdownOffsetX.value = offsetX
+  dropdownStyle.value = {
+    maxWidth: `${Math.max(0, window.innerWidth - viewportPadding * 2)}px`,
+    maxHeight: `${Math.max(0, window.innerHeight - rect.top - viewportPadding)}px`,
+    transform: `translateX(${offsetX}px)`
+  }
+}
+
 function handleClickOutside(event: MouseEvent) {
   const target = event.target as Node
   const button = (event.target as Element).closest('button')
@@ -1479,6 +1644,7 @@ function handleClickOutside(event: MouseEvent) {
 onMounted(() => {
   if (isAdmin.value) void initializeReleaseBadge()
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', updateDropdownGeometry)
 })
 
 async function initializeReleaseBadge() {
@@ -1489,7 +1655,9 @@ async function initializeReleaseBadge() {
 onBeforeUnmount(() => {
   stopUpdatePolling()
   stopPreparedCountdown()
+  stopIdentityPolling()
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', updateDropdownGeometry)
 })
 </script>
 

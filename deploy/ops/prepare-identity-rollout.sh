@@ -80,6 +80,31 @@ require_flags() {
   done
 }
 
+has_identity_state_to_reset() {
+  local key value
+  for key in \
+    RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED \
+    RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_ADMIN_ENABLED \
+    RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
+    RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED \
+    RISK_IDENTITY_CURRENT_SCORE_ENABLED RISK_IDENTITY_CASES_ENABLED \
+    RISK_IDENTITY_EXPLAIN_ENABLED RISK_IDENTITY_DELIVERY_ENABLED \
+    RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
+    if ! value="$(env_value "$ENV_FILE" "$key")"; then
+      return 0
+    fi
+    [[ -n "$value" && "$value" != false ]] && return 0
+  done
+  if ! value="$(env_value "$ENV_FILE" RISK_IDENTITY_SHADOW_UNTIL)"; then
+    return 0
+  fi
+  [[ -n "$value" ]] && return 0
+  if ! value="$(env_value "$ENV_FILE" RISK_IDENTITY_GEO_SOURCE)"; then
+    return 0
+  fi
+  [[ -n "$value" && "$value" != cloudflare_or_local ]]
+}
+
 identity_health() {
 	docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz
 }
@@ -196,6 +221,21 @@ ensure_identity_secrets() {
 apply_transition() {
   local target="$1" transition="$2" key value shadow_until
   case "$transition" in
+    stage0-safe-reset)
+      has_identity_state_to_reset || return 1
+      for key in \
+        RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED \
+        RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_ADMIN_ENABLED \
+        RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
+        RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED \
+        RISK_IDENTITY_CURRENT_SCORE_ENABLED RISK_IDENTITY_CASES_ENABLED \
+        RISK_IDENTITY_EXPLAIN_ENABLED RISK_IDENTITY_DELIVERY_ENABLED \
+        RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
+        set_env_value "$target" "$key" false || return 1
+      done
+      set_env_value "$target" RISK_IDENTITY_GEO_SOURCE cloudflare_or_local || return 1
+      set_env_value "$target" RISK_IDENTITY_SHADOW_UNTIL ''
+      ;;
     stage1-v2)
       require_flags \
         RISK_IDENTITY_V2_ENABLED false RISK_IDENTITY_IP_COLLECTION_ENABLED false \
@@ -308,7 +348,7 @@ touch "$LOG"
   && "$(jq -r '.update_kind // empty' "$JOB_FILE")" == identity-config ]] \
   || fail_prepare 'identity rollout job contract is invalid' INVALID_IDENTITY_OPERATION
 IDENTITY_TRANSITION="$(jq -r '.identity_transition // empty' "$JOB_FILE")"
-[[ "$IDENTITY_TRANSITION" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] \
+[[ "$IDENTITY_TRANSITION" =~ ^stage(0-safe-reset|1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] \
   || fail_prepare 'identity rollout transition is invalid' INVALID_IDENTITY_TRANSITION
 
 LEDGER_STATE_PATH="$(ledger_state_path)"

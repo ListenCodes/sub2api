@@ -55,7 +55,7 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   const common = read('deploy/ops/release-common.sh')
   const ledger = read('deploy/ops/release-ledger.sh')
   const dispatcher = read('deploy/ops/sync-and-publish.sh')
-  for (const transition of ['stage1-v2', 'stage1-ip', 'stage1-device', 'stage2-admin', 'stage3-shadow-window', 'stage3-rules', 'stage4-geo']) {
+  for (const transition of ['stage0-safe-reset', 'stage1-v2', 'stage1-ip', 'stage1-device', 'stage2-admin', 'stage3-shadow-window', 'stage3-rules', 'stage4-geo']) {
     assert.match(prepare, new RegExp(transition))
     assert.match(common, new RegExp(transition))
   }
@@ -75,6 +75,8 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   assert.match(prepare, /2c0f:f248::\/32/)
   assert.match(read('deploy/docker-compose.custom.yml'), /SERVER_TRUSTED_PROXIES: \$\{SERVER_TRUSTED_PROXIES:-\}/)
   assert.match(apply, /validate_identity_runtime/)
+  assert.match(prepare, /stage0-safe-reset[\s\S]*RISK_IDENTITY_V2_ENABLED[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS[\s\S]*RISK_IDENTITY_SHADOW_UNTIL ''/)
+  assert.match(apply, /if \[\[ "\$IDENTITY_TRANSITION" == stage0-safe-reset \]\]; then[\s\S]*identity\.domains\.ip == "disabled"[\s\S]*identity\.domains\.device == "disabled"[\s\S]*identity\.domains\.composite == "disabled"[\s\S]*identity\.effective_rule_count == 0[\s\S]*identity\.features\.delivery \| not/)
   assert.match(apply, /UPDATE_KIND[^\n]*identity-config[^\n]*IDENTITY_TRANSITION[^\n]*stage1-/)
   assert.match(apply, /IDENTITY_TRANSITION" == stage4-geo/)
   assert.match(prepare, /stage4-geo[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS false[\s\S]*RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true[\s\S]*RISK_IDENTITY_GEO_SOURCE cloudflare_verified/)
@@ -96,7 +98,7 @@ test('identity rollout is a fixed-order ledger-backed configuration release', { 
   assert.match(prepare, /release_install_manifest_files/)
   assert.doesNotMatch(prepare, /> "\$MANIFEST_DIR\/manifest\.(?:json|sha256)"/)
   assert.match(apply, /restore_interrupted_base_runtime/)
-  assert.match(apply, /"\$UPDATE_KIND" == identity-config && "\$IDENTITY_TRANSITION" != stage1-\*/)
+	assert.match(apply, /"\$UPDATE_KIND" == identity-config && "\$IDENTITY_TRANSITION" != stage0-safe-reset && "\$IDENTITY_TRANSITION" != stage1-\*/)
 	assert.match(apply, /"\$IDENTITY_TRANSITION" != stage4-geo/)
 	const preSwitch = apply.lastIndexOf("validate_identity_pre_switch || fail_before_mutation")
 	const rollbackStart = apply.indexOf('rollback_started=true', preSwitch)

@@ -174,12 +174,14 @@ container_env_value() {
 }
 
 validate_identity_runtime() {
-  local key expected actual health expected_enabled expected_admin expected_geo_source
-  [[ "$UPDATE_KIND" == identity-config ]] || return 0
-	expected="$(awk -F= '$1=="SERVER_TRUSTED_PROXIES" {value=substr($0,length($1)+2)} END {print value}' "$TARGET_DIR/.env")"
-	[[ "$expected" =~ ^[^,]+/(32|128),173\.245\.48\.0/20, ]] || return 1
-	actual="$(container_env_value sub2api SERVER_TRUSTED_PROXIES)" || return 1
-	[[ "$actual" == "$expected" ]] || return 1
+	local key expected actual health expected_enabled expected_admin expected_geo_source
+	[[ "$UPDATE_KIND" == identity-config ]] || return 0
+	if [[ "$IDENTITY_TRANSITION" != stage0-safe-reset ]]; then
+		expected="$(awk -F= '$1=="SERVER_TRUSTED_PROXIES" {value=substr($0,length($1)+2)} END {print value}' "$TARGET_DIR/.env")"
+		[[ "$expected" =~ ^[^,]+/(32|128),173\.245\.48\.0/20, ]] || return 1
+		actual="$(container_env_value sub2api SERVER_TRUSTED_PROXIES)" || return 1
+		[[ "$actual" == "$expected" ]] || return 1
+	fi
   for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_DELIVERY_ENABLED RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
     expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
     [[ "$expected" == true || "$expected" == false ]] || return 1
@@ -226,6 +228,18 @@ validate_identity_runtime() {
 			and .identity.delivery.failed == 0
 		' <<< "$health" >/dev/null || return 1
 		jq -e '.identity.effective_rule_count >= 5' <<< "$health" >/dev/null || return 1
+	fi
+	if [[ "$IDENTITY_TRANSITION" == stage0-safe-reset ]]; then
+		jq -e '
+			.identity.domains.ip == "disabled"
+			and .identity.domains.device == "disabled"
+			and .identity.domains.composite == "disabled"
+			and .identity.effective_rule_count == 0
+			and (.identity.features.current_score | not)
+			and (.identity.features.cases | not)
+			and (.identity.features.explain | not)
+			and (.identity.features.delivery | not)
+		' <<< "$health" >/dev/null || return 1
 	fi
 }
 
@@ -354,7 +368,7 @@ validate_update_identity_contract() {
 	  and $manifest.extensions_digest == $base.extensions_digest
 	  and $manifest.current_env_sha256 == $base.env_sha256
 	  and $manifest.target_env_sha256 != $base.env_sha256
-	  and ($manifest.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
+	  and ($manifest.identity_transition | IN("stage0-safe-reset", "stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
 	elif $manifest.update_kind == "official" then
       $manifest.advances_custom_version == false
       and $manifest.proposed_custom_sequence == $base.custom_version_sequence
@@ -456,7 +470,7 @@ restore_base_before_main_switch() {
 restore_interrupted_base_runtime() {
   local source_head="$1" source_ref="$2"
   if [[ "$operation_status" == switching_extensions \
-    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage1-* && "$IDENTITY_TRANSITION" != stage4-geo) ]]; then
+    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage0-safe-reset && "$IDENTITY_TRANSITION" != stage1-* && "$IDENTITY_TRANSITION" != stage4-geo) ]]; then
     restore_base_before_main_switch "$source_head" "$source_ref"
   else
     restore_base_runtime "$source_head" "$source_ref"
@@ -668,7 +682,7 @@ SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS
   || abort_apply 'extensions switch failed' EXTENSIONS_SWITCH_FAILED
 wait_container_healthy extensions-self || abort_apply 'extensions health check failed' EXTENSIONS_HEALTH_FAILED
 
-if [[ "$UPDATE_KIND" != identity-config || "$IDENTITY_TRANSITION" == stage1-* || "$IDENTITY_TRANSITION" == stage4-geo ]]; then
+if [[ "$UPDATE_KIND" != identity-config || "$IDENTITY_TRANSITION" == stage0-safe-reset || "$IDENTITY_TRANSITION" == stage1-* || "$IDENTITY_TRANSITION" == stage4-geo ]]; then
   release_job_update "$JOB_ID" switching_main "Switching main application to $MAIN_DIGEST" '{}'
   main_switch_started=true
   SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \

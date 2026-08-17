@@ -394,7 +394,7 @@ stop and preserve the diff before proceeding.
 
 Identity V2 must advance in order. A failure rolls back only the current identity switch and must not interrupt registration, login, or API traffic.
 
-1. Stage 0 applies additive schema with every `RISK_IDENTITY_*_ENABLED=false`.
+1. Stage 0 applies additive schema with every `RISK_IDENTITY_*_ENABLED=false`. If an older deployment left identity switches enabled, use the audited `stage0-safe-reset` transition before Stage 1; it disables all identity collection, delivery, reads, rules, cases, explain, and Cloudflare-trust switches without deleting tables, events, decisions, or evidence.
 2. Stage 1 enables `RISK_IDENTITY_V2_ENABLED`, then separately enables `RISK_IDENTITY_IP_COLLECTION_ENABLED` and `RISK_IDENTITY_DEVICE_COLLECTION_ENABLED` while verifying queue drops, encryption keys, trusted client IPs, browser identity quality, and geo source health.
 3. Stage 2 enables `RISK_IDENTITY_ADMIN_ENABLED` for administrator sampling of full IP, browser instance, API client, and associated-account evidence. The extension never receives main-user-table credentials.
 4. Stage 3 sets `RISK_IDENTITY_SHADOW_UNTIL` at least 14 days ahead on initial activation, then enables the global, IP, device, and composite rule switches. Every V2 signal remains Shadow; registration rejection and automatic bans are forbidden.
@@ -411,10 +411,14 @@ log with row counts and never runs again.
 Do not edit the production `.env` directly for these transitions. Use the
 administrator-only `POST /api/v1/admin/system/identity-rollout/prepare` and
 `POST /api/v1/admin/system/identity-rollout/apply` two-phase endpoints. Prepare
-accepts exactly one transition name: `stage1-v2`, `stage1-ip`,
+accepts exactly one transition name: `stage0-safe-reset`, `stage1-v2`, `stage1-ip`,
 `stage1-device`, `stage2-admin`, `stage3-shadow-window`, `stage3-rules`, or
 `stage4-geo`.
-The host rejects skipped, repeated, or reversed transitions, produces the same
+`stage0-safe-reset` is also the supported fail-safe rollback from any enabled
+identity stage. It recreates both application containers, requires every rule
+domain to report disabled with zero effective rules, and preserves all database
+evidence for later review or replay. The host rejects skipped, repeated, or reversed
+activation transitions, produces the same
 complete paired backup as a code release, and records `source_kind` as
 `identity-config` without increasing the custom version high-water.
 

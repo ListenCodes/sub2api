@@ -48,7 +48,7 @@ ledger_validate_release() {
     and (.published_at | fromdateiso8601 > 0)
     and (.source_kind | IN("official", "custom", "combined", "bootstrap", "identity-config"))
     and (if .source_kind == "identity-config" then
-      (.identity_transition | IN("stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
+      (.identity_transition | IN("stage0-safe-reset", "stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
     else (.identity_transition // "") == "" end)
     and (.operation_id | type == "string" and length > 0)
   ' "$path" >/dev/null || return 1

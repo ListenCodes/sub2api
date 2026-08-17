@@ -44,6 +44,15 @@ export interface VersionInfo {
 }
 
 export type UpdateKind = 'none' | 'official' | 'custom' | 'combined' | 'docs-only'
+export type IdentityRolloutTransition =
+  | 'stage0-safe-reset'
+  | 'stage1-v2'
+  | 'stage1-ip'
+  | 'stage1-device'
+  | 'stage2-admin'
+  | 'stage3-shadow-window'
+  | 'stage3-rules'
+  | 'stage4-geo'
 export interface ReleaseIdentity {
   release_id: string
   official_version: string
@@ -147,7 +156,8 @@ export interface UpdateJob {
   base_commit?: string
   target_commit?: string
   target_custom_commit?: string
-  update_kind?: UpdateKind
+  update_kind?: UpdateKind | 'identity-config'
+  identity_transition?: IdentityRolloutTransition
   production_commit?: string
   stable_release_tag?: string
   stable_release_commit?: string
@@ -229,6 +239,24 @@ export async function applyUpdate(jobID: string): Promise<UpdateJob> {
   return data
 }
 
+export async function prepareIdentityRollout(transition: IdentityRolloutTransition): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>(
+    '/admin/system/identity-rollout/prepare',
+    { transition },
+    { headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() } }
+  )
+  return data
+}
+
+export async function applyIdentityRollout(jobID: string): Promise<UpdateJob> {
+  const { data } = await apiClient.post<UpdateJob>(
+    '/admin/system/identity-rollout/apply',
+    { job_id: jobID },
+    { headers: { 'Idempotency-Key': newSystemOperationIdempotencyKey() } }
+  )
+  return data
+}
+
 /**
  * Get the current status of an asynchronous system update.
  */
@@ -277,6 +305,8 @@ export const systemAPI = {
   markCustomReleaseRead,
   prepareUpdate,
   applyUpdate,
+  prepareIdentityRollout,
+  applyIdentityRollout,
   getUpdateStatus,
   prepareRollback,
   applyRollback,

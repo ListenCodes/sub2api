@@ -72,6 +72,7 @@ const (
 	UpdateStatusExpired             = ReleaseStatusExpired
 	UpdateStatusDrifted             = ReleaseStatusDrifted
 
+	IdentityTransitionStage0SafeReset    = "stage0-safe-reset"
 	IdentityTransitionStage1V2           = "stage1-v2"
 	IdentityTransitionStage1IP           = "stage1-ip"
 	IdentityTransitionStage1Device       = "stage1-device"

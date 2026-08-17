@@ -36,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   getRollbackReleases: vi.fn(),
   prepareRollback: vi.fn(),
   applyRollback: vi.fn(),
+  prepareIdentityRollout: vi.fn(),
+  applyIdentityRollout: vi.fn(),
   rollback: vi.fn(),
   restartService: vi.fn()
 }))
@@ -61,6 +63,8 @@ vi.mock('@/features/custom-release/api', () => ({
   getRollbackReleases: mocks.getRollbackReleases,
   prepareRollback: mocks.prepareRollback,
   applyRollback: mocks.applyRollback,
+  prepareIdentityRollout: mocks.prepareIdentityRollout,
+  applyIdentityRollout: mocks.applyIdentityRollout,
   rollback: mocks.rollback,
   restartService: mocks.restartService,
   isTerminalUpdateStatus: (status: string) =>
@@ -113,6 +117,8 @@ describe('VersionBadge conflict reporting', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 })
   })
 
   it('keeps runtime updates amber independently from advisory unread state', async () => {
@@ -918,6 +924,184 @@ describe('VersionBadge conflict reporting', () => {
     expect(mocks.appStore.fetchCurrentRelease).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="confirm-rollback"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="rollback-target-pair"]')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('blocks ordinary release actions while an identity rollout is active', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 })
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 32, y: 100, left: 32, right: 336, top: 100, bottom: 180,
+      width: 304, height: 80, toJSON: () => ({})
+    } as DOMRect)
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus.mockResolvedValue({
+      job_id: 'update-identity-running',
+      update_kind: 'identity-config',
+      identity_transition: 'stage1-v2',
+      action: 'apply',
+      status: 'apply_queued',
+      message: 'identity transition queued',
+      need_restart: false
+    })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+    await nextTick()
+
+    const dropdown = wrapper.get('[data-testid="custom-release-badge"]').element.nextElementSibling as HTMLElement
+    expect(dropdown.style.maxWidth).toBe('304px')
+    expect(dropdown.style.maxHeight).toBe('92px')
+    expect(dropdown.style.transform).toBe('translateX(-24px)')
+    expect(dropdown.className).toContain('overflow-y-auto')
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
+    const updateButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('version.updateNow'))
+    expect(updateButton).toBeDefined()
+    expect(updateButton!.attributes('disabled')).toBeDefined()
+    await updateButton!.trigger('click')
+    expect(mocks.prepareUpdate).not.toHaveBeenCalled()
+    expect(mocks.applyUpdate).not.toHaveBeenCalled()
+    wrapper.unmount()
+    rectSpy.mockRestore()
+  })
+
+  it('keeps tracking an identity rollout after the dropdown closes', async () => {
+    vi.useFakeTimers()
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus
+      .mockResolvedValueOnce({
+        job_id: 'update-identity-running', update_kind: 'identity-config',
+        action: 'apply', status: 'apply_queued', message: 'queued', need_restart: false
+      })
+      .mockResolvedValue({
+        job_id: 'update-identity-running', update_kind: 'identity-config',
+        action: 'apply', status: 'success', message: 'complete', need_restart: false
+      })
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    const badge = wrapper.get('[data-testid="custom-release-badge"]')
+    await badge.trigger('click')
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
+    await badge.trigger('click')
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    await badge.trigger('click')
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('hands a recovered ordinary release job back to the normal poller', async () => {
+    vi.useFakeTimers()
+    const ordinaryJob = {
+      job_id: 'update-ordinary-running', update_kind: 'official' as const,
+      action: 'prepare' as const, status: 'waiting_images' as const,
+      message: 'waiting for ordinary release images', need_restart: false
+    }
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus
+      .mockRejectedValueOnce(new Error('temporary status outage'))
+      .mockResolvedValueOnce(ordinaryJob)
+      .mockRejectedValue(new Error('follow-up status outage'))
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+
+    expect(wrapper.text()).toContain('waiting for ordinary release images')
+    expect(mocks.getUpdateStatus).toHaveBeenCalledWith('update-ordinary-running')
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('ignores a stale identity response after a newer job starts', async () => {
+    vi.useFakeTimers()
+    let resolveOldPoll!: (value: Record<string, unknown>) => void
+    const oldPoll = new Promise<Record<string, unknown>>((resolve) => { resolveOldPoll = resolve })
+    mocks.getUpdateStatus.mockReset()
+    mocks.getUpdateStatus
+      .mockResolvedValueOnce({
+        job_id: 'update-identity-a', update_kind: 'identity-config',
+        action: 'apply', status: 'apply_queued', message: 'A queued', need_restart: false
+      })
+      .mockReturnValueOnce(oldPoll)
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: {
+        stubs: {
+          Icon: true,
+          IdentityRolloutPanel: {
+            name: 'IdentityRolloutPanel',
+            emits: ['activeChange'],
+            template: '<div data-testid="identity-rollout-panel-stub" />'
+          }
+        }
+      }
+    })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(3000)
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+    await wrapper.get('[data-testid="identity-rollout-toggle"]').trigger('click')
+    const panel = wrapper.getComponent({ name: 'IdentityRolloutPanel' })
+    panel.vm.$emit('activeChange', false, 'update-identity-a')
+    panel.vm.$emit('activeChange', true, 'update-identity-b')
+    await nextTick()
+    panel.vm.$emit('activeChange', false, 'update-identity-a')
+    await nextTick()
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
+
+    resolveOldPoll({
+      job_id: 'update-identity-a', update_kind: 'identity-config',
+      action: 'apply', status: 'success', message: 'A complete', need_restart: false
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('locks ordinary release actions before identity preparation returns', async () => {
+    let resolvePrepare!: (value: Awaited<ReturnType<typeof mocks.prepareIdentityRollout>>) => void
+    mocks.prepareIdentityRollout.mockReturnValue(new Promise((resolve) => { resolvePrepare = resolve }))
+
+    const wrapper = mount(VersionBadge, {
+      props: { version: '0.1.164' },
+      global: { stubs: { Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
+    await wrapper.get('[data-testid="rollback-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="rollback-panel"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="identity-rollout-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="identity-rollout-panel"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="identity-prepare"]').trigger('click')
+    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
+    expect(mocks.prepareUpdate).not.toHaveBeenCalled()
+
+    resolvePrepare({
+      job_id: 'update-identity-prepared', update_kind: 'identity-config',
+      identity_transition: 'stage0-safe-reset', action: 'prepare', status: 'prepared',
+      message: 'prepared', expires_at: new Date(Date.now() + 60_000).toISOString(), need_restart: false
+    })
+    await flushPromises()
     wrapper.unmount()
   })
 })

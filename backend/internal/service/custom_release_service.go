@@ -594,7 +594,8 @@ func (s *UpdateService) applyOperation(ctx context.Context, kind, jobID, expecte
 
 func ValidIdentityTransition(transition string) bool {
 	switch strings.TrimSpace(transition) {
-	case IdentityTransitionStage1V2,
+	case IdentityTransitionStage0SafeReset,
+		IdentityTransitionStage1V2,
 		IdentityTransitionStage1IP,
 		IdentityTransitionStage1Device,
 		IdentityTransitionStage2Admin,
