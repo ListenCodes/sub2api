@@ -118,6 +118,46 @@ before_hash="$(sha256sum "$state" "$record" "$root/data/release-state.json")"
 run_migration "$root"
 assert_eq "$before_hash" "$(sha256sum "$state" "$record" "$root/data/release-state.json")" 'idempotent migration changed ledger files'
 
+identity_root="$(seed_fixture identity-stage0-commit)"
+run_migration "$identity_root"
+identity_state="$identity_root/data/release-ledger/state.json"
+identity_base_id="$(jq -r '.current_release_id' "$identity_state")"
+identity_base_record="$identity_root/data/release-ledger/releases/$identity_base_id.json"
+identity_release_id=release-config-20260817T000000Z-aaaaaaaaa
+identity_operation_id=update-identity-stage0-ledger-test
+identity_record="$(jq --arg release_id "$identity_release_id" --arg operation_id "$identity_operation_id" \
+  '.release_id=$release_id | .operation_id=$operation_id | .source_kind="identity-config"
+   | .identity_transition="stage0-safe-reset" | .published_at="2026-08-17T00:00:00Z"' \
+  "$identity_base_record")"
+mkdir -p "$identity_root/data/release-ledger/operations"
+jq -n --arg job_id "$identity_operation_id" --arg base "$identity_base_id" --arg target "$identity_release_id" \
+  --arg official "$(jq -r '.official_version' "$identity_base_record")" \
+  --arg custom "$(jq -r '.custom_version' "$identity_base_record")" \
+  --arg target_commit "$(jq -r '.custom_commit' "$identity_base_record")" \
+  --arg stable_commit "$(jq -r '.official_commit' "$identity_base_record")" \
+  --arg main_digest "$(jq -r '.main_digest' "$identity_base_record")" \
+  --arg extensions_digest "$(jq -r '.extensions_digest' "$identity_base_record")" \
+  '{job_id:$job_id,operation_kind:"update",action:"apply",status:"health_checking",
+    base_release_id:$base,target_release_id:$target,base_custom_high_water:0,
+    update_kind:"identity-config",identity_transition:"stage0-safe-reset",
+    proposed_custom_sequence:0,advances_custom_version:false,custom_docs_only:false,
+    target_official_version:$official,target_custom_version:$custom,target_commit:$target_commit,
+    target_custom_commit:$target_commit,stable_release_tag:$official,stable_release_commit:$stable_commit,
+    main_digest:$main_digest,extensions_digest:$extensions_digest}' \
+  > "$identity_root/data/release-ledger/operations/$identity_operation_id.json"
+jq --arg operation "$identity_operation_id" '.active_operation_id=$operation' "$identity_state" > "$identity_state.tmp"
+mv "$identity_state.tmp" "$identity_state"
+PATH="$identity_root/bin:$PATH" SUB2API_DATA_DIR="$identity_root/data" \
+  SUB2API_RELEASE_BACKUP_ROOT="$identity_root/backups" \
+  SUB2API_RELEASE_LEDGER_LOCK_FILE="$identity_root/data/release-ledger.lock" \
+  bash -c 'source "$1"; ledger_commit_release "$2" 0' _ \
+    "$ROOT_DIR/deploy/ops/release-ledger.sh" "$identity_record"
+assert_eq "$identity_release_id" "$(jq -r '.current_release_id' "$identity_state")" 'Stage 0 identity commit did not move the current pointer'
+assert_eq 0 "$(jq -r '.custom_version_high_water' "$identity_state")" 'Stage 0 identity commit changed the custom high-water'
+assert_eq identity-config "$(jq -r '.source_kind' "$identity_root/data/release-ledger/releases/$identity_release_id.json")" 'Stage 0 identity release source kind mismatch'
+assert_eq stage0-safe-reset "$(jq -r '.identity_transition' "$identity_root/data/release-ledger/releases/$identity_release_id.json")" 'Stage 0 identity transition was not recorded'
+assert_eq success "$(jq -r '.status' "$identity_root/data/release-ledger/operations/$identity_operation_id.json")" 'Stage 0 identity operation did not settle successfully'
+
 default_job_path="$(SUB2API_DATA_DIR="$root/data" SUB2API_RELEASE_JOBS_DIR="$root/data/release-jobs" bash -c 'source "$1"; release_job_path update-path-check' _ "$ROOT_DIR/deploy/ops/release-state.sh")"
 assert_eq "$root/data/release-ledger/operations/update-path-check.json" "$default_job_path" 'new operation path is outside the ledger'
 mkdir -p "$root/data/release-jobs"

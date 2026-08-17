@@ -554,7 +554,7 @@ _ledger_commit_release_unlocked() {
 	identity-config)
 	  [[ "$custom_docs_only" == false && "$advances" == false ]] || return 1
 	  [[ "$(jq -r '.base_release_id' <<< "$operation")" == "$(jq -r '.release_id' "$current_record")" ]] || return 1
-	  [[ "$identity_transition" =~ ^stage(1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] || return 1
+	  [[ "$identity_transition" =~ ^stage(0-safe-reset|1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] || return 1
 	  [[ "$(jq -r '.identity_transition // empty' <<< "$record_content")" == "$identity_transition" ]] || return 1
 	  [[ "$(jq -r '.official_version' <<< "$record_content")" == "$current_official_version" ]] || return 1
 	  [[ "$(jq -r '.official_commit' <<< "$record_content")" == "$current_official_commit" ]] || return 1
