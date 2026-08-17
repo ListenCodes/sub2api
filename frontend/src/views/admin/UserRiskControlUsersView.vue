@@ -138,7 +138,7 @@ const pageSize = ref(getPersistedPageSize(20))
 const total = ref(0)
 const sortBy = ref<RiskSortBy | undefined>(undefined)
 const sortOrder = ref<'asc' | 'desc'>('desc')
-const view = ref<RiskCaseView>('pending')
+const view = ref<RiskCaseView>('all')
 const batchAction = ref<'disabled' | 'active' | 'processed' | null>(null)
 const batchReason = ref('')
 const batchValidationError = ref('')
@@ -225,7 +225,7 @@ function positiveInteger(value: string, fallback: number): number {
 function restoreRouteState() {
   if (!route) return
 	const requestedView = queryText('view') as RiskCaseView
-	view.value = caseViews.some((option) => option.value === requestedView) ? requestedView : 'pending'
+	view.value = caseViews.some((option) => option.value === requestedView) ? requestedView : 'all'
   const nextSort = queryText('sort_by')
   const allowedSorts: RiskSortBy[] = ['risk_score', 'risk_level', 'event_count', 'last_event_at', 'created_at']
   Object.assign(draft, {
@@ -249,7 +249,7 @@ async function syncRouteState() {
   if (!route || !router) return
   const query: LocationQueryRaw = { ...route.query }
   const values: Record<string, string | undefined> = {
-		view: view.value === 'pending' ? undefined : view.value,
+		view: view.value === 'all' ? undefined : view.value,
     search: String(activeFilters.search || '') || undefined,
     status: String(activeFilters.status || '') || undefined,
     risk_type: String(activeFilters.riskType || '') || undefined,

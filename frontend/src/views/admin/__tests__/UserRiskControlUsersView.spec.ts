@@ -32,6 +32,15 @@ afterEach(() => {
 })
 
 describe('UserRiskControlUsersView', () => {
+  it('loads all users by default', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+
+    mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'all' }))
+  })
+
   it('uses the shared responsive workspace and filter controls', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1, page: 1, page_size: 20 })
 
