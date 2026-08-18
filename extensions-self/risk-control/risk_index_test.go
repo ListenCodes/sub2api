@@ -96,7 +96,7 @@ func TestRiskIndexPostgresCombinesGenericAndIdentityOnlyRisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-time.Minute)
+	base := time.Now().UTC()
 	identityUsers := []int64{100, 1001, 1002, 1003, 1004}
 	for index, userID := range identityUsers {
 		if _, err := identity.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("risk-index-%d", index), userID, base.Add(time.Duration(index)*time.Second), "8.8.4.4", "shared-browser")); err != nil {
