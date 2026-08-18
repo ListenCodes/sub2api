@@ -1,4 +1,4 @@
-import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { config, enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlRulesView from '@/views/admin/UserRiskControlRulesView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
@@ -11,6 +11,7 @@ import SearchInput from '@/components/common/SearchInput.vue'
 vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
     listRules: vi.fn(),
+    getIdentityHealth: vi.fn(),
     listIdentityRules: vi.fn(),
 	listIdentityRuleEffects: vi.fn(),
 	listIdentityRuleVersions: vi.fn(),
@@ -26,6 +27,19 @@ vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
 beforeEach(() => {
+	vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({
+		enabled: true,
+		admin_enabled: true,
+		mode: 'shadow',
+		shadow_until: '2026-09-01T00:00:00Z',
+		schema: 'identity',
+		geo_source: 'cloudflare_verified',
+		domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' },
+		quality_24h: { events: 48, valid_ip: 46, valid_device: 44 },
+		effective_rule_count: 2,
+		configured_rule_count: 2,
+		prospective_rule_count: 2,
+	})
 	vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockResolvedValue([])
 	vi.mocked(userRiskControlV2API.listIdentityRuleVersions).mockResolvedValue([])
   vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([
@@ -36,6 +50,7 @@ beforeEach(() => {
 afterAll(() => { delete config.global.stubs.RouterLink })
 afterEach(() => {
   document.body.innerHTML = ''
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -62,7 +77,21 @@ async function clickBody(selector: string) {
   await flushPromises()
 }
 
+async function openEventRules(wrapper: VueWrapper) {
+	await wrapper.get('[data-testid="rule-view-event"]').trigger('click')
+	await flushPromises()
+}
+
 describe('UserRiskControlRulesView', () => {
+	it('opens on the daily identity-rule status instead of a secondary management tool', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+
+		expect(wrapper.get('[data-testid="rule-view-identity"]').attributes('aria-selected')).toBe('true')
+		expect(wrapper.get('[data-testid="identity-v2-rules"]').exists()).toBe(true)
+	})
+
 	it('keeps identity, event, replay, Shadow effect, and version workflows inside one page', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockResolvedValue([{ rule_code: 'v2_registration_ip_accounts', revision: 2, hit_events: 8, unique_subjects: 3, sample_user_ids: [7], confirmed_rate: 0.5, legitimate_shared_rate: 0.25, missing_signal_rate: 0 }])
@@ -78,16 +107,171 @@ describe('UserRiskControlRulesView', () => {
 		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
 		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
 		await flushPromises()
-		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('水位 42')
+		expect(wrapper.get('[data-testid="rebuild-summary"]').text()).not.toContain('42')
+		expect(wrapper.get('[data-testid="rebuild-technical-details"]').attributes('open')).toBeUndefined()
+		expect(wrapper.get('[data-testid="rebuild-technical-details"]').text()).toContain('42')
 		await wrapper.get('[data-testid="rule-view-versions"]').trigger('click')
 		await flushPromises()
-		expect(wrapper.get('[data-testid="identity-rule-versions"]').text()).toContain('registration_identity')
+		const versions = wrapper.get('[data-testid="identity-rule-versions"]').text()
+		expect(versions).toContain('第 2 版')
+		expect(versions).not.toContain('registration_identity')
+		expect(versions).not.toContain('r2')
+	})
+
+	it('explains Shadow as manual-review-only and shows the operating window and data quality', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
+
+		const status = wrapper.get('[data-testid="identity-shadow-status"]').text()
+		expect(status).toContain('规则已启用并计算，只记录并进入人工复核，不会自动拒绝或封禁')
+		expect(status).toContain('有效规则 2 条')
+		expect(status).toContain('2026-09-01')
+		expect(status).toContain('数据质量正常')
+	})
+
+	it('does not claim Shadow is calculating when rollout or effective rules are disabled', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: false, admin_enabled: true, mode: 'shadow', schema: 'identity', geo_source: 'none', domains: { ip: 'disabled', device: 'disabled', composite: 'disabled' }, quality_24h: {}, effective_rule_count: 0 })
+		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([{ code: 'v2_registration_ip_accounts', domain: 'ip', configured_enabled: true, enabled: false, state: 'disabled', window_seconds: 600, threshold: 5, score: 60, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' }])
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		const status = wrapper.get('[data-testid="identity-shadow-status"]').text()
+		expect(status).toContain('当前未启用')
+		expect(status).not.toContain('规则已启用并计算')
+		expect(status).not.toContain('长期有效')
+	})
+
+	it('uses quality domains for status and replay gating', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: true, admin_enabled: true, mode: 'shadow', shadow_until: '2026-01-01T00:00:00Z', schema: 'identity', geo_source: 'cloudflare_verified', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' }, quality_domains: { ip: 'paused', device: 'healthy', composite: 'healthy' }, quality_24h: {}, effective_rule_count: 2 })
+		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 1, current_signals: 1, v2_signals: 1, changed_subjects: 0, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, started_at: new Date().toISOString(), completed_at: new Date().toISOString() })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-shadow-status"]').text()).toContain('数据质量需关注')
+		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
+		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
+		await flushPromises()
+		expect(wrapper.get('[data-testid="rebuild-apply"]').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('数据质量不满足写入条件')
+	})
+
+	it('shows an explained empty sample state instead of five zero-percent metrics', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockResolvedValue([
+			{ rule_code: 'v2_registration_ip_accounts', revision: 2, hit_events: 0, unique_subjects: 0, sample_user_ids: [], confirmed_rate: 0, legitimate_shared_rate: 0, missing_signal_rate: 0 },
+		])
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-shadow"]').trigger('click')
+
+		const effects = wrapper.get('[data-testid="identity-rule-effects"]').text()
+		expect(effects).toContain('尚无有效样本')
+		expect(effects).toContain('管理员反馈后形成确认率')
+		expect(effects).toContain('样本期')
+		expect(effects).not.toContain('0.0%')
+		expect(effects).not.toContain('v2_')
+	})
+
+	it('keeps replay writes disabled while the recorded Shadow period is still active', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 2, current_signals: 1, v2_signals: 2, changed_subjects: 1, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, started_at: new Date().toISOString(), completed_at: new Date().toISOString() })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
+		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
+		await flushPromises()
+
+		expect(wrapper.get('[data-testid="rebuild-apply"]').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('Shadow 观察期尚未截止')
+	})
+
+	it('requires a fresh completed preflight and an explicit second confirmation before replay writes', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: true, admin_enabled: true, mode: 'shadow', shadow_until: '2026-01-01T00:00:00Z', schema: 'identity', geo_source: 'cloudflare_verified', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' }, quality_24h: { events: 48, valid_ip: 46, valid_device: 44 }, effective_rule_count: 2, configured_rule_count: 2, prospective_rule_count: 2 })
+		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 2, current_signals: 1, v2_signals: 2, changed_subjects: 1, rule_hits: {}, sample_user_ids: [7], evidence_high_water: 42, rule_watermark: {}, started_at: new Date().toISOString() })
+		vi.mocked(userRiskControlV2API.applyIdentityRebuild).mockResolvedValue({ id: 10, dry_run: false, status: 'completed', current_signal_users: 2, v2_signal_users: 2, current_signals: 2, v2_signals: 2, changed_subjects: 0, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, approved_dry_run_id: 9, started_at: new Date().toISOString() })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
+		expect(wrapper.get('[data-testid="rebuild-apply"]').attributes('disabled')).toBeDefined()
+		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
+		await flushPromises()
+		await wrapper.get('[data-testid="rebuild-apply"]').trigger('click')
+		expect(userRiskControlV2API.applyIdentityRebuild).not.toHaveBeenCalled()
+		expect(bodyElement('[data-testid="rebuild-confirm-dialog"]')).toBeTruthy()
+		await clickBody('[data-testid="rebuild-confirm-ack"]')
+		await clickBody('[data-testid="rebuild-confirm-apply"]')
+		expect(userRiskControlV2API.applyIdentityRebuild).toHaveBeenCalledWith(9)
+	})
+
+	it('rejects a replay response that is incomplete or bound to another preflight', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: true, admin_enabled: true, mode: 'shadow', shadow_until: '2026-01-01T00:00:00Z', schema: 'identity', geo_source: 'cloudflare_verified', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' }, quality_24h: {}, effective_rule_count: 2 })
+		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 1, current_signals: 1, v2_signals: 1, changed_subjects: 0, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, started_at: new Date().toISOString(), completed_at: new Date().toISOString() })
+		vi.mocked(userRiskControlV2API.applyIdentityRebuild).mockResolvedValue({ id: 10, dry_run: false, status: 'processing', current_signal_users: 1, v2_signal_users: 1, current_signals: 1, v2_signals: 1, changed_subjects: 0, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, approved_dry_run_id: 12, started_at: new Date().toISOString() })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
+		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
+		await wrapper.get('[data-testid="rebuild-apply"]').trigger('click')
+		await clickBody('[data-testid="rebuild-confirm-ack"]')
+		await clickBody('[data-testid="rebuild-confirm-apply"]')
+
+		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('写入结果与本次预检不一致')
+		expect(wrapper.text()).not.toContain('历史回放已完成')
+	})
+
+	it('expires a preflight in the open page after thirty minutes', async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(new Date('2026-08-18T00:00:00Z'))
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: true, admin_enabled: true, mode: 'shadow', shadow_until: '2026-01-01T00:00:00Z', schema: 'identity', geo_source: 'cloudflare_verified', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' }, quality_24h: {}, effective_rule_count: 2 })
+		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 1, current_signals: 1, v2_signals: 1, changed_subjects: 0, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, started_at: '2026-08-18T00:00:00Z', completed_at: '2026-08-18T00:00:00Z' })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-replay"]').trigger('click')
+		await wrapper.get('[data-testid="rebuild-dry-run"]').trigger('click')
+		await flushPromises()
+		expect(wrapper.get('[data-testid="rebuild-apply"]').attributes('disabled')).toBeUndefined()
+
+		await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
+		await wrapper.vm.$nextTick()
+		expect(wrapper.get('[data-testid="rebuild-apply"]').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('预检已过期')
+	})
+
+	it('keeps active API error rules in the daily table and only folds explicit retired codes', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([
+			{ id: 1, code: 'custom_api_errors', name: '业务 API 异常', eventTypes: ['api_error'], enabled: true, windowSeconds: 300, threshold: 5, score: 50, riskLevel: 'medium', action: 'review', revision: 1 },
+			{ id: 2, code: 'upstream_error_burst', name: '业务上游异常', eventTypes: ['upstream_error'], enabled: true, windowSeconds: 300, threshold: 5, score: 50, riskLevel: 'medium', action: 'review', revision: 1 },
+			{ id: 3, code: 'api_error_burst', name: '已迁移的 API 可靠性规则', eventTypes: ['api_error'], enabled: false, windowSeconds: 300, threshold: 10, score: 35, riskLevel: 'medium', action: 'observe', revision: 1 },
+			{ id: 4, code: 'upstream_error', name: '仍启用的上游可靠性规则', eventTypes: ['upstream_error'], enabled: true, windowSeconds: 300, threshold: 10, score: 35, riskLevel: 'medium', action: 'observe', revision: 1 },
+		])
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await openEventRules(wrapper)
+
+		const daily = wrapper.findComponent(DataTable).props('data') as Array<{ code: string }>
+		expect(daily.map((rule) => rule.code)).toEqual(expect.arrayContaining(['custom_api_errors', 'upstream_error_burst', 'upstream_error']))
+		expect(daily.map((rule) => rule.code)).not.toContain('api_error_burst')
+		expect(wrapper.get('[data-testid="retired-event-rules"]').text()).toContain('已迁移的 API 可靠性规则')
+		expect(wrapper.find('[data-testid="edit-retired-rule-3"]').exists()).toBe(true)
 	})
   it('uses shared responsive table and rule form controls', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     expect(wrapper.findComponent(DataTable).exists()).toBe(true)
 	await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
@@ -116,6 +300,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('登录失败爆发')
     expect(wrapper.find('[data-testid="rule-editor-1"]').exists()).toBe(false)
@@ -129,6 +314,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     expect(wrapper.get('[data-testid="risk-rules-table"]').text()).toContain('登录失败爆发')
 	await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
@@ -170,6 +356,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     await setBodyValue('[data-testid="rule-threshold"]', '8')
     await clickBody('[data-testid="save-rule"]')
@@ -185,10 +372,11 @@ describe('UserRiskControlRulesView', () => {
   })
 
   it('offers candidate rejection as a configurable rule action', async () => {
-    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'registration_abuse', name: 'Registration abuse', enabled: true, windowSeconds: 600, threshold: 3, score: 80, riskLevel: 'critical', action: 'reject_candidate', revision: 1 }])
+    vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'custom_registration_policy', name: 'Registration policy', enabled: true, eventTypes: ['registration_attempt'], windowSeconds: 600, threshold: 3, score: 80, riskLevel: 'critical', action: 'reject_candidate', revision: 1 }])
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     expect(bodyElement('[data-testid="rule-action"]').textContent).toContain('拒绝注册')
@@ -200,6 +388,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     await clickBody('[data-testid="save-rule"]')
 
@@ -211,6 +400,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
     await wrapper.get('[data-testid="edit-rule-1"]').trigger('click')
     await setBodyValue('[data-testid="rule-threshold"]', '')
     await clickBody('[data-testid="save-rule"]')
@@ -226,6 +416,7 @@ describe('UserRiskControlRulesView', () => {
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
     await clickBody('[data-testid="template-login_failure_burst"]')
     await setBodyValue('[data-testid="rule-code-input"]', 'custom_login')
@@ -243,6 +434,7 @@ describe('UserRiskControlRulesView', () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
     await setBodyValue('[data-testid="rule-code-input"]', 'bad code')
     await setBodyValue('[data-testid="rule-name-input"]', '错误规则')
@@ -256,6 +448,7 @@ describe('UserRiskControlRulesView', () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     await wrapper.get('[data-testid="new-rule"]').trigger('click')
     await setBodyValue('[data-testid="rule-code-input"]', 'unfinished_rule')
@@ -275,6 +468,7 @@ describe('UserRiskControlRulesView', () => {
     ])
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     expect(wrapper.findComponent(SearchInput).exists()).toBe(true)
     wrapper.getComponent('[data-testid="rule-search"]').vm.$emit('update:modelValue', 'quota_watch')
@@ -302,6 +496,7 @@ describe('UserRiskControlRulesView', () => {
     ])
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
+	await openEventRules(wrapper)
 
     const table = wrapper.findComponent(DataTable)
     expect(table.props('serverSideSort')).toBe(false)

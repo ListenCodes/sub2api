@@ -56,9 +56,8 @@ func (s *RiskService) EvaluateEvent(ctx context.Context, input EventReport) (Dec
 	if err != nil {
 		return Decision{}, err
 	}
-	if isReliabilityOnlyEvent(input.EventType) {
-		// Reliability events remain observable in the event stream, but they can
-		// never produce a user-risk decision even if an old rule is re-enabled.
+	if isNormalAPIObservation(input.EventType) {
+		// Successful API traffic remains observable, but is never user-risk.
 		rules = nil
 	}
 	eligibleRules := make([]Rule, 0, len(rules))
@@ -119,7 +118,7 @@ func (s *RiskService) EvaluateEvent(ctx context.Context, input EventReport) (Dec
 		}
 		return Decision{Action: stored.Decision, Score: stored.Score, RiskLevel: stored.RiskLevel, Reason: stored.Reason, EventID: stored.ID, RuleCodes: stored.RuleCodes, Mode: s.cfg.Mode}, nil
 	}
-	if !isReliabilityOnlyEvent(record.EventType) {
+	if !isNormalAPIObservation(record.EventType) {
 		if err := s.repo.UpsertSubject(ctx, record); err != nil {
 			return Decision{}, err
 		}
@@ -146,7 +145,7 @@ func ruleHasRequiredEvidence(rule Rule, input EventReport) bool {
 }
 
 func (s *RiskService) repairMissingSubject(ctx context.Context, event EventRecord) error {
-	if event.UserID <= 0 || isReliabilityOnlyEvent(event.EventType) {
+	if event.UserID <= 0 || isNormalAPIObservation(event.EventType) {
 		return nil
 	}
 	if _, found, err := s.repo.GetSubject(ctx, event.UserID); err != nil {
@@ -157,14 +156,7 @@ func (s *RiskService) repairMissingSubject(ctx context.Context, event EventRecor
 	return s.repo.UpsertSubject(ctx, event)
 }
 
-func isReliabilityOnlyEvent(eventType string) bool {
-	switch eventType {
-	case "api_request", "api_error", "upstream_error":
-		return true
-	default:
-		return false
-	}
-}
+func isNormalAPIObservation(eventType string) bool { return eventType == "api_request" }
 
 func (s *RiskService) RecordAudit(ctx context.Context, report AuditReport) error {
 	audit := AuditRecord{AuditKey: strings.TrimSpace(report.AuditKey), ActorID: report.ActorID, Action: report.Action, TargetType: report.TargetType, TargetID: report.TargetID, Result: report.Result, Reason: report.Reason, Metadata: report.Metadata, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}

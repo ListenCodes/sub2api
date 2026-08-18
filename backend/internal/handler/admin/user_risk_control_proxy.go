@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -9,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,7 +35,32 @@ func (h *CustomUserHandler) ProxyRiskControl(c *gin.Context) {
 		response.BadRequest(c, "Invalid risk control request body")
 		return
 	}
-	upstreamBody, status, err := h.riskControlClient.ProxyAdmin(c.Request.Context(), c.Request.Method, "/api/v1/admin"+path+querySuffix(c), getAdminIDFromContext(c), body)
+	query := c.Request.URL.Query()
+	if c.Request.Method == http.MethodGet && path == "/audit" {
+		var ok bool
+		query, ok, err = h.resolveAuditAccountFilters(c, query)
+		if err != nil {
+			response.Error(c, http.StatusServiceUnavailable, "Account lookup is unavailable")
+			return
+		}
+		if !ok {
+			page, _ := strconv.Atoi(query.Get("page"))
+			limit, _ := strconv.Atoi(query.Get("limit"))
+			if page < 1 {
+				page = 1
+			}
+			if limit < 1 {
+				limit = 20
+			}
+			c.JSON(http.StatusOK, gin.H{"items": []any{}, "total": 0, "page": page, "page_size": limit})
+			return
+		}
+	}
+	upstreamPath := "/api/v1/admin" + path
+	if encoded := query.Encode(); encoded != "" {
+		upstreamPath += "?" + encoded
+	}
+	upstreamBody, status, err := h.riskControlClient.ProxyAdmin(c.Request.Context(), c.Request.Method, upstreamPath, getAdminIDFromContext(c), body)
 	if err != nil && len(upstreamBody) == 0 {
 		response.Error(c, http.StatusServiceUnavailable, "Risk control service is unavailable")
 		return
@@ -39,7 +68,139 @@ func (h *CustomUserHandler) ProxyRiskControl(c *gin.Context) {
 	if status == 0 {
 		status = http.StatusServiceUnavailable
 	}
+	if c.Request.Method == http.MethodGet && path == "/audit" && status >= 200 && status < 300 {
+		upstreamBody = h.enrichRiskAuditAccounts(c.Request.Context(), upstreamBody)
+	}
 	c.Data(status, "application/json", upstreamBody)
+}
+
+func (h *CustomUserHandler) resolveAuditAccountFilters(c *gin.Context, query url.Values) (url.Values, bool, error) {
+	resolved := make(url.Values, len(query))
+	for key, values := range query {
+		resolved[key] = append([]string(nil), values...)
+	}
+	if actor := strings.TrimSpace(query.Get("actor")); actor != "" {
+		id, found, err := h.findExactRiskAccount(c, actor, "admin")
+		if err != nil || !found {
+			return resolved, found, err
+		}
+		resolved.Del("actor")
+		resolved.Set("actor_id", strconv.FormatInt(id, 10))
+	}
+	category := strings.TrimSpace(query.Get("category"))
+	if target := strings.TrimSpace(query.Get("target")); target != "" && category != "rules" {
+		id, found, err := h.findExactRiskAccount(c, target, "")
+		if err != nil || !found {
+			return resolved, found, err
+		}
+		resolved.Del("target")
+		resolved.Set("target_user_id", strconv.FormatInt(id, 10))
+	}
+	return resolved, true, nil
+}
+
+func (h *CustomUserHandler) findExactRiskAccount(c *gin.Context, value, role string) (int64, bool, error) {
+	if id, err := strconv.ParseInt(value, 10, 64); err == nil && id > 0 {
+		return id, true, nil
+	}
+	if h == nil || h.adminService == nil {
+		return 0, false, nil
+	}
+	users, _, err := h.adminService.ListUsers(c.Request.Context(), 1, 100, service.UserListFilters{Search: value, Role: role}, "created_at", "desc")
+	if err != nil {
+		return 0, false, err
+	}
+	for index := range users {
+		user := &users[index]
+		if strings.EqualFold(strings.TrimSpace(user.Email), value) || strings.EqualFold(strings.TrimSpace(user.Username), value) {
+			return user.ID, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+func (h *CustomUserHandler) enrichRiskAuditAccounts(ctx context.Context, body []byte) []byte {
+	if h == nil || h.adminService == nil {
+		return body
+	}
+	var payload struct {
+		Items    []map[string]any `json:"items"`
+		Total    int              `json:"total"`
+		Page     int              `json:"page"`
+		PageSize int              `json:"page_size"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return body
+	}
+	ids := make([]int64, 0, len(payload.Items)*2)
+	seen := map[int64]struct{}{}
+	for _, item := range payload.Items {
+		if actor := int64FromJSON(item["actor_id"]); actor > 0 {
+			if _, ok := seen[actor]; !ok {
+				seen[actor] = struct{}{}
+				ids = append(ids, actor)
+			}
+		}
+		if item["target_type"] == "user" {
+			if target, err := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(item["target_id"])), 10, 64); err == nil && target > 0 {
+				if _, ok := seen[target]; !ok {
+					seen[target] = struct{}{}
+					ids = append(ids, target)
+				}
+			}
+		}
+	}
+	accounts := make(map[int64]*service.User, len(ids))
+	available := false
+	if batch, ok := h.adminService.(service.RiskIdentityUserBatchReader); ok {
+		if users, err := batch.GetUsersForRiskIdentity(ctx, ids); err == nil {
+			available = true
+			for index := range users {
+				user := &users[index]
+				accounts[user.ID] = user
+			}
+		}
+	}
+	for _, item := range payload.Items {
+		actor := int64FromJSON(item["actor_id"])
+		if actor > 0 {
+			item["actor_account"] = auditAccountPayload(actor, accounts[actor], available)
+		}
+		if item["target_type"] == "user" {
+			if target, err := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(item["target_id"])), 10, 64); err == nil && target > 0 {
+				item["target_account"] = auditAccountPayload(target, accounts[target], available)
+			}
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
+func int64FromJSON(value any) int64 {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	default:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(value)), 10, 64)
+		return parsed
+	}
+}
+func auditAccountPayload(id int64, user *service.User, lookupAvailable bool) map[string]any {
+	if user != nil {
+		return identityAccountPayload(user)
+	}
+	availability := "unavailable"
+	if lookupAvailable {
+		availability = "deleted"
+	}
+	return map[string]any{"id": id, "email": "", "username": "", "status": "", "availability": availability}
 }
 
 // ProxyAccountMonitor forwards only the account-monitor admin API after the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +25,11 @@ func (h *CustomUserHandler) ProxyUserRiskIdentity(c *gin.Context) {
 		response.BadRequest(c, "Invalid user ID")
 		return
 	}
+	isIPSearch := c.Request != nil && c.Request.Method == http.MethodPost && strings.HasSuffix(strings.TrimSuffix(c.Request.URL.Path, "/"), "/ip-identities/search")
 	section := strings.TrimSpace(c.Param("section"))
+	if isIPSearch {
+		section = "ip-identities"
+	}
 	if section == "" && c.Request != nil && c.Request.URL != nil {
 		parts := strings.Split(strings.Trim(c.Request.URL.Path, "/"), "/")
 		if len(parts) > 0 {
@@ -35,8 +40,19 @@ func (h *CustomUserHandler) ProxyUserRiskIdentity(c *gin.Context) {
 		response.NotFound(c, "Risk identity endpoint not found")
 		return
 	}
+	method := http.MethodGet
 	path := fmt.Sprintf("/api/v1/admin/users/%d/%s%s", userID, section, querySuffix(c))
-	body, status, err := h.proxyRiskIdentity(c, http.MethodGet, path, nil)
+	var requestBody []byte
+	if isIPSearch {
+		method = http.MethodPost
+		path = fmt.Sprintf("/api/v1/admin/users/%d/ip-identities/search", userID)
+		requestBody, err = io.ReadAll(io.LimitReader(c.Request.Body, maxRiskControlProxyBody+1))
+		if err != nil || len(requestBody) > maxRiskControlProxyBody {
+			response.BadRequest(c, "Invalid identity search request")
+			return
+		}
+	}
+	body, status, err := h.proxyRiskIdentity(c, method, path, requestBody)
 	if err != nil {
 		h.recordIdentityDetailAudit(c, userID, section, http.StatusServiceUnavailable)
 		return
@@ -45,6 +61,15 @@ func (h *CustomUserHandler) ProxyUserRiskIdentity(c *gin.Context) {
 		body = h.enrichAssociatedUsers(c.Request.Context(), body)
 	}
 	h.recordIdentityDetailAudit(c, userID, section, status)
+	c.Data(status, "application/json", body)
+}
+
+func (h *CustomUserHandler) ProxyRiskWorkOverview(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	body, status, err := h.proxyRiskIdentity(c, http.MethodGet, "/api/v1/admin/work-overview", nil)
+	if err != nil {
+		return
+	}
 	c.Data(status, "application/json", body)
 }
 
@@ -75,11 +100,11 @@ func (h *CustomUserHandler) ProxyRiskIdentitySummaries(c *gin.Context) {
 }
 func (h *CustomUserHandler) ProxyRiskIdentityRebuildDryRun(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	h.proxyRiskIdentityCommand(c, "/api/v1/admin/risk-rebuilds/dry-run")
+	h.proxyRiskIdentityCommand(c, "/api/v1/admin/risk-rebuilds/dry-run", false)
 }
 func (h *CustomUserHandler) ProxyRiskIdentityRebuild(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	h.proxyRiskIdentityCommand(c, "/api/v1/admin/risk-rebuilds")
+	h.proxyRiskIdentityCommand(c, "/api/v1/admin/risk-rebuilds", true)
 }
 func (h *CustomUserHandler) ProxyRiskIdentityRebuildStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
@@ -94,8 +119,17 @@ func (h *CustomUserHandler) ProxyRiskIdentityRebuildStatus(c *gin.Context) {
 	}
 	c.Data(status, "application/json", body)
 }
-func (h *CustomUserHandler) proxyRiskIdentityCommand(c *gin.Context, path string) {
-	body, status, err := h.proxyRiskIdentity(c, http.MethodPost, path, []byte("{}"))
+func (h *CustomUserHandler) proxyRiskIdentityCommand(c *gin.Context, path string, forwardBody bool) {
+	requestBody := []byte("{}")
+	if forwardBody {
+		var err error
+		requestBody, err = io.ReadAll(io.LimitReader(c.Request.Body, maxRiskControlProxyBody+1))
+		if err != nil || len(requestBody) == 0 || len(requestBody) > maxRiskControlProxyBody {
+			response.BadRequest(c, "Invalid risk rebuild request")
+			return
+		}
+	}
+	body, status, err := h.proxyRiskIdentity(c, http.MethodPost, path, requestBody)
 	if err != nil {
 		return
 	}
@@ -169,8 +203,23 @@ func identityAccountPayload(user *service.User) map[string]any {
 	availability := "available"
 	if user.DeletedAt != nil {
 		availability = "deleted"
+	} else if strings.TrimSpace(user.Email) == "" || !validRiskAccountStatus(user.Status) {
+		availability = "not_evaluable"
 	}
-	return map[string]any{"id": user.ID, "email": user.Email, "username": user.Username, "status": user.Status, "availability": availability, "deleted": user.DeletedAt != nil, "created_at": user.CreatedAt.UTC().Format(time.RFC3339Nano)}
+	payload := map[string]any{"id": user.ID, "email": user.Email, "username": user.Username, "status": user.Status, "availability": availability, "deleted": user.DeletedAt != nil, "created_at": user.CreatedAt.UTC().Format(time.RFC3339Nano)}
+	if availability == "not_evaluable" {
+		payload["unavailable_reason"] = "account_record_incomplete"
+	}
+	return payload
+}
+
+func validRiskAccountStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case service.StatusActive, service.StatusDisabled, "pending":
+		return true
+	default:
+		return false
+	}
 }
 
 func attachIdentityAccounts(items []map[string]any, users map[int64]map[string]any, lookupAvailable bool) {

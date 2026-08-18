@@ -2,6 +2,8 @@ package admin
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,68 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+type auditProxyAdminStub struct{ service.AdminService }
+
+func (s *auditProxyAdminStub) ListUsers(_ context.Context, _, _ int, filters service.UserListFilters, _, _ string) ([]service.User, int64, error) {
+	if filters.Role == "admin" && filters.Search == "admin@example.com" {
+		return []service.User{{ID: 11, Email: "admin@example.com", Username: "Admin", Status: service.StatusActive}}, 1, nil
+	}
+	if filters.Search == "alice@example.com" {
+		return []service.User{{ID: 7, Email: "alice@example.com", Username: "Alice", Status: service.StatusActive}}, 1, nil
+	}
+	return nil, 0, nil
+}
+
+func (s *auditProxyAdminStub) GetUsersForRiskIdentity(_ context.Context, ids []int64) ([]service.User, error) {
+	users := make([]service.User, 0, len(ids))
+	for _, id := range ids {
+		if id == 11 {
+			users = append(users, service.User{ID: id, Email: "admin@example.com", Username: "Admin", Status: service.StatusActive})
+		}
+		if id == 7 {
+			users = append(users, service.User{ID: id, Email: "alice@example.com", Username: "Alice", Status: service.StatusActive})
+		}
+	}
+	return users, nil
+}
+
+func TestProxyRiskControlResolvesAuditAccountsAndEnrichesThePage(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("actor_id") != "11" || r.URL.Query().Get("target_user_id") != "7" || r.URL.Query().Has("actor") || r.URL.Query().Has("target") {
+			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"items":[{"id":3,"actor_id":11,"action":"ban","target_type":"user","target_id":"7","result":"success","created_at":"2026-08-18T00:00:00Z"}],"total":1,"page":1,"page_size":20}`)
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "audit-account-proxy-secret")
+
+	h := &CustomUserHandler{adminService: &auditProxyAdminStub{}, riskControlClient: serviceClientFromEnvForTest()}
+	engine := gin.New()
+	engine.GET("/admin/user-risk-control/*path", func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 99})
+		h.ProxyRiskControl(c)
+	})
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin/user-risk-control/audit?actor=admin%40example.com&target=alice%40example.com&category=security", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Items []struct {
+			ActorAccount  map[string]any `json:"actor_account"`
+			TargetAccount map[string]any `json:"target_account"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ActorAccount["email"] != "admin@example.com" || payload.Items[0].TargetAccount["email"] != "alice@example.com" {
+		t.Fatalf("enriched audit = %#v", payload.Items)
+	}
+}
 
 func TestProxyRiskControlForwardsAuthenticatedAdminAndAllowlistedPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)

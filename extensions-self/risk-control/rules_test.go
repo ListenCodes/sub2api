@@ -36,25 +36,49 @@ func TestEvaluateRulesReturnsAllowWhenThresholdIsNotReached(t *testing.T) {
 	}
 }
 
-func TestReliabilityEventCannotProduceUserRiskWhenLegacyRuleIsEnabled(t *testing.T) {
+func TestNormalAPIRequestCannotProduceUserRisk(t *testing.T) {
 	repo := NewMemoryRepository([]Rule{{
-		Code: "api_error_burst", Name: "API error", EventTypes: []string{"api_error"},
+		Code: "api_request_observation", Name: "API request", EventTypes: []string{"api_request"},
 		CountStrategy: countStrategyUserEvents, Enabled: true, WindowSeconds: 60,
-		Threshold: 1, Score: 90, RiskLevel: "critical", Action: "ban",
+		Threshold: 1, Score: 90, RiskLevel: "critical", Action: "review",
 	}})
-	service := NewRiskService(Config{Mode: "enforce"}, repo)
+	service := NewRiskService(Config{Mode: "shadow"}, repo)
 	decision, err := service.EvaluateEvent(context.Background(), EventReport{
-		EventKey: "api-error-runtime-boundary", EventType: "api_error", UserID: 42,
+		EventKey: "api-request-runtime-boundary", EventType: "api_request", UserID: 42,
 		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if decision.Action != "allow" || decision.Score != 0 || len(decision.RuleCodes) != 0 {
-		t.Fatalf("reliability decision = %+v", decision)
+		t.Fatalf("normal API request decision = %+v", decision)
 	}
 	if _, found, err := repo.GetSubject(context.Background(), 42); err != nil || found {
-		t.Fatalf("reliability event projected as user risk: found=%v error=%v", found, err)
+		t.Fatalf("normal API request projected as user risk: found=%v error=%v", found, err)
+	}
+}
+
+func TestAPIAndUpstreamErrorRulesCanProduceManualReviewRisk(t *testing.T) {
+	for _, eventType := range []string{"api_error", "upstream_error"} {
+		t.Run(eventType, func(t *testing.T) {
+			repo := NewMemoryRepository([]Rule{{
+				Code: eventType + "_rule", Name: "用户自身错误", EventTypes: []string{eventType},
+				CountStrategy: countStrategyUserEvents, Enabled: true, WindowSeconds: 60,
+				Threshold: 1, Score: 50, RiskLevel: "medium", Action: "review",
+			}})
+			service := NewRiskService(Config{Mode: "shadow"}, repo)
+			decision, err := service.EvaluateEvent(context.Background(), EventReport{EventKey: eventType + "-runtime-boundary", EventType: eventType, UserID: 42, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != "observe" || decision.Score != 50 || len(decision.RuleCodes) != 1 {
+				t.Fatalf("%s decision = %+v", eventType, decision)
+			}
+			subject, found, err := repo.GetSubject(context.Background(), 42)
+			if err != nil || !found || subject.Score != 50 || subject.RiskType != eventType {
+				t.Fatalf("%s subject = %+v found=%v error=%v", eventType, subject, found, err)
+			}
+		})
 	}
 }
 

@@ -192,13 +192,21 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleOverview(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/users":
 		s.handleUsers(w, r)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/risk-index":
+		s.handleRiskIndex(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-summaries":
 		s.handleIdentitySummaries(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/users/"):
-		if userID, section, ok := identityUserRoute(path); ok {
-			s.handleIdentityUser(w, r, userID, section)
+		if userID, section, search, ok := identityUserRoute(path); ok && !search {
+			s.handleIdentityUser(w, r, userID, section, false)
 		} else {
 			s.handleUserByPath(w, r, path)
+		}
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/users/") && strings.HasSuffix(path, "/ip-identities/search"):
+		if userID, section, search, ok := identityUserRoute(path); ok && search {
+			s.handleIdentityUser(w, r, userID, section, true)
+		} else {
+			writeError(w, http.StatusNotFound, errors.New("not found"))
 		}
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/users/") && strings.HasSuffix(path, "/processed"):
 		s.handleMarkUserProcessedByPath(w, r, path)
@@ -222,6 +230,8 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleIdentityRuleVersions(w, r, path)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/disable"):
 		s.handleIdentityRuleDisable(w, r, path, body)
+	case r.Method == http.MethodGet && path == "/api/v1/admin/work-overview":
+		s.handleWorkOverview(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/review-cases":
 		s.handleReviewCases(w, r)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/claim"):
@@ -231,9 +241,9 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/network-identities/") && strings.HasSuffix(path, "/label"):
 		s.handleNetworkIdentityLabel(w, r, path, body)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds/dry-run":
-		s.handleIdentityRebuild(w, r, true)
+		s.handleIdentityRebuild(w, r, true, body)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds":
-		s.handleIdentityRebuild(w, r, false)
+		s.handleIdentityRebuild(w, r, false, body)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/risk-rebuilds/"):
 		s.handleIdentityRebuildStatus(w, r, path)
 	default:

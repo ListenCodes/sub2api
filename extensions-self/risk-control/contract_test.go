@@ -184,7 +184,7 @@ func TestLegacyRiskProjectionUsesSetBasedAggregation(t *testing.T) {
 			t.Fatalf("risk subject projection contains per-subject scan %q", forbidden)
 		}
 	}
-	for _, expected := range []string{"WHERE user_id=$1 AND ", "WHERE subject.user_id=$1 AND "} {
+	for _, expected := range []string{"WHERE subject.user_id=$1 AND "} {
 		if !strings.Contains(riskSubjectProjectionByUserCTE, expected) {
 			t.Fatalf("single-subject projection is missing scope %q", expected)
 		}

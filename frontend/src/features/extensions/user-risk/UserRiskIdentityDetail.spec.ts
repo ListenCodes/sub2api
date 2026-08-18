@@ -51,13 +51,13 @@ describe('UserRiskIdentityDetail', () => {
     expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenLastCalledWith(7, 1, 20, '')
   })
 
-  it('renders signal reasons and data quality without loading full IP details', async () => {
+  it('renders signal reasons and keeps global data diagnostics folded', async () => {
     const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('同一公网 IP 出现多个成功注册账号')
     expect(wrapper.text()).not.toContain('v2_registration_ip_accounts')
-    expect(wrapper.text()).toContain('admin.userRiskControl.identityDataQuality')
+    expect(wrapper.get('[data-testid="identity-data-diagnostics"]').attributes('open')).toBeUndefined()
     expect(userRiskControlV2API.listUserIPIdentities).not.toHaveBeenCalled()
   })
 
@@ -83,7 +83,7 @@ describe('UserRiskIdentityDetail', () => {
     expect(wrapper.text()).toContain('admin.userRiskControl.retry')
   })
 
-  it('shows account availability, source events, and a follow-up investigation link', async () => {
+  it('opens an exact associated account inside the investigation flow and folds technical IDs', async () => {
     vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({
       items: [{
         user_id: 9, relation: 'composite', shared_network_count: 1, shared_browser_instance_count: 1,
@@ -102,7 +102,97 @@ describe('UserRiskIdentityDetail', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('admin.userRiskControl.drawer.deletedAccount')
+    expect(wrapper.text()).not.toContain('来源事件：101, 102')
+    expect(wrapper.html()).not.toContain('search=9')
+    await wrapper.get('[data-testid="associated-user-9"]').trigger('click')
+    expect(wrapper.emitted('investigate')?.[0]?.[0]).toMatchObject({ user_id: 9, evidence_strength: 'high' })
+    await wrapper.get('[data-testid="associated-technical-9"]').trigger('click')
     expect(wrapper.text()).toContain('来源事件：101, 102')
-    expect(wrapper.get('a').attributes('href')).toContain('search=9')
+    expect(wrapper.text()).not.toContain('shared_context_requires_manual_review')
+    expect(wrapper.text()).toContain('共享环境仍需结合业务行为人工复核')
+  })
+
+  it('shows the actual evidence range and readable limitations even for a historical association', async () => {
+    vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({
+      items: [{
+        user_id: 9, relation: 'ip', shared_network_count: 1, shared_browser_instance_count: 0,
+        shared_api_client_count: 0, shared_device_count: 0, cooccurring_evidence_count: 2,
+        evidence_strength: 'weak', evidence_window_seconds: 86400, concurrent: false,
+        overlap_start: '2026-08-17T00:00:00Z', overlap_end: '2026-08-18T00:00:00Z',
+        first_seen_at: '2026-08-17T00:00:00Z', last_seen_at: '2026-08-18T00:00:00Z',
+        source_event_ids: [501, 502], limitations: ['ip_only', 'shared_network_possible'],
+        account: { id: 9, email: 'related@example.com', username: 'Related', status: 'active', availability: 'available', deleted: false, created_at: '' },
+      }],
+      total: 1,
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+    await wrapper.findAll('[role="tab"]')[3].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('实际证据范围：')
+    expect(wrapper.text()).toContain('判定窗口 1 天')
+    expect(wrapper.text()).toContain('仅共享 IP 属于弱证据')
+    expect(wrapper.text()).toContain('共享网络可能由多个无关账号共同使用')
+    expect(wrapper.text()).not.toContain('存在需人工解释的技术限制；存在需人工解释的技术限制')
+  })
+
+  it.each([
+    ['available', '正常'],
+    ['unavailable', '账号补全暂不可用'],
+    ['not_evaluable', '账号状态不可评估'],
+    ['deleted', 'admin.userRiskControl.drawer.deletedAccount'],
+  ] as const)('keeps the %s account completion state distinct', async (availability, label) => {
+    vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({
+      items: [{
+        user_id: 9, relation: 'ip', shared_network_count: 1, shared_browser_instance_count: 0,
+        shared_api_client_count: 0, shared_device_count: 0, cooccurring_evidence_count: 0,
+        evidence_strength: 'weak', evidence_window_seconds: 600, concurrent: false,
+        first_seen_at: '2026-08-12T00:00:00Z', last_seen_at: '2026-08-12T00:01:00Z',
+        source_event_ids: [], limitations: [],
+        account: { id: 9, email: 'related@example.com', username: 'Related', status: 'active', availability, deleted: availability === 'deleted', created_at: '' },
+      }], total: 1,
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+    await wrapper.findAll('[role="tab"]')[3].trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(label)
+  })
+
+  it('states the no-risk conclusion before diagnostics for a normal account', async () => {
+    vi.mocked(userRiskControlV2API.getUserIdentitySummary).mockResolvedValue({
+      user_id: 7, identity_version: 'v2', mode: 'shadow', overall_score: 0, legacy_notice: '',
+      domains: [{ domain: 'ip', state: 'healthy', score: 0, signal_count: 0, associated_account_count: 0, signals: [] }],
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="risk-conclusion"]').text()).toContain('当前未发现需要处理的风险')
+    expect(wrapper.find('[data-testid="primary-risk-signal"]').exists()).toBe(false)
+  })
+
+  it('never promotes zero-point API observations to the primary risk conclusion', async () => {
+    vi.mocked(userRiskControlV2API.getUserIdentitySummary).mockResolvedValue({
+      user_id: 7, identity_version: 'v2', mode: 'shadow', overall_score: 0, legacy_notice: '',
+      domains: [{ domain: 'device', state: 'healthy', score: 0, signal_count: 1, associated_account_count: 2, signals: [{ rule_code: 'v2_api_client_accounts', score: 0, evidence_count: 3, occurred_at: '2026-08-18T00:00:00Z' }] }],
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="risk-conclusion"]').text()).toContain('当前未发现需要处理的风险')
+    expect(wrapper.find('[data-testid="primary-risk-signal"]').exists()).toBe(false)
+  })
+
+  it('treats an anomalous positive IP-only signal as a data inconsistency instead of a primary risk', async () => {
+    vi.mocked(userRiskControlV2API.getUserIdentitySummary).mockResolvedValue({
+      user_id: 7, identity_version: 'v2', mode: 'shadow', overall_score: 60, legacy_notice: '',
+      domains: [{ domain: 'ip', state: 'healthy', score: 60, signal_count: 1, associated_account_count: 2, signals: [{ rule_code: 'v2_registration_ip_accounts', signal_family: 'registration_ip', score: 60, evidence_count: 2, occurred_at: '2026-08-18T00:00:00Z' }] }],
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="primary-risk-signal"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="risk-conclusion"]').text()).toContain('数据不一致')
+    expect(wrapper.get('[data-testid="risk-conclusion"]').text()).toContain('不会直接评分或封禁')
   })
 })

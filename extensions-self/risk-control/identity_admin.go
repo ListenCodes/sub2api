@@ -2,36 +2,58 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 )
 
-func identityUserRoute(path string) (int64, string, bool) {
+func identityUserRoute(path string) (int64, string, bool, bool) {
 	relative := strings.TrimPrefix(path, "/api/v1/admin/users/")
 	parts := strings.Split(strings.Trim(relative, "/"), "/")
-	if len(parts) != 2 {
-		return 0, "", false
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0, "", false, false
 	}
 	userID, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || userID <= 0 {
-		return 0, "", false
+		return 0, "", false, false
+	}
+	if len(parts) == 3 {
+		if parts[1] == "ip-identities" && parts[2] == "search" {
+			return userID, parts[1], true, true
+		}
+		return 0, "", false, false
 	}
 	switch parts[1] {
 	case "identity-summary", "ip-identities", "device-identities", "associated-users":
-		return userID, parts[1], true
+		return userID, parts[1], false, true
 	default:
-		return 0, "", false
+		return 0, "", false, false
 	}
 }
 
-func (s *HTTPServer) handleIdentityUser(w http.ResponseWriter, r *http.Request, userID int64, section string) {
+func (s *HTTPServer) handleIdentityUser(w http.ResponseWriter, r *http.Request, userID int64, section string, exactSearch bool) {
 	if s.identity == nil || !s.cfg.Identity.AdminEnabled {
 		writeError(w, http.StatusServiceUnavailable, errors.New("identity admin is disabled"))
 		return
 	}
 	limit, offset := identityPagination(r)
+	searchQuery := ""
+	if exactSearch {
+		var page int
+		var err error
+		searchQuery, page, limit, err = identityIPSearchRequest(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		offset = (page - 1) * limit
+	} else if section == "ip-identities" {
+		// Retain the legacy read-only contract for older clients; the admin UI uses the POST body path.
+		searchQuery = r.URL.Query().Get("q")
+	}
 	switch section {
 	case "identity-summary":
 		result, err := s.identity.Summary(r.Context(), userID)
@@ -41,7 +63,7 @@ func (s *HTTPServer) handleIdentityUser(w http.ResponseWriter, r *http.Request, 
 		}
 		writeJSON(w, http.StatusOK, result)
 	case "ip-identities":
-		lookupKey, validSearch := identityIPSearchLookup(s.identity.protector, r.URL.Query().Get("q"))
+		lookupKey, validSearch := identityIPSearchLookup(s.identity.protector, searchQuery)
 		if !validSearch {
 			writeJSON(w, http.StatusOK, identityPaged([]NetworkIdentityRow{}, 0, limit, offset))
 			return
@@ -75,6 +97,27 @@ func (s *HTTPServer) handleIdentityUser(w http.ResponseWriter, r *http.Request, 
 		}
 		writeJSON(w, http.StatusOK, identityPaged(items, total, limit, offset))
 	}
+}
+
+func identityIPSearchRequest(r *http.Request) (string, int, int, error) {
+	var input struct {
+		Query string `json:"query"`
+		Page  int    `json:"page"`
+		Limit int    `json:"limit"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return "", 0, 0, errors.New("invalid identity search request")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return "", 0, 0, errors.New("invalid identity search request")
+	}
+	input.Query = strings.TrimSpace(input.Query)
+	if input.Query == "" || input.Page < 1 || input.Limit < 1 || input.Limit > 100 {
+		return "", 0, 0, errors.New("invalid identity search request")
+	}
+	return input.Query, input.Page, input.Limit, nil
 }
 
 func identityIPSearchLookup(protector *IdentityProtector, raw string) (string, bool) {
@@ -185,13 +228,20 @@ func (s *HTTPServer) handleIdentityRules(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"items": rules})
 }
 
-func (s *HTTPServer) handleIdentityRebuild(w http.ResponseWriter, r *http.Request, dryRun bool) {
+func (s *HTTPServer) handleIdentityRebuild(w http.ResponseWriter, r *http.Request, dryRun bool, body []byte) {
 	if s.identity == nil || !s.cfg.Identity.AdminEnabled {
 		writeError(w, http.StatusServiceUnavailable, errors.New("identity admin is disabled"))
 		return
 	}
+	var input struct {
+		ApprovedDryRunID int64 `json:"approved_dry_run_id"`
+	}
+	if err := decodeStrictJSON(body, &input); err != nil || dryRun && input.ApprovedDryRunID != 0 || !dryRun && input.ApprovedDryRunID <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("历史回放写入必须使用当前管理员刚完成的有效预检"))
+		return
+	}
 	actor, _ := actorID(r)
-	result, err := s.identity.repo.Rebuild(r.Context(), actor, dryRun, s.cfg.Identity)
+	result, err := s.identity.repo.Rebuild(r.Context(), actor, dryRun, input.ApprovedDryRunID, s.cfg.Identity)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if !dryRun {

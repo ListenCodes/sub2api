@@ -83,11 +83,25 @@ The risk service remains responsible for risk events, subjects, rules and
 audit data; Sub2API remains authoritative for administrator authentication and
 the final user account status.
 
-The current implementation must be treated as incomplete until the user page
-shows account identity and explainable reasons, the rule page supports creating
-and testing rules, and the audit page shows the administrator, target, reason,
-result and failure detail. Raw values such as `login_failure` and `critical`
-are protocol values and must not be the primary text in the admin UI.
+The authenticated admin surface keeps the all-user view as its default, adds a
+server-aggregated work overview, completes account data in bounded batches, and
+opens associated accounts by exact user ID inside the existing investigation
+drawer. Exact full-IP searches use `POST .../ip-identities/search` with a JSON
+body; the admin UI must not place an IP in a URL, browser storage, or audit
+record. Account completion preserves `available`, `unavailable`,
+`not_evaluable`, and `deleted` as distinct states.
+
+The service-to-service `GET /api/v1/admin/risk-index` endpoint merges positive
+generic subjects with currently effective identity signals, deduplicates by
+user, and applies stable score/recent-hit pagination. It can be narrowed to at
+most 100 requested user IDs for current-page completion. The main backend keeps
+PII authoritative, excludes risk IDs in its normal-account database query, and
+never exposes the internal index response directly to the browser.
+
+Identity rules remain Shadow-only. The primary UI uses readable Chinese names;
+protocol identifiers, source event IDs, rule revisions, request IDs, and other
+technical values stay behind collapsed technical details. Zero-score API client
+and successful login/API observations never become a primary risk conclusion.
 
 The service owns the extensions database, including risk-control and account-monitor
 tables. Back it up separately from Sub2API:
@@ -107,7 +121,7 @@ Restore into a stopped risk database with `pg_restore --clean --if-exists`. Keep
 ## Rollout order
 
 1. Start the dedicated PostgreSQL and `extensions-self` containers in `shadow` mode.
-2. Confirm registration, login, OAuth registration, content-risk, quota, upstream-error, and normal API events appear in the three admin pages.
+2. Confirm registration identity evidence and actionable risk events appear in the three admin pages; normal successful API activity remains diagnostic-only.
 3. Tune rules in `review` mode and verify the operation audit page.
 4. Enable `enforce` only after a real signed event and a manual ban/unban have been verified locally.
 

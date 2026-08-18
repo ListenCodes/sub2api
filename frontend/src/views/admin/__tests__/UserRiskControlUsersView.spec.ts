@@ -1,5 +1,5 @@
 import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlUsersView from '@/views/admin/UserRiskControlUsersView.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import Pagination from '@/components/common/Pagination.vue'
@@ -12,6 +12,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 vi.mock('@/api/admin/userRiskControlV2', () => ({
   userRiskControlV2API: {
     listUsers: vi.fn(),
+    getWorkOverview: vi.fn(),
     getUserDetail: vi.fn(),
     setUserStatus: vi.fn(),
     batchSetUserStatus: vi.fn(),
@@ -25,9 +26,14 @@ vi.mock('vue-i18n', async (importOriginal) => ({
 }))
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
+beforeEach(() => {
+  vi.mocked(userRiskControlV2API.getWorkOverview).mockResolvedValue({ pending: 3, mine: 2, observing: 4, atRisk: 7, dataQuality: 1 })
+})
 afterAll(() => { delete config.global.stubs.RouterLink })
 afterEach(() => {
   vi.useRealTimers()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+  window.localStorage.removeItem('table-page-size')
   vi.clearAllMocks()
 })
 
@@ -38,7 +44,58 @@ describe('UserRiskControlUsersView', () => {
     mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-    expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'all' }))
+    expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'all', sortBy: 'risk_score', sortOrder: 'desc' }))
+  })
+
+  it('shows actionable work counts while keeping all users as the active default', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="risk-work-overview"]').text()).toContain('待复核')
+    expect(wrapper.get('[data-testid="work-count-pending"]').text()).toContain('3')
+    expect(wrapper.get('[data-testid="work-count-at-risk"]').text()).toContain('7')
+    expect(wrapper.get('[data-testid="risk-case-views"]').text()).toContain('全部用户')
+    await wrapper.get('[data-testid="work-count-my"]').trigger('click')
+    await flushPromises()
+    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ view: 'my' }))
+  })
+
+  it('shows an unavailable work overview instead of fabricating zero counts, then retries', async () => {
+    vi.mocked(userRiskControlV2API.getWorkOverview).mockRejectedValueOnce(new Error('overview unavailable'))
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="work-overview-error"]').text()).toContain('overview unavailable')
+    expect(wrapper.get('[data-testid="work-count-pending"]').text()).toContain('—')
+    expect(wrapper.get('[data-testid="work-count-pending"]').text()).not.toContain('0')
+
+    vi.mocked(userRiskControlV2API.getWorkOverview).mockResolvedValueOnce({ pending: 5, mine: 1, observing: 2, atRisk: 6, dataQuality: 3 })
+    await wrapper.get('[data-testid="retry-work-overview"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="work-overview-error"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="work-count-pending"]').text()).toContain('5')
+  })
+
+  it('keeps low-frequency conditions behind advanced filters', async () => {
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    const advanced = wrapper.get('[data-testid="advanced-risk-filters"]')
+    expect(advanced.attributes('open')).toBeUndefined()
+    expect(wrapper.get('[data-testid="primary-risk-filters"]').find('[data-testid="risk-user-search"]').exists()).toBe(true)
+    expect(advanced.find('[data-testid="risk-type-filter"]').exists()).toBe(true)
+    expect(advanced.find('[data-testid="processing-status-filter"]').exists()).toBe(true)
+    expect(advanced.find('[data-testid="min-score-filter"]').exists()).toBe(true)
+		const riskOptions = wrapper.getComponent('[data-testid="risk-type-filter"]').props('options') as Array<{ value: string; label: string }>
+		expect(riskOptions).toEqual(expect.arrayContaining([
+			expect.objectContaining({ value: 'login_failure', label: '登录失败' }),
+			expect.objectContaining({ value: 'v2_registration_ip_accounts', label: '同 IP 多成功注册账号' }),
+		]))
+		expect(wrapper.text()).not.toContain('v2_registration_ip_accounts')
   })
 
   it('uses the shared responsive workspace and filter controls', async () => {
@@ -122,6 +179,7 @@ describe('UserRiskControlUsersView', () => {
 		expect(wrapper.text()).toContain('当前风险')
 		expect(wrapper.text()).toContain('主信号')
 		expect(wrapper.text()).toContain('案件状态')
+		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'riskScore', 'riskType', 'lastEvent', 'processing'])
 		expect(wrapper.text()).not.toContain('203.0.113.0/24')
   })
 
@@ -135,6 +193,45 @@ describe('UserRiskControlUsersView', () => {
     await flushPromises()
 
     expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, pageSize: 50 }))
+  })
+
+  it('caps mobile pages at 20 accounts so the first screen stays compact', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 80, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    wrapper.getComponent(Pagination).vm.$emit('update:pageSize', 50)
+    await flushPromises()
+
+    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ pageSize: 20 }))
+    expect(wrapper.get('[data-testid="primary-risk-filters"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="account-status-filter"]').classes()).toContain('w-[calc(50%-0.375rem)]')
+    expect(wrapper.get('[data-testid="risk-level-filter"]').classes()).toContain('w-[calc(50%-0.375rem)]')
+    expect(wrapper.get('[data-testid="advanced-risk-filters"]').find('[data-testid="mobile-select-current-page"]').exists()).toBe(true)
+  })
+
+  it('caps a persisted 50-row preference before the initial mobile request', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    window.localStorage.setItem('table-page-size', '50')
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 80, page: 1, page_size: 20 })
+
+    mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ pageSize: 20 }))
+  })
+
+  it('keeps six high-priority columns at a 1280px desktop width', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
+    vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 80, page: 1, page_size: 20 })
+    const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'riskScore', 'riskType', 'lastEvent', 'processing'])
+    wrapper.getComponent(Pagination).vm.$emit('update:pageSize', 50)
+    await flushPromises()
+    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ pageSize: 50 }))
   })
 
   it('keeps the latest filter result when an older request finishes later', async () => {

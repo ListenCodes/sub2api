@@ -1112,7 +1112,7 @@ func queryIdentityQualityStates(ctx context.Context, queryer identityQueryer, cf
 	return identityDomainStates(cfg, counts), counts, err
 }
 
-func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryRun bool, cfg IdentityConfig) (RebuildResult, error) {
+func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryRun bool, requestedApprovedDryRunID int64, cfg IdentityConfig) (RebuildResult, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return RebuildResult{}, err
@@ -1120,6 +1120,9 @@ func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryR
 	defer tx.Rollback()
 	approvedDryRunID := int64(0)
 	if !dryRun {
+		if requestedApprovedDryRunID <= 0 {
+			return RebuildResult{}, errors.New("历史回放写入缺少有效预检")
+		}
 		if !cfg.RulesEnabled {
 			return RebuildResult{}, errors.New("identity rules are not enabled")
 		}
@@ -1144,15 +1147,14 @@ func (r *SQLIdentityRepository) Rebuild(ctx context.Context, actorID int64, dryR
 		var dryRunCompleted time.Time
 		var ruleWatermark []byte
 		if err := tx.QueryRowContext(ctx, `SELECT id,completed_at,evidence_high_water,rule_watermark FROM risk_identity_rebuild_jobs
-WHERE dry_run=TRUE AND status='completed' AND requested_by=$1 AND completed_at IS NOT NULL
-ORDER BY completed_at DESC,id DESC LIMIT 1`, actorID).Scan(&dryRunID, &dryRunCompleted, &evidenceHighWater, &ruleWatermark); err != nil {
+WHERE id=$2 AND dry_run=TRUE AND status='completed' AND requested_by=$1 AND completed_at IS NOT NULL`, actorID, requestedApprovedDryRunID).Scan(&dryRunID, &dryRunCompleted, &evidenceHighWater, &ruleWatermark); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return RebuildResult{}, errors.New("a completed Dry Run by the same administrator is required")
+				return RebuildResult{}, errors.New("所选预检不存在、未完成或不属于当前管理员")
 			}
 			return RebuildResult{}, err
 		}
 		if age := time.Since(dryRunCompleted.UTC()); age < 0 || age > 30*time.Minute {
-			return RebuildResult{}, fmt.Errorf("Dry Run %d is older than 30 minutes", dryRunID)
+			return RebuildResult{}, fmt.Errorf("预检 %d 已超过 30 分钟有效期", dryRunID)
 		}
 		var matches bool
 		if err := tx.QueryRowContext(ctx, `SELECT
@@ -1161,7 +1163,7 @@ ORDER BY completed_at DESC,id DESC LIMIT 1`, actorID).Scan(&dryRunID, &dryRunCom
 			return RebuildResult{}, err
 		}
 		if !matches {
-			return RebuildResult{}, fmt.Errorf("identity evidence or rules changed after Dry Run %d", dryRunID)
+			return RebuildResult{}, fmt.Errorf("预检 %d 完成后身份依据或规则已变化", dryRunID)
 		}
 		approvedDryRunID = dryRunID
 	}

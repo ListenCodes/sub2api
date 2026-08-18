@@ -44,7 +44,7 @@ func (s *HTTPServer) handleReviewCases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	caseStatus := strings.TrimSpace(query.Get("processing_status"))
-	if caseStatus != "" && caseStatus != "pending" && caseStatus != "in_review" && caseStatus != "observing" && caseStatus != "resolved" {
+	if caseStatus != "" && caseStatus != "pending" && caseStatus != "in_review" && caseStatus != "observing" && caseStatus != "resolved" && caseStatus != "data_quality" {
 		writeError(w, http.StatusBadRequest, errors.New("invalid case status filter"))
 		return
 	}
@@ -54,6 +54,20 @@ func (s *HTTPServer) handleReviewCases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, identityPaged(items, total, limit, offset))
+}
+
+func (s *HTTPServer) handleWorkOverview(w http.ResponseWriter, r *http.Request) {
+	if s.identity == nil || !s.cfg.Identity.AdminEnabled || !s.cfg.Identity.CasesEnabled {
+		writeError(w, http.StatusServiceUnavailable, errors.New("identity cases are disabled"))
+		return
+	}
+	actor, _ := actorID(r)
+	result, err := s.identity.repo.WorkOverview(r.Context(), actor)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func identityRiskLevelRange(level string) (int, int, bool) {

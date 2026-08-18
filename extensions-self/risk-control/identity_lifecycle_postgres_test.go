@@ -355,15 +355,18 @@ func TestIdentityRebuildKeepsVersionedEvidenceAndCasesPostgres(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO risk_identity_shadow_activation(singleton,started_at,shadow_until) VALUES(1,NOW()-interval '15 days',NOW()-interval '1 day')`); err != nil {
 		t.Fatal(err)
 	}
-	dryRun, err := service.repo.Rebuild(ctx, 7, true, cfg)
+	dryRun, err := service.repo.Rebuild(ctx, 7, true, 0, cfg)
 	if err != nil || dryRun.V2Signals == 0 {
 		t.Fatalf("rebuild Dry Run = %+v, error=%v", dryRun, err)
 	}
-	if _, err := service.repo.Rebuild(ctx, 7, false, cfg); err == nil || !strings.Contains(err.Error(), cfg.ShadowUntil.UTC().Format(time.RFC3339)) {
+	if _, err := service.repo.Rebuild(ctx, 7, false, dryRun.ID, cfg); err == nil || !strings.Contains(err.Error(), cfg.ShadowUntil.UTC().Format(time.RFC3339)) {
 		t.Fatalf("rebuild before configured Shadow deadline error = %v", err)
 	}
 	cfg.ShadowUntil = base.Add(-time.Hour)
-	result, err := service.repo.Rebuild(ctx, 7, false, cfg)
+	if _, err := service.repo.Rebuild(ctx, 7, false, dryRun.ID+1, cfg); err == nil || !strings.Contains(err.Error(), "不属于当前管理员") {
+		t.Fatalf("rebuild accepted a different Dry Run ID: %v", err)
+	}
+	result, err := service.repo.Rebuild(ctx, 7, false, dryRun.ID, cfg)
 	if err != nil || result.ApprovedDryRunID != dryRun.ID {
 		t.Fatalf("rebuild apply = %+v, error=%v", result, err)
 	}

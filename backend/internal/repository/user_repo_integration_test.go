@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -63,6 +64,17 @@ func (s *UserRepoSuite) mustCreateUser(u *service.User) *service.User {
 
 	s.Require().NoError(s.repo.Create(s.ctx, u), "create user")
 	return u
+}
+
+func (s *UserRepoSuite) TestListWithFiltersExcludesRiskIndexUsersBeforePagination() {
+	first := s.mustCreateUser(&service.User{Email: "first@example.com"})
+	second := s.mustCreateUser(&service.User{Email: "second@example.com"})
+	third := s.mustCreateUser(&service.User{Email: "third@example.com"})
+
+	users, result, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 2, SortBy: "id", SortOrder: "asc"}, service.UserListFilters{ExcludeIDs: []int64{second.ID}})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), result.Total)
+	s.Require().Equal([]int64{first.ID, third.ID}, []int64{users[0].ID, users[1].ID})
 }
 
 func (s *UserRepoSuite) TestCreateWithEmailAliasGuardAndDomainLimitConcurrent() {
@@ -362,6 +374,17 @@ func (s *UserRepoSuite) TestListWithFilters_Search() {
 	s.Require().NoError(err)
 	s.Require().Len(users, 1)
 	s.Require().Contains(users[0].Email, "alice")
+}
+
+func (s *UserRepoSuite) TestListWithFilters_SearchByExactNumericID() {
+	target := s.mustCreateUser(&service.User{Email: "numeric-target@test.com", Username: "NumericTarget"})
+	s.mustCreateUser(&service.User{Email: "other@test.com", Username: "Other"})
+
+	users, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.UserListFilters{Search: strconv.FormatInt(target.ID, 10)})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(users, 1)
+	s.Require().Equal(target.ID, users[0].ID)
 }
 
 func (s *UserRepoSuite) TestListWithFilters_SearchByUsername() {

@@ -36,24 +36,35 @@ type riskCaseListPage struct {
 	PageSize int                `json:"page_size"`
 }
 
-type riskSubjectListPage struct {
-	Items []struct {
-		ID          int64  `json:"id"`
-		RiskType    string `json:"risk_type"`
-		RiskLevel   string `json:"risk_level"`
-		Score       int    `json:"score"`
-		Reason      string `json:"reason"`
-		EventCount  int    `json:"event_count"`
-		IPCount     int    `json:"ip_count"`
-		DeviceCount int    `json:"device_count"`
-		LastAction  string `json:"last_action"`
-		Pending     bool   `json:"pending"`
-		LastEventAt string `json:"last_event_at"`
-	} `json:"items"`
-}
-
 type riskIdentitySummaryPage struct {
 	Items []map[string]any `json:"items"`
+}
+
+type riskIndexListItem struct {
+	ID                 int64  `json:"id"`
+	RiskType           string `json:"risk_type"`
+	RiskLevel          string `json:"risk_level"`
+	Score              int    `json:"score"`
+	Reason             string `json:"reason"`
+	EventCount         int    `json:"event_count"`
+	IPCount            int    `json:"ip_count"`
+	DeviceCount        int    `json:"device_count"`
+	LastAction         string `json:"last_action"`
+	Pending            bool   `json:"pending"`
+	LastEventAt        string `json:"last_event_at"`
+	ProcessingStatus   string `json:"processing_status"`
+	CaseID             int64  `json:"case_id"`
+	CaseStatus         string `json:"case_status"`
+	AssigneeID         int64  `json:"assignee_id"`
+	EvidenceStrength   string `json:"evidence_strength"`
+	DecisionID         string `json:"decision_id"`
+	HistoricalMaxScore int    `json:"historical_max_score"`
+}
+
+type riskIndexListPage struct {
+	Items       []riskIndexListItem `json:"items"`
+	RiskUserIDs []int64             `json:"risk_user_ids"`
+	Total       int                 `json:"total"`
 }
 
 // ListUserRiskUsers is the custom-owned aggregation boundary. It keeps account
@@ -65,8 +76,7 @@ func (h *CustomUserHandler) ListUserRiskUsers(c *gin.Context) {
 		pageSize = 100
 	}
 	view := strings.TrimSpace(c.DefaultQuery("view", "pending"))
-	caseFiltered := hasRiskCaseFilters(c)
-	if view == "all" && !caseFiltered {
+	if view == "all" && strings.TrimSpace(c.Query("processing_status")) != "data_quality" {
 		h.listAllUserRiskUsers(c, page, pageSize)
 		return
 	}
@@ -197,8 +207,8 @@ func (h *CustomUserHandler) listAllUserRiskUsers(c *gin.Context, page, pageSize 
 		search = string(runes[:100])
 	}
 	filters := service.UserListFilters{Search: search, Status: c.Query("status")}
-	if strings.TrimSpace(c.Query("sort_by")) == "risk_score" {
-		h.listAllUserRiskUsersSortedByRisk(c, page, pageSize, filters)
+	if strings.TrimSpace(c.Query("sort_by")) != "created_at" || hasRiskCaseFilters(c) {
+		h.listAllUserRiskUsersFromIndex(c, page, pageSize, filters)
 		return
 	}
 	users, total, err := h.adminService.ListUsers(c.Request.Context(), page, pageSize, filters, "created_at", normalizedSortOrder(c.Query("sort_order")))
@@ -213,114 +223,300 @@ func (h *CustomUserHandler) listAllUserRiskUsers(c *gin.Context, page, pageSize 
 		ids = append(ids, user.ID)
 		items = append(items, riskAccountRow(user.ID, identityAccountPayload(user), true))
 	}
-	if len(ids) > 0 && !h.attachRiskSubjects(c, items) {
+	if len(ids) > 0 && !h.attachRiskIndexForRows(c, items) {
 		return
 	}
 	h.attachRiskIdentitySummaries(c, items)
 	response.Paginated(c, items, total, page, pageSize)
 }
 
-func (h *CustomUserHandler) listAllUserRiskUsersSortedByRisk(c *gin.Context, page, pageSize int, filters service.UserListFilters) {
-	const accountBatchSize = 1000
-	var users []service.User
-	var total int64
-	for batchPage := 1; ; batchPage++ {
-		batch, batchTotal, err := h.adminService.ListUsers(c.Request.Context(), batchPage, accountBatchSize, filters, "created_at", "desc")
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		if batchPage == 1 {
-			total = batchTotal
-		}
-		users = append(users, batch...)
-		if len(batch) == 0 || int64(len(users)) >= total {
-			break
-		}
+func (h *CustomUserHandler) attachRiskIndexForRows(c *gin.Context, items []map[string]any) bool {
+	ids := riskMapUserIDs(items)
+	if len(ids) == 0 {
+		return true
 	}
-	items := make([]map[string]any, 0, len(users))
-	for index := range users {
-		items = append(items, riskAccountRow(users[index].ID, identityAccountPayload(&users[index]), true))
+	query := url.Values{
+		"user_ids":        {joinRiskUserIDs(ids)},
+		"include_all_ids": {"false"},
+		"limit":           {strconv.Itoa(len(ids))},
 	}
-	if len(items) > 0 && !h.attachRiskSubjects(c, items) {
-		return
+	body, status, err := h.proxyRiskIdentity(c, http.MethodGet, "/api/v1/admin/risk-index?"+query.Encode(), nil)
+	if err != nil {
+		return false
 	}
-	descending := normalizedSortOrder(c.Query("sort_order")) == "desc"
-	sort.SliceStable(items, func(left, right int) bool {
-		leftScore, rightScore := riskRowScore(items[left]), riskRowScore(items[right])
-		if leftScore == rightScore {
-			leftID, _ := items[left]["id"].(int64)
-			rightID, _ := items[right]["id"].(int64)
-			return leftID < rightID
-		}
-		if descending {
-			return leftScore > rightScore
-		}
-		return leftScore < rightScore
-	})
-	start := (page - 1) * pageSize
-	if start > len(items) {
-		start = len(items)
+	if status < 200 || status >= 300 {
+		c.Data(status, "application/json", body)
+		return false
 	}
-	end := start + pageSize
-	if end > len(items) {
-		end = len(items)
+	var page riskIndexListPage
+	if json.Unmarshal(body, &page) != nil {
+		response.Error(c, http.StatusBadGateway, "Risk index response is invalid")
+		return false
 	}
-	items = items[start:end]
-	h.attachRiskIdentitySummaries(c, items)
-	response.Paginated(c, items, total, page, pageSize)
-}
-
-func (h *CustomUserHandler) attachRiskSubjects(c *gin.Context, items []map[string]any) bool {
 	byID := make(map[int64]map[string]any, len(items))
-	ids := make([]int64, 0, len(items))
-	for _, row := range items {
-		id, ok := row["id"].(int64)
-		if !ok || id <= 0 {
+	for _, item := range items {
+		if id, ok := item["id"].(int64); ok {
+			byID[id] = item
+		}
+	}
+	for _, risk := range riskIndexRows(page.Items) {
+		id, _ := risk["id"].(int64)
+		row := byID[id]
+		if row == nil {
 			continue
 		}
-		ids = append(ids, id)
-		byID[id] = row
-	}
-	for start := 0; start < len(ids); start += 100 {
-		end := start + 100
-		if end > len(ids) {
-			end = len(ids)
-		}
-		query := url.Values{"user_ids": {joinRiskUserIDs(ids[start:end])}, "limit": {strconv.Itoa(end - start)}}
-		body, status, err := h.proxyRiskIdentity(c, http.MethodGet, "/api/v1/admin/users?"+query.Encode(), nil)
-		if err != nil {
-			return false
-		}
-		if status < 200 || status >= 300 {
-			c.Data(status, "application/json", body)
-			return false
-		}
-		var subjects riskSubjectListPage
-		if json.Unmarshal(body, &subjects) != nil {
-			response.Error(c, http.StatusBadGateway, "Risk subject response is invalid")
-			return false
-		}
-		for _, subject := range subjects.Items {
-			if row := byID[subject.ID]; row != nil {
-				row["risk_type"], row["risk_level"], row["risk_score"], row["risk_reason"] = subject.RiskType, subject.RiskLevel, subject.Score, subject.Reason
-				row["event_count"], row["ip_count"], row["device_count"] = subject.EventCount, subject.IPCount, subject.DeviceCount
-				row["last_action"], row["pending"], row["last_event_at"] = subject.LastAction, subject.Pending, subject.LastEventAt
+		for key, value := range risk {
+			if key != "id" {
+				row[key] = value
 			}
 		}
 	}
 	return true
 }
 
-func riskRowScore(row map[string]any) int {
-	switch value := row["risk_score"].(type) {
-	case int:
-		return value
-	case float64:
-		return int(value)
-	default:
-		return 0
+func (h *CustomUserHandler) listAllUserRiskUsersFromIndex(c *gin.Context, page, pageSize int, filters service.UserListFilters) {
+	baseQuery := url.Values{}
+	copyRiskQuery(baseQuery, c, "risk_type", "risk_level", "processing_status", "risk_only", "min_score", "max_score", "sort_by", "sort_order")
+	if baseQuery.Get("sort_by") == "" {
+		baseQuery.Set("sort_by", "risk_score")
 	}
+	accountFiltered := strings.TrimSpace(filters.Search) != "" || strings.TrimSpace(filters.Status) != ""
+	riskFiltered := hasRiskCaseFilters(c)
+	if riskFiltered {
+		baseQuery.Set("include_all_ids", "false")
+	}
+	meta, ok := h.riskIndexPage(c, baseQuery, 1, 0)
+	if !ok {
+		return
+	}
+	allRiskRows := []map[string]any(nil)
+	if accountFiltered || strings.TrimSpace(c.Query("sort_by")) == "created_at" {
+		pageQuery := cloneURLValues(baseQuery)
+		pageQuery.Set("include_all_ids", "false")
+		allRiskRows, ok = h.allRiskIndexRows(c, pageQuery, meta.Total)
+		if !ok {
+			return
+		}
+		accounts, available := h.riskIdentityAccounts(c, riskMapUserIDs(allRiskRows))
+		if !available {
+			response.Error(c, http.StatusServiceUnavailable, "Account lookup is unavailable")
+			return
+		}
+		filtered := allRiskRows[:0]
+		for _, row := range allRiskRows {
+			id, _ := row["id"].(int64)
+			account := accounts[id]
+			if !riskAccountMatches(account, true, filters.Search, filters.Status) {
+				continue
+			}
+			mergeRiskAccount(row, id, account, true)
+			filtered = append(filtered, row)
+		}
+		allRiskRows = filtered
+		if strings.TrimSpace(c.Query("sort_by")) == "created_at" {
+			sort.SliceStable(allRiskRows, func(i, j int) bool {
+				left, right := fmt.Sprint(allRiskRows[i]["created_at"]), fmt.Sprint(allRiskRows[j]["created_at"])
+				if normalizedSortOrder(c.Query("sort_order")) == "asc" {
+					return left < right
+				}
+				return left > right
+			})
+		}
+	}
+	riskTotal := meta.Total
+	if allRiskRows != nil {
+		riskTotal = len(allRiskRows)
+	}
+	includeNormal := !riskFiltered
+	normalTotal := int64(0)
+	var normalProbe []service.User
+	if includeNormal {
+		var err error
+		normalProbe, normalTotal, err = h.listNormalRiskAccounts(c, filters, meta.RiskUserIDs, 0, pageSize, pageSize)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	globalOffset := (page - 1) * pageSize
+	descending := normalizedSortOrder(c.Query("sort_order")) == "desc"
+	items := make([]map[string]any, 0, pageSize)
+	appendRisk := func(offset, count int) bool {
+		if count <= 0 {
+			return true
+		}
+		var rows []map[string]any
+		if allRiskRows != nil {
+			end := minIntValue(offset+count, len(allRiskRows))
+			if offset < end {
+				rows = append(rows, allRiskRows[offset:end]...)
+			}
+		} else {
+			pageResult, loaded := h.riskIndexPage(c, baseQuery, count, offset)
+			if !loaded {
+				return false
+			}
+			rows = riskIndexRows(pageResult.Items)
+			accounts, available := h.riskIdentityAccounts(c, riskMapUserIDs(rows))
+			for _, row := range rows {
+				id, _ := row["id"].(int64)
+				mergeRiskAccount(row, id, accounts[id], available)
+			}
+		}
+		items = append(items, rows...)
+		return true
+	}
+	appendNormal := func(offset, count int) bool {
+		if count <= 0 {
+			return true
+		}
+		users := []service.User(nil)
+		var err error
+		if offset == 0 && count <= len(normalProbe) {
+			users = normalProbe[:count]
+		} else {
+			users, _, err = h.listNormalRiskAccounts(c, filters, meta.RiskUserIDs, offset, count, pageSize)
+		}
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return false
+		}
+		for index := range users {
+			items = append(items, riskAccountRow(users[index].ID, identityAccountPayload(&users[index]), true))
+		}
+		return true
+	}
+	if !includeNormal {
+		if !appendRisk(globalOffset, pageSize) {
+			return
+		}
+	} else if descending {
+		riskOffset := minIntValue(globalOffset, riskTotal)
+		riskCount := minIntValue(pageSize, maxIntValue(riskTotal-globalOffset, 0))
+		if !appendRisk(riskOffset, riskCount) || !appendNormal(maxIntValue(globalOffset-riskTotal, 0), pageSize-len(items)) {
+			return
+		}
+	} else {
+		normalCount := minIntValue(pageSize, maxIntValue(int(normalTotal)-globalOffset, 0))
+		if !appendNormal(minIntValue(globalOffset, int(normalTotal)), normalCount) || !appendRisk(maxIntValue(globalOffset-int(normalTotal), 0), pageSize-len(items)) {
+			return
+		}
+	}
+	total := int64(riskTotal)
+	if includeNormal {
+		total += normalTotal
+	}
+	h.attachRiskIdentitySummaries(c, items)
+	response.Paginated(c, items, total, page, pageSize)
+}
+
+func (h *CustomUserHandler) riskIndexPage(c *gin.Context, base url.Values, limit, offset int) (riskIndexListPage, bool) {
+	query := cloneURLValues(base)
+	query.Set("limit", strconv.Itoa(limit))
+	query.Set("offset", strconv.Itoa(offset))
+	body, status, err := h.proxyRiskIdentity(c, http.MethodGet, "/api/v1/admin/risk-index?"+query.Encode(), nil)
+	if err != nil {
+		return riskIndexListPage{}, false
+	}
+	if status < 200 || status >= 300 {
+		c.Data(status, "application/json", body)
+		return riskIndexListPage{}, false
+	}
+	var result riskIndexListPage
+	if json.Unmarshal(body, &result) != nil {
+		response.Error(c, http.StatusBadGateway, "Risk index response is invalid")
+		return riskIndexListPage{}, false
+	}
+	return result, true
+}
+
+func (h *CustomUserHandler) allRiskIndexRows(c *gin.Context, base url.Values, total int) ([]map[string]any, bool) {
+	const batchSize = 1000
+	items := make([]map[string]any, 0, total)
+	for offset := 0; offset < total; offset += batchSize {
+		page, ok := h.riskIndexPage(c, base, minIntValue(batchSize, total-offset), offset)
+		if !ok {
+			return nil, false
+		}
+		items = append(items, riskIndexRows(page.Items)...)
+	}
+	return items, true
+}
+
+func (h *CustomUserHandler) listNormalRiskAccounts(c *gin.Context, filters service.UserListFilters, excluded []int64, offset, count, pageSize int) ([]service.User, int64, error) {
+	filters.ExcludeIDs = append([]int64(nil), excluded...)
+	if count <= 0 {
+		_, total, err := h.adminService.ListUsers(c.Request.Context(), 1, 1, filters, "created_at", "desc")
+		return nil, total, err
+	}
+	firstPage := offset/pageSize + 1
+	withinPage := offset % pageSize
+	users, total, err := h.adminService.ListUsers(c.Request.Context(), firstPage, pageSize, filters, "created_at", "desc")
+	if err != nil {
+		return nil, 0, err
+	}
+	result := make([]service.User, 0, count)
+	if withinPage < len(users) {
+		end := minIntValue(withinPage+count, len(users))
+		result = append(result, users[withinPage:end]...)
+	}
+	if len(result) < count && int64(offset+len(result)) < total {
+		next, _, nextErr := h.adminService.ListUsers(c.Request.Context(), firstPage+1, pageSize, filters, "created_at", "desc")
+		if nextErr != nil {
+			return nil, 0, nextErr
+		}
+		result = append(result, next[:minIntValue(count-len(result), len(next))]...)
+	}
+	return result, total, nil
+}
+
+func riskIndexRows(items []riskIndexListItem) []map[string]any {
+	rows := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, map[string]any{
+			"id": item.ID, "risk_type": item.RiskType, "risk_level": item.RiskLevel, "risk_score": item.Score, "risk_reason": item.Reason,
+			"event_count": item.EventCount, "ip_count": item.IPCount, "device_count": item.DeviceCount, "last_action": item.LastAction,
+			"pending": item.Pending, "last_event_at": item.LastEventAt, "last_risk_at": item.LastEventAt, "processing_status": item.ProcessingStatus,
+			"case_id": item.CaseID, "case_status": item.CaseStatus, "assignee_id": item.AssigneeID, "evidence_strength": item.EvidenceStrength,
+			"decision_id": item.DecisionID, "historical_max_score": item.HistoricalMaxScore,
+		})
+	}
+	return rows
+}
+
+func riskMapUserIDs(items []map[string]any) []int64 {
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		if id, ok := item["id"].(int64); ok && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func mergeRiskAccount(row map[string]any, userID int64, account map[string]any, lookupAvailable bool) {
+	for key, value := range riskAccountRow(userID, account, lookupAvailable) {
+		row[key] = value
+	}
+}
+
+func minIntValue(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func maxIntValue(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func riskRowLastEvent(row map[string]any) string {
+	value, _ := row["last_event_at"].(string)
+	return strings.TrimSpace(value)
 }
 
 func (h *CustomUserHandler) riskIdentityAccounts(c *gin.Context, ids []int64) (map[int64]map[string]any, bool) {

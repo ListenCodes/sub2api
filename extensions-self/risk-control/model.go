@@ -74,6 +74,39 @@ type RiskSubject struct {
 	LastEventAt   string `json:"last_event_at"`
 }
 
+type RiskIndexItem struct {
+	UserID             int64  `json:"id"`
+	RiskType           string `json:"risk_type"`
+	RiskLevel          string `json:"risk_level"`
+	Score              int    `json:"score"`
+	Reason             string `json:"reason"`
+	EventCount         int    `json:"event_count"`
+	IPCount            int    `json:"ip_count"`
+	DeviceCount        int    `json:"device_count"`
+	LastAction         string `json:"last_action"`
+	Pending            bool   `json:"pending"`
+	LastEventAt        string `json:"last_event_at"`
+	ProcessingStatus   string `json:"processing_status,omitempty"`
+	CaseID             int64  `json:"case_id,omitempty"`
+	CaseStatus         string `json:"case_status,omitempty"`
+	AssigneeID         int64  `json:"assignee_id,omitempty"`
+	EvidenceStrength   string `json:"evidence_strength,omitempty"`
+	DecisionID         string `json:"decision_id,omitempty"`
+	HistoricalMaxScore int    `json:"historical_max_score,omitempty"`
+}
+
+type RiskIndexFilter struct {
+	RiskType        string
+	RiskLevel       string
+	MinScore        int
+	MaxScore        int
+	ProcessingState string
+	SortBy          string
+	SortOrder       string
+	UserIDs         []int64
+	OmitAllUserIDs  bool
+}
+
 type AuditRecord struct {
 	ID            int64          `json:"id"`
 	AuditKey      string         `json:"audit_key,omitempty"`
@@ -146,6 +179,7 @@ type RiskRepository interface {
 	UpdateRule(context.Context, string, int, Rule) (Rule, error)
 	UpsertSubject(context.Context, EventRecord) error
 	ListSubjects(context.Context, int, int, string, string, []int64) ([]RiskSubject, int, error)
+	ListRiskIndex(context.Context, RiskIndexFilter, int, int) ([]RiskIndexItem, []int64, int, error)
 	GetSubject(context.Context, int64) (RiskSubject, bool, error)
 	ListEvents(context.Context, int, int, int64) ([]EventRecord, int, error)
 	InsertAudit(context.Context, AuditRecord) error
@@ -401,6 +435,90 @@ func (r *MemoryRepository) ListSubjects(_ context.Context, limit, offset int, ri
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Score > items[j].Score })
 	return sliceSubjects(items, limit, offset), len(items), nil
+}
+
+func (r *MemoryRepository) ListRiskIndex(_ context.Context, filter RiskIndexFilter, limit, offset int) ([]RiskIndexItem, []int64, int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	allIDs := make([]int64, 0, len(r.subjects))
+	items := make([]RiskIndexItem, 0, len(r.subjects))
+	requested := make(map[int64]bool, len(filter.UserIDs))
+	for _, userID := range filter.UserIDs {
+		requested[userID] = true
+	}
+	for _, subject := range r.subjects {
+		if subject.Score <= 0 {
+			continue
+		}
+		if !filter.OmitAllUserIDs {
+			allIDs = append(allIDs, subject.UserID)
+		}
+		if len(requested) > 0 && !requested[subject.UserID] {
+			continue
+		}
+		level := identityRiskLevel(subject.Score)
+		state := ""
+		if subject.Pending {
+			state = "pending"
+		}
+		if filter.RiskType != "" && subject.RiskType != filter.RiskType ||
+			filter.RiskLevel != "" && level != filter.RiskLevel ||
+			filter.MinScore >= 0 && subject.Score < filter.MinScore ||
+			filter.MaxScore >= 0 && subject.Score > filter.MaxScore ||
+			filter.ProcessingState != "" && state != filter.ProcessingState {
+			continue
+		}
+		items = append(items, RiskIndexItem{
+			UserID: subject.UserID, RiskType: subject.RiskType, RiskLevel: level, Score: subject.Score,
+			Reason: subject.Reason, EventCount: subject.EventCount, IPCount: subject.IPCount, DeviceCount: subject.DeviceCount,
+			LastAction: subject.LastAction, Pending: subject.Pending, LastEventAt: subject.LastEventAt, ProcessingStatus: state,
+		})
+	}
+	sort.Slice(allIDs, func(i, j int) bool { return allIDs[i] < allIDs[j] })
+	sortRiskIndexItems(items, filter.SortBy, filter.SortOrder)
+	total := len(items)
+	if offset >= total {
+		return []RiskIndexItem{}, allIDs, total, nil
+	}
+	end := minInt(offset+limit, total)
+	return append([]RiskIndexItem(nil), items[offset:end]...), allIDs, total, nil
+}
+
+func sortRiskIndexItems(items []RiskIndexItem, sortBy, sortOrder string) {
+	descending := !strings.EqualFold(strings.TrimSpace(sortOrder), "asc")
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		comparison := 0
+		switch strings.TrimSpace(sortBy) {
+		case "last_event_at":
+			comparison = strings.Compare(left.LastEventAt, right.LastEventAt)
+		case "event_count":
+			comparison = compareInt(left.EventCount, right.EventCount)
+		default:
+			comparison = compareInt(left.Score, right.Score)
+		}
+		if comparison != 0 {
+			if descending {
+				return comparison > 0
+			}
+			return comparison < 0
+		}
+		if left.LastEventAt != right.LastEventAt {
+			return left.LastEventAt > right.LastEventAt
+		}
+		return left.UserID < right.UserID
+	})
+}
+
+func compareInt(left, right int) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (r *MemoryRepository) GetSubject(_ context.Context, userID int64) (RiskSubject, bool, error) {

@@ -16,7 +16,7 @@
             :model-value="draft.actor || ''"
             class="w-full sm:w-56"
             data-testid="audit-actor-filter"
-            placeholder="管理员 ID"
+            placeholder="管理员账号或 ID"
             @update:model-value="setTextFilter('actor', $event)"
             @search="runFiltersNow"
           />
@@ -39,9 +39,9 @@
         </section>
       </template>
       <template #table>
-        <DataTable :key="`risk-audit-${tableSortKey}-${sortOrder}`" :columns="columns" :data="records" :loading="loading" row-key="id" :server-side-sort="true" :default-sort-key="tableSortKey" :default-sort-order="sortOrder" @sort="handleTableSort">
+        <DataTable :key="`risk-audit-${tableSortKey}-${sortOrder}`" class="audit-table" :columns="columns" :data="records" :loading="loading" row-key="id" :server-side-sort="true" :default-sort-key="tableSortKey" :default-sort-order="sortOrder" @sort="handleTableSort">
           <template #cell-time="{ row: record }">{{ formatDate(record.created_at) }}</template>
-          <template #cell-actor="{ row: record }">{{ record.actor || '管理员 ID 未知' }}</template>
+          <template #cell-actor="{ row: record }"><div class="max-w-52 whitespace-normal break-all"><p class="font-medium text-gray-900 dark:text-white">{{ accountPrimary(record.actor_account) || '管理员账号不可用' }}</p><p class="mt-0.5 text-xs text-gray-400">{{ record.actor ? `管理员 #${record.actor}` : 'ID 未知' }}</p></div></template>
           <template #cell-action="{ row: record }"><span class="font-medium text-gray-900 dark:text-white">{{ formatRiskAction(record.action) }}</span></template>
           <template #cell-target="{ row: record }">{{ targetLabel(record) }}</template>
           <template #cell-statusChange="{ row: record }"><span :data-testid="`audit-status-change-${record.id}`">{{ statusChange(record) }}</span></template>
@@ -54,8 +54,9 @@
               <template v-if="record.action !== 'view_identity_detail' || sensitiveExpanded(record.id)">
                 <p>{{ record.reason || formatSensitiveSection(record) || '无操作原因' }}</p>
                 <p v-if="record.failure_reason" class="mt-1 text-red-600 dark:text-red-400">失败原因：{{ record.failure_reason }}</p>
-                <p v-if="record.batch_id || record.request_id" class="mt-1 text-xs text-gray-400 dark:text-gray-500">批次：{{ record.batch_id || '-' }} · 请求：{{ record.request_id || '-' }}</p>
               </template>
+              <button v-if="hasTechnicalDetails(record)" type="button" class="mt-1 text-xs font-medium text-gray-500 underline" :data-testid="`audit-technical-${record.id}`" @click="toggleTechnical(record.id)">技术详情</button>
+              <p v-if="technicalExpanded(record.id)" class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ technicalDetails(record) }}</p>
             </div>
           </template>
           <template #empty><EmptyState :title="t('admin.userRiskControl.empty')" /></template>
@@ -98,14 +99,15 @@ const sortOrder = ref<'asc' | 'desc'>('desc')
 const draft = reactive<AuditFilters>({ category: 'security', action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' })
 const activeFilters = reactive<AuditFilters>({ ...draft })
 const expandedSensitiveIDs = ref<Set<number>>(new Set())
+const expandedTechnicalIDs = ref<Set<number>>(new Set())
 const columns: Column[] = [
-  { key: 'time', label: t('admin.userRiskControl.table.time'), sortable: true },
-  { key: 'actor', label: t('admin.userRiskControl.table.actor') },
-  { key: 'action', label: t('admin.userRiskControl.table.action') },
-  { key: 'target', label: t('admin.userRiskControl.table.target'), sortable: true },
-  { key: 'statusChange', label: t('admin.userRiskControl.table.statusChange') },
-  { key: 'result', label: t('admin.userRiskControl.table.result'), sortable: true },
-  { key: 'reason', label: t('admin.userRiskControl.table.reason') },
+  { key: 'time', label: t('admin.userRiskControl.table.time'), sortable: true, class: 'w-28 min-w-24 whitespace-normal' },
+  { key: 'actor', label: t('admin.userRiskControl.table.actor'), class: 'w-36 min-w-32 whitespace-normal' },
+  { key: 'action', label: t('admin.userRiskControl.table.action'), class: 'w-28 min-w-24 whitespace-normal break-all' },
+  { key: 'target', label: t('admin.userRiskControl.table.target'), sortable: true, class: 'w-40 min-w-32 whitespace-normal break-all' },
+  { key: 'statusChange', label: t('admin.userRiskControl.table.statusChange'), class: 'w-24 min-w-20 whitespace-normal' },
+  { key: 'result', label: t('admin.userRiskControl.table.result'), sortable: true, class: 'w-16 min-w-14' },
+  { key: 'reason', label: t('admin.userRiskControl.table.reason'), class: 'w-44 min-w-36 whitespace-normal' },
 ]
 let loadRequestID = 0
 let writingQuery = false
@@ -253,12 +255,21 @@ async function handleTableSort(key: string, order: 'asc' | 'desc') {
 }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
 function targetLabel(record: RiskAuditRecord) {
-  const labels: Record<string, string> = { user: '用户', rule: '规则', identity_rule: '身份规则', risk_review_case: '复核案件', network_identity: '网络身份' }
-  return `${labels[record.target_type || ''] || '其他目标'} ${record.target_id || (record.target_user_id ? `#${record.target_user_id}` : '-')}`
+  if (record.target_type === 'user' && record.target_account) return `${accountPrimary(record.target_account) || '账号不可用'} · 账号 #${record.target_user_id || record.target_id}`
+  if (record.target_type === 'identity_rule') return identityRuleTargetName(record.target_id)
+  const labels: Record<string, string> = { user: '用户账号', rule: '事件规则', risk_review_case: '人工复核案件', network_identity: '网络身份证据', identity: '全部身份风险数据' }
+  return labels[record.target_type || ''] || '其他操作目标'
 }
+function identityRuleTargetName(code?: string) { return ({ v2_registration_email_retries: '同邮箱重复注册尝试', v2_registration_ip_accounts: '同真实 IP 多账号注册', v2_registration_device_accounts: '同浏览器实例多账号注册', v2_registration_composite_accounts: '同 IP 与浏览器实例多账号注册', v2_api_client_accounts: 'API 客户端观察' } as Record<string, string>)[code || ''] || '身份关联规则' }
+function technicalTargetID(record: RiskAuditRecord) { return record.target_type && record.target_type !== 'user' ? record.target_id || '' : '' }
+function hasTechnicalDetails(record: RiskAuditRecord) { return Boolean(record.batch_id || record.request_id || technicalTargetID(record)) }
+function technicalDetails(record: RiskAuditRecord) { return [`目标标识：${technicalTargetID(record) || '-'}`, `批次：${record.batch_id || '-'}`, `请求：${record.request_id || '-'}`].join(' · ') }
+function accountPrimary(account?: RiskAuditRecord['actor_account']) { return account?.email || account?.username || '' }
 function statusChange(record: RiskAuditRecord) { return record.before_status && record.after_status ? `${formatAccountStatus(record.before_status)} → ${formatAccountStatus(record.after_status)}` : '-' }
 function sensitiveExpanded(id: number) { return expandedSensitiveIDs.value.has(id) }
 function toggleSensitive(id: number) { const next = new Set(expandedSensitiveIDs.value); next.has(id) ? next.delete(id) : next.add(id); expandedSensitiveIDs.value = next }
+function technicalExpanded(id: number) { return expandedTechnicalIDs.value.has(id) }
+function toggleTechnical(id: number) { const next = new Set(expandedTechnicalIDs.value); next.has(id) ? next.delete(id) : next.add(id); expandedTechnicalIDs.value = next }
 function formatSensitiveSection(record: RiskAuditRecord) {
   const section = String(record.metadata?.section || '')
   return ({ 'identity-summary': '身份摘要', 'ip-identities': 'IP 身份', 'device-identities': '设备身份', 'associated-users': '关联账号' } as Record<string, string>)[section] || ''
@@ -271,3 +282,19 @@ watch(() => route?.fullPath, () => {
 })
 onMounted(loadAudit)
 </script>
+
+<style scoped>
+@media (min-width: 1200px) {
+  :deep(.audit-table table) {
+    min-width: 100% !important;
+    table-layout: fixed;
+  }
+
+  :deep(.audit-table th),
+  :deep(.audit-table td) {
+    overflow-wrap: anywhere;
+    vertical-align: top;
+    white-space: normal !important;
+  }
+}
+</style>

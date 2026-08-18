@@ -32,10 +32,12 @@ func RegisterCustomExtensionRoutes(
 func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, custom *handler.CustomExtensions) {
 	admin.Group("/user-risk-control").Any("/*path", custom.AdminUser.ProxyRiskControl)
 	admin.GET("/user-risk/users", custom.AdminUser.ListUserRiskUsers)
+	admin.GET("/user-risk/work-overview", custom.AdminUser.ProxyRiskWorkOverview)
 	admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)
 	admin.POST("/users/:id/risk-status", custom.AdminUser.SetRiskStatus)
 	admin.GET("/users/:id/identity-summary", custom.AdminUser.ProxyUserRiskIdentity)
 	admin.GET("/users/:id/ip-identities", custom.AdminUser.ProxyUserRiskIdentity)
+	admin.POST("/users/:id/ip-identities/search", custom.AdminUser.ProxyUserRiskIdentity)
 	admin.GET("/users/:id/device-identities", custom.AdminUser.ProxyUserRiskIdentity)
 	admin.GET("/users/:id/associated-users", custom.AdminUser.ProxyUserRiskIdentity)
 	admin.GET("/identity-summaries", custom.AdminUser.ProxyRiskIdentitySummaries)

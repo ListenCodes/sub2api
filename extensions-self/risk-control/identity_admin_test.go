@@ -1,11 +1,32 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 	"time"
 )
+
+func TestIdentityIPSearchUsesJSONBodyAndNeverNeedsAQueryString(t *testing.T) {
+	userID, section, search, ok := identityUserRoute("/api/v1/admin/users/9/ip-identities/search")
+	if !ok || userID != 9 || section != "ip-identities" || !search {
+		t.Fatalf("route = user %d section %q search=%v ok=%v", userID, section, search, ok)
+	}
+	request := &http.Request{Body: io.NopCloser(bytes.NewBufferString(`{"query":" 8.8.8.8 ","page":2,"limit":20}`))}
+	query, page, limit, err := identityIPSearchRequest(request)
+	if err != nil || query != "8.8.8.8" || page != 2 || limit != 20 {
+		t.Fatalf("query=%q page=%d limit=%d err=%v", query, page, limit, err)
+	}
+}
+
+func TestIdentityIPSearchRejectsTrailingJSON(t *testing.T) {
+	request := &http.Request{Body: io.NopCloser(bytes.NewBufferString(`{"query":"8.8.8.8","page":1,"limit":20}{"query":"1.1.1.1"}`))}
+	if _, _, _, err := identityIPSearchRequest(request); err == nil {
+		t.Fatal("expected trailing JSON to be rejected")
+	}
+}
 
 func TestMaskIdentityIPReturnsNetworkOnly(t *testing.T) {
 	tests := map[string]string{

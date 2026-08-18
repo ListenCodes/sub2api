@@ -302,7 +302,7 @@ func TestIdentityPostgresStageZeroAndPersistenceContract(t *testing.T) {
 	if second, err := repo.CleanupLegacyV1(ctx); err != nil || second.Applied {
 		t.Fatalf("idempotent cleanup = %+v, error = %v", second, err)
 	}
-	if _, err := repo.Rebuild(ctx, 7, false, activation); err == nil || !strings.Contains(err.Error(), "Shadow period") {
+	if _, err := repo.Rebuild(ctx, 7, false, 1, activation); err == nil || !strings.Contains(err.Error(), "Shadow period") {
 		t.Fatalf("write rebuild before Shadow deadline error = %v", err)
 	}
 }
@@ -572,7 +572,7 @@ WHERE a.application_name=$1
 	}
 }
 
-func TestReliabilityEventsAreNotProjectedAsUserRisk(t *testing.T) {
+func TestNormalAPIObservationsAreNotProjectedButPositiveErrorsRemainRisk(t *testing.T) {
 	ctx := context.Background()
 	db := openIsolatedRiskTestDB(t)
 	if err := ApplySchema(ctx, db); err != nil {
@@ -594,6 +594,7 @@ func TestReliabilityEventsAreNotProjectedAsUserRisk(t *testing.T) {
 	insert(EventRecord{EventKey: "mixed-api-error", EventType: "api_error", UserID: 501, RiskType: "api_error", RiskLevel: "low", Score: 0, Reason: "gateway request failed", Decision: "observe", IPHash: "api-error-ip", DeviceHash: "api-error-device", OccurredAt: base.Add(time.Second).Format(time.RFC3339Nano)})
 	insert(EventRecord{EventKey: "mixed-upstream-error", EventType: "upstream_error", UserID: 501, RiskType: "upstream_error", RiskLevel: "low", Score: 0, Reason: "upstream unavailable", Decision: "observe", IPHash: "upstream-ip", DeviceHash: "upstream-device", OccurredAt: base.Add(2 * time.Second).Format(time.RFC3339Nano)})
 	insert(EventRecord{EventKey: "mismatched-risk-type", EventType: "login_failure", UserID: 505, RiskType: "api_error", RiskLevel: "high", Score: 65, Reason: "login failure with stale risk type", Decision: "review", OccurredAt: base.Add(-2 * time.Minute).Format(time.RFC3339Nano)})
+	insert(EventRecord{EventKey: "positive-api-error", EventType: "api_error", UserID: 506, RiskType: "api_error", RiskLevel: "medium", Score: 50, Reason: "用户自身 API 错误达到阈值", Decision: "review", OccurredAt: base.Add(-time.Minute).Format(time.RFC3339Nano)})
 	type reliabilityCase struct {
 		userID    int64
 		eventType string
@@ -613,6 +614,9 @@ func TestReliabilityEventsAreNotProjectedAsUserRisk(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,pending,last_event_at) VALUES(505,'api_error','high',65,'login failure with stale risk type',1,'review',TRUE,$1)`, base.Add(-2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,pending,last_event_at) VALUES(506,'api_error','medium',50,'用户自身 API 错误达到阈值',1,'review',TRUE,$1)`, base.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	for _, item := range reliabilityOnly {
 		if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,event_count,last_action,last_event_at) VALUES($1,$2,'low',0,$3,1,'observe',$4)`, item.userID, item.eventType, item.reason, base); err != nil {
 			t.Fatal(err)
@@ -626,13 +630,17 @@ func TestReliabilityEventsAreNotProjectedAsUserRisk(t *testing.T) {
 	if err != nil || !found || mismatched.RiskType != "login_failure" || mismatched.Score != 65 || mismatched.Reason != "login failure with stale risk type" {
 		t.Fatalf("mismatched risk type projection = %+v, found=%v, error=%v", mismatched, found, err)
 	}
+	positiveError, found, err := repo.GetSubject(ctx, 506)
+	if err != nil || !found || positiveError.RiskType != "api_error" || positiveError.Score != 50 || positiveError.Reason != "用户自身 API 错误达到阈值" {
+		t.Fatalf("positive API error projection = %+v, found=%v, error=%v", positiveError, found, err)
+	}
 	for _, item := range reliabilityOnly {
 		subject, found, err := repo.GetSubject(ctx, item.userID)
 		if err != nil || !found || subject.RiskType != "" || subject.RiskLevel != "none" || subject.Score != 0 || subject.Reason != "" || subject.EventCount != 0 {
 			t.Fatalf("%s-only legacy projection = %+v, found=%v, error=%v", item.eventType, subject, found, err)
 		}
 	}
-	for _, riskType := range []string{"api_request", "api_error", "upstream_error"} {
+	for _, riskType := range []string{"api_request", "upstream_error"} {
 		items, total, err := repo.ListSubjects(ctx, 20, 0, riskType, "", nil)
 		if err != nil || total != 0 || len(items) != 0 {
 			t.Fatalf("legacy %s risk filter = total:%d items:%+v error:%v", riskType, total, items, err)

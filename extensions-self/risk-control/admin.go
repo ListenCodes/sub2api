@@ -42,6 +42,44 @@ func (s *HTTPServer) handleUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": result, "total": total, "page": offset/limit + 1, "page_size": limit})
 }
 
+func (s *HTTPServer) handleRiskIndex(w http.ResponseWriter, r *http.Request) {
+	limit, offset := pagination(r)
+	minScore, err := parseOptionalScore(r.URL.Query().Get("min_score"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	maxScore, err := parseOptionalScore(r.URL.Query().Get("max_score"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("risk_only")), "true") && minScore < 1 {
+		minScore = 1
+	}
+	filter := RiskIndexFilter{
+		RiskType: strings.TrimSpace(r.URL.Query().Get("risk_type")), RiskLevel: strings.TrimSpace(r.URL.Query().Get("risk_level")),
+		MinScore: minScore, MaxScore: maxScore, ProcessingState: strings.TrimSpace(r.URL.Query().Get("processing_status")),
+		SortBy: strings.TrimSpace(r.URL.Query().Get("sort_by")), SortOrder: strings.TrimSpace(r.URL.Query().Get("sort_order")),
+		UserIDs: uniqueIdentityUserIDs(parseUserIDs(r.URL.Query().Get("user_ids"))), OmitAllUserIDs: strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_all_ids")), "false"),
+	}
+	if filter.RiskLevel != "" {
+		if _, _, ok := identityRiskLevelRange(filter.RiskLevel); !ok {
+			writeError(w, http.StatusBadRequest, errors.New("invalid risk level filter"))
+			return
+		}
+	}
+	items, allRiskUserIDs, total, err := s.service.repo.ListRiskIndex(r.Context(), filter, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if allRiskUserIDs == nil {
+		allRiskUserIDs = []int64{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "risk_user_ids": allRiskUserIDs, "total": total, "page": offset/limit + 1, "page_size": limit})
+}
+
 func parseUserIDs(raw string) []int64 {
 	parts := strings.Split(raw, ",")
 	ids := make([]int64, 0, len(parts))
@@ -55,25 +93,38 @@ func parseUserIDs(raw string) []int64 {
 }
 
 func (s *HTTPServer) handleUser(w http.ResponseWriter, r *http.Request, userID int64) {
+	indexItems, _, _, err := s.service.repo.ListRiskIndex(r.Context(), RiskIndexFilter{MinScore: -1, MaxScore: -1, UserIDs: []int64{userID}, OmitAllUserIDs: true}, 1, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	subject, found, err := s.service.repo.GetSubject(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if !found {
+	if !found && len(indexItems) == 0 {
 		writeError(w, http.StatusNotFound, errors.New("risk subject not found"))
 		return
 	}
-	events, _, err := s.service.repo.ListEvents(r.Context(), 100, 0, userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	events := []EventRecord{}
+	if found {
+		events, _, err = s.service.repo.ListEvents(r.Context(), 100, 0, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	item := RiskIndexItem{UserID: userID, RiskType: subject.RiskType, RiskLevel: subject.RiskLevel, Score: subject.Score, Reason: subject.Reason, EventCount: subject.EventCount, IPCount: subject.IPCount, DeviceCount: subject.DeviceCount, LastAction: subject.LastAction, Pending: subject.Pending, LastEventAt: subject.LastEventAt}
+	if len(indexItems) > 0 {
+		item = indexItems[0]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id": subject.UserID, "username": subject.Username, "account_status": subject.AccountStatus,
-		"risk_type": subject.RiskType, "risk_level": subject.RiskLevel, "score": subject.Score,
-		"reason": subject.Reason, "event_count": subject.EventCount, "ip_count": subject.IPCount,
-		"device_count": subject.DeviceCount, "last_action": subject.LastAction, "pending": subject.Pending, "last_event_at": subject.LastEventAt,
+		"id": item.UserID, "username": subject.Username, "account_status": subject.AccountStatus,
+		"risk_type": item.RiskType, "risk_level": item.RiskLevel, "score": item.Score,
+		"reason": item.Reason, "event_count": item.EventCount, "ip_count": item.IPCount,
+		"device_count": item.DeviceCount, "last_action": item.LastAction, "pending": item.Pending, "last_event_at": item.LastEventAt,
+		"case_id": item.CaseID, "case_status": item.CaseStatus,
 		"timeline": events,
 	})
 }

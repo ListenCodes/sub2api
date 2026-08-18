@@ -22,14 +22,18 @@ func NewSQLRepository(db *sql.DB) *SQLRepository { return &SQLRepository{db: db}
 
 func buildRiskSubjectProjectionCTE(subjectFilter, eventFilter string) string {
 	return `WITH legacy_api_subjects AS MATERIALIZED (
-SELECT user_id
-FROM risk_subjects
-WHERE ` + subjectFilter + `(risk_type IN ('api_request','api_error','upstream_error') OR reason ILIKE '%API 请求观察%')
-UNION
-SELECT DISTINCT subject.user_id
-FROM risk_subjects subject
-JOIN risk_events event ON event.user_id=subject.user_id
-WHERE ` + eventFilter + `event.event_type IN ('api_request','api_error','upstream_error')
+ SELECT subject.user_id
+ FROM risk_subjects subject
+ WHERE ` + subjectFilter + `(subject.risk_type='api_request' OR subject.reason ILIKE '%API 请求观察%'
+   OR (subject.risk_type IN ('api_error','upstream_error') AND NOT EXISTS(
+     SELECT 1 FROM risk_events matching_error
+     WHERE matching_error.user_id=subject.user_id AND matching_error.event_type=subject.risk_type AND matching_error.score>0
+   )))
+ UNION
+ SELECT DISTINCT subject.user_id
+ FROM risk_subjects subject
+ JOIN risk_events event ON event.user_id=subject.user_id
+ WHERE ` + eventFilter + `event.event_type='api_request'
 ), non_api_counts AS MATERIALIZED (
 SELECT e.user_id,
   COUNT(*)::int AS event_count,
@@ -38,7 +42,7 @@ SELECT e.user_id,
   MAX(e.occurred_at) AS last_event_at
 FROM risk_events e
 JOIN legacy_api_subjects legacy ON legacy.user_id=e.user_id
-WHERE e.event_type NOT IN ('api_request','api_error','upstream_error')
+ WHERE e.event_type<>'api_request' AND NOT (e.event_type IN ('api_error','upstream_error') AND e.score<=0)
 GROUP BY e.user_id
 ), non_api_best AS MATERIALIZED (
 SELECT DISTINCT ON (e.user_id)
@@ -46,7 +50,7 @@ SELECT DISTINCT ON (e.user_id)
   e.risk_level,e.score,e.reason,e.decision,e.occurred_at
 FROM risk_events e
 JOIN legacy_api_subjects legacy ON legacy.user_id=e.user_id
-WHERE e.event_type NOT IN ('api_request','api_error','upstream_error')
+ WHERE e.event_type<>'api_request' AND NOT (e.event_type IN ('api_error','upstream_error') AND e.score<=0)
 ORDER BY e.user_id,e.score DESC,
   CASE e.risk_level WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
   CASE e.decision WHEN 'ban' THEN 4 WHEN 'auto_ban' THEN 4 WHEN 'review' THEN 3 WHEN 'observe' THEN 2 ELSE 0 END DESC,
@@ -72,7 +76,7 @@ LEFT JOIN non_api_best best ON best.user_id=s.user_id
 
 var (
 	riskSubjectProjectionCTE       = buildRiskSubjectProjectionCTE("", "")
-	riskSubjectProjectionByUserCTE = buildRiskSubjectProjectionCTE("user_id=$1 AND ", "subject.user_id=$1 AND ")
+	riskSubjectProjectionByUserCTE = buildRiskSubjectProjectionCTE("subject.user_id=$1 AND ", "subject.user_id=$1 AND ")
 )
 
 func ApplySchema(ctx context.Context, db *sql.DB) error {
@@ -291,6 +295,96 @@ func (r *SQLRepository) ListSubjects(ctx context.Context, limit, offset int, ris
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+func riskIndexProjectionCTE() string {
+	return riskSubjectProjectionCTE + `, eligible_identity AS MATERIALIZED (
+ SELECT signal.id,signal.user_id,signal.rule_code AS risk_type,signal.score,signal.evidence_count,signal.domain,signal.last_hit_at
+ FROM risk_identity_signals signal
+ JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision
+ JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+ WHERE signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW())
+   AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW())
+   AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+), identity_best AS MATERIALIZED (
+ SELECT DISTINCT ON(user_id) id,user_id,risk_type,score,evidence_count,domain,last_hit_at
+ FROM eligible_identity ORDER BY user_id,score DESC,last_hit_at DESC,id DESC
+), current_case AS MATERIALIZED (
+ SELECT DISTINCT ON(user_id) user_id,id,status,assignee_id,evidence_strength,decision_id,historical_max_score,last_hit_at
+ FROM risk_review_cases
+ ORDER BY user_id,CASE status WHEN 'in_review' THEN 1 WHEN 'pending' THEN 2 WHEN 'observing' THEN 3 ELSE 4 END,last_hit_at DESC,id DESC
+), risk_candidates AS MATERIALIZED (
+ SELECT user_id,risk_type,score,reason,event_count,ip_count,device_count,last_action,pending,last_event_at,1 source_priority
+ FROM projected_risk_subjects WHERE score>0
+ UNION ALL
+ SELECT user_id,risk_type,score,'' reason,evidence_count event_count,
+   CASE WHEN domain='ip' THEN evidence_count ELSE 0 END ip_count,
+   CASE WHEN domain='device' THEN evidence_count ELSE 0 END device_count,
+   'observe' last_action,FALSE pending,last_hit_at last_event_at,2 source_priority
+ FROM identity_best
+), ranked_risk AS MATERIALIZED (
+ SELECT candidate.*,ROW_NUMBER() OVER(PARTITION BY user_id ORDER BY score DESC,last_event_at DESC NULLS LAST,source_priority DESC,user_id ASC) row_number
+ FROM risk_candidates candidate
+), risk_index AS MATERIALIZED (
+ SELECT ranked.user_id,ranked.risk_type,
+   CASE WHEN ranked.score>=80 THEN 'critical' WHEN ranked.score>=60 THEN 'high' WHEN ranked.score>=30 THEN 'medium' WHEN ranked.score>0 THEN 'low' ELSE 'none' END risk_level,
+   ranked.score,ranked.reason,ranked.event_count,ranked.ip_count,ranked.device_count,ranked.last_action,
+   (ranked.pending OR COALESCE(current_case.status IN ('pending','in_review'),FALSE)) pending,ranked.last_event_at,
+   COALESCE(current_case.status,CASE WHEN ranked.pending THEN 'pending' ELSE '' END) processing_status,
+   COALESCE(current_case.id,0) case_id,COALESCE(current_case.status,'') case_status,COALESCE(current_case.assignee_id,0) assignee_id,
+   COALESCE(current_case.evidence_strength,'') evidence_strength,COALESCE(current_case.decision_id,'') decision_id,COALESCE(current_case.historical_max_score,0) historical_max_score
+ FROM ranked_risk ranked LEFT JOIN current_case USING(user_id) WHERE ranked.row_number=1
+) `
+}
+
+func (r *SQLRepository) ListRiskIndex(ctx context.Context, filter RiskIndexFilter, limit, offset int) ([]RiskIndexItem, []int64, int, error) {
+	projection := riskIndexProjectionCTE()
+	where := `($1='' OR risk_type=$1) AND ($2='' OR risk_level=$2) AND ($3<0 OR score>=$3) AND ($4<0 OR score<=$4) AND ($5='' OR processing_status=$5) AND ($6=FALSE OR user_id=ANY($7))`
+	args := []any{strings.TrimSpace(filter.RiskType), strings.TrimSpace(filter.RiskLevel), filter.MinScore, filter.MaxScore, strings.TrimSpace(filter.ProcessingState), len(filter.UserIDs) > 0, pq.Array(filter.UserIDs)}
+	var total int
+	if err := r.db.QueryRowContext(ctx, projection+`SELECT COUNT(*) FROM risk_index WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, nil, 0, err
+	}
+	var allRiskUserIDs pq.Int64Array
+	if !filter.OmitAllUserIDs {
+		if err := r.db.QueryRowContext(ctx, projection+`SELECT COALESCE(array_agg(user_id ORDER BY user_id),'{}'::bigint[]) FROM risk_index`).Scan(&allRiskUserIDs); err != nil {
+			return nil, nil, 0, err
+		}
+	}
+	sortColumn := "score"
+	switch strings.TrimSpace(filter.SortBy) {
+	case "last_event_at":
+		sortColumn = "last_event_at"
+	case "event_count":
+		sortColumn = "event_count"
+	}
+	sortOrder := "DESC"
+	if strings.EqualFold(strings.TrimSpace(filter.SortOrder), "asc") {
+		sortOrder = "ASC"
+	}
+	tieBreak := ",last_event_at DESC NULLS LAST,user_id ASC"
+	if sortColumn == "last_event_at" {
+		tieBreak = ",score DESC,user_id ASC"
+	} else if sortColumn == "event_count" {
+		tieBreak = ",score DESC,last_event_at DESC NULLS LAST,user_id ASC"
+	}
+	query := projection + `SELECT user_id,risk_type,risk_level,score,reason,event_count,ip_count,device_count,last_action,pending,
+COALESCE(to_char(last_event_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),''),processing_status,case_id,case_status,assignee_id,evidence_strength,decision_id,historical_max_score
+FROM risk_index WHERE ` + where + ` ORDER BY ` + sortColumn + ` ` + sortOrder + tieBreak + ` LIMIT $8 OFFSET $9`
+	rows, err := r.db.QueryContext(ctx, query, append(args, limit, offset)...)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer rows.Close()
+	items := make([]RiskIndexItem, 0)
+	for rows.Next() {
+		var item RiskIndexItem
+		if err := rows.Scan(&item.UserID, &item.RiskType, &item.RiskLevel, &item.Score, &item.Reason, &item.EventCount, &item.IPCount, &item.DeviceCount, &item.LastAction, &item.Pending, &item.LastEventAt, &item.ProcessingStatus, &item.CaseID, &item.CaseStatus, &item.AssigneeID, &item.EvidenceStrength, &item.DecisionID, &item.HistoricalMaxScore); err != nil {
+			return nil, nil, 0, err
+		}
+		items = append(items, item)
+	}
+	return items, []int64(allRiskUserIDs), total, rows.Err()
 }
 
 func (r *SQLRepository) GetSubject(ctx context.Context, userID int64) (RiskSubject, bool, error) {

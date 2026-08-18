@@ -32,6 +32,9 @@ describe('UserRiskControlAuditView', () => {
     expect(wrapper.findComponent(TablePageLayout).exists()).toBe(true)
     expect(wrapper.findComponent(DataTable).exists()).toBe(true)
     expect(wrapper.findComponent(DateRangePicker).exists()).toBe(true)
+    const columns = wrapper.findComponent(DataTable).props('columns') as Array<{ key: string; class?: string }>
+    expect(columns.find((column) => column.key === 'reason')?.class).toContain('whitespace-normal')
+    expect(columns.find((column) => column.key === 'target')?.class).toContain('break-all')
   })
 
   it('filters audit records automatically without an apply button', async () => {
@@ -110,13 +113,36 @@ describe('UserRiskControlAuditView', () => {
     expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 2, pageSize: 20 })
   })
 
-  it('renders Chinese audit labels, failure detail, and batch identifiers', async () => {
-    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 3, actor: '管理员 11', action: 'ban', target_type: 'user', target_id: '7', target_user_id: 7, result: 'failed', reason: '重复登录失败', failure_reason: '账号已经封禁', batch_id: 'batch-1', request_id: 'request-1', before_status: 'active', after_status: 'disabled', created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+  it('prioritizes administrator and target accounts while folding batch identifiers', async () => {
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{
+      id: 3,
+      actor: '11',
+      actor_account: { id: 11, email: 'admin@example.com', username: 'Admin', status: 'active', availability: 'available' },
+      action: 'ban',
+      target_type: 'user',
+      target_id: '7',
+      target_user_id: 7,
+      target_account: { id: 7, email: 'alice@example.com', username: 'Alice', status: 'disabled', availability: 'available' },
+      result: 'failed',
+      reason: '重复登录失败',
+      failure_reason: '账号已经封禁',
+      batch_id: 'batch-1',
+      request_id: 'request-1',
+      before_status: 'active',
+      after_status: 'disabled',
+      created_at: '2026-07-11T12:00:00Z',
+    }], total: 1 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
     expect(wrapper.text()).toContain('封禁账号')
     expect(wrapper.text()).toContain('失败')
     expect(wrapper.text()).toContain('账号已经封禁')
+    expect(wrapper.text()).toContain('admin@example.com')
+    expect(wrapper.text()).toContain('alice@example.com')
+    expect(wrapper.text()).toContain('账号 #7')
+    expect(wrapper.text()).not.toContain('batch-1')
+    expect(wrapper.text()).not.toContain('request-1')
+    await wrapper.get('[data-testid="audit-technical-3"]').trigger('click')
     expect(wrapper.text()).toContain('batch-1')
     expect(wrapper.text()).toContain('request-1')
   })
@@ -129,12 +155,28 @@ describe('UserRiskControlAuditView', () => {
     expect(wrapper.get('[data-testid="audit-status-change-4"]').text()).toBe('-')
   })
 
+  it('uses a readable identity-rule target and folds its internal code by default', async () => {
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 6, actor: '11', action: 'disable_identity_rule', target_type: 'identity_rule', target_id: 'v2_registration_ip_accounts', result: 'success', reason: '人工停用', created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+    const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('同真实 IP 多账号注册')
+    expect(wrapper.text()).not.toContain('v2_registration_ip_accounts')
+    await wrapper.get('[data-testid="audit-technical-6"]').trigger('click')
+    expect(wrapper.text()).toContain('v2_registration_ip_accounts')
+  })
+
   it('separates audit categories and keeps identity detail metadata folded by default', async () => {
-    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 8, actor: '11', action: 'view_identity_detail', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', metadata: { section: 'associated-users' }, created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+    vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 8, actor: '11', action: 'view_identity_detail', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', metadata: { section: 'associated-users' }, batch_id: 'sensitive-batch', request_id: 'sensitive-request', created_at: '2026-07-11T12:00:00Z' }], total: 1 })
     const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } } })
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('关联账号')
+		expect(wrapper.text()).not.toContain('sensitive-request')
+		expect(wrapper.find('[data-testid="audit-technical-8"]').exists()).toBe(true)
+		await wrapper.get('[data-testid="audit-technical-8"]').trigger('click')
+		expect(wrapper.text()).toContain('sensitive-batch')
+		expect(wrapper.text()).toContain('sensitive-request')
     await wrapper.get('[data-testid="toggle-sensitive-audit-8"]').trigger('click')
     expect(wrapper.text()).toContain('关联账号')
 

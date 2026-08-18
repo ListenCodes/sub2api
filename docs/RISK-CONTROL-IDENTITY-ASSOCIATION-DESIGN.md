@@ -593,8 +593,10 @@ V2 上线后执行一次全量重算，之后支持增量和可重复全量重�
 
 - `GET /api/v1/admin/users/{id}/identity-summary`
 - `GET /api/v1/admin/users/{id}/ip-identities`
+- `POST /api/v1/admin/users/{id}/ip-identities/search`（精确 IP 放入 JSON 请求体，不进入 URL）
 - `GET /api/v1/admin/users/{id}/device-identities`
 - `GET /api/v1/admin/users/{id}/associated-users`
+- `GET /api/v1/admin/work-overview`
 - `GET /api/v1/admin/identity-health`
 - `POST /api/v1/admin/risk-rebuilds/dry-run`
 - `POST /api/v1/admin/risk-rebuilds`
@@ -610,6 +612,8 @@ V2 上线后执行一次全量重算，之后支持增量和可重复全量重�
 - 不把主数据库凭据或读取权限交给扩展服务。
 
 所有接口必须分页、限制最大页大小、只允许管理员、设置 `no-store`，并避免在错误信息中返回密文或密钥标识细节。
+
+工作概览由扩展服务一次聚合返回待复核、当前管理员案件、观察中、当前有效风险和数据异常数量。内部 `GET /api/v1/admin/risk-index` 统一投影通用风险主体与当前有效身份信号，按风险分、最近命中和用户 ID 提供稳定服务端分页；默认列表只批量补全响应页账号，账号或状态跨主库筛选时按最多 100 个 ID 的批次筛选风险候选后再分页，并在主库查询层排除风险账号后分页普通账号。关联账号继续由主后端按最多 100 个 ID 的批次补全；前端不得为了排序、筛选或分页拉取全量账号。精确 IP 查询的旧 GET 参数仅为兼容旧客户端保留，当前管理端必须使用 POST JSON 契约，通用审计中间件整体省略该请求体，专用查看审计只记录目标账号和分区。
 
 ## 12. 实施范围
 

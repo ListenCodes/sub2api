@@ -41,6 +41,7 @@ const riskActions: Record<string, string> = {
   mark_processed: '标记已处理',
   purge_legacy_v1: '清理 V1 历史数据',
 	claim_risk_review_case: '领取复核案件',
+	review_case: '人工复核案件',
 	review_risk_case: '提交复核反馈',
 	label_shared_network: '标记共享网络',
 	disable_identity_rule: '停用身份规则',

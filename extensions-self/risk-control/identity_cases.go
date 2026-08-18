@@ -45,7 +45,9 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 	if riskType = strings.TrimSpace(riskType); riskType != "" {
 		add("case_row.primary_signal=$%d", riskType)
 	}
-	if caseStatus = strings.TrimSpace(caseStatus); caseStatus != "" {
+	if caseStatus = strings.TrimSpace(caseStatus); caseStatus == "data_quality" {
+		where = append(where, "EXISTS(SELECT 1 FROM risk_signal_processing_jobs quality_job JOIN risk_identity_events quality_event ON quality_event.id=quality_job.event_id WHERE quality_event.user_id=case_row.user_id AND quality_job.status IN ('retry','failed'))")
+	} else if caseStatus != "" {
 		add("case_row.status=$%d", caseStatus)
 	}
 	orderColumn := "case_row.last_hit_at"
@@ -73,7 +75,7 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 		return nil, 0, err
 	}
 	args = append(args, limit, offset)
-	rows, err := r.db.QueryContext(ctx, base+`SELECT case_row.id,case_row.user_id,COALESCE(case_row.decision_id,''),case_row.signal_family,case_row.status,case_row.resolution,COALESCE(current.current_score,0),case_row.historical_max_score,case_row.primary_signal,case_row.evidence_strength,case_row.assignee_id,case_row.opened_at,case_row.last_hit_at,case_row.resolved_at FROM risk_review_cases case_row LEFT JOIN current_scores current ON current.user_id=case_row.user_id AND current.signal_family=case_row.signal_family WHERE `+condition+` ORDER BY `+orderColumn+` `+direction+`,case_row.id DESC LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
+	rows, err := r.db.QueryContext(ctx, base+`SELECT case_row.id,case_row.user_id,COALESCE(case_row.decision_id,''),case_row.signal_family,case_row.status,case_row.resolution,COALESCE(current.current_score,0),case_row.historical_max_score,case_row.primary_signal,case_row.evidence_strength,case_row.assignee_id,case_row.opened_at,case_row.last_hit_at,case_row.resolved_at FROM risk_review_cases case_row LEFT JOIN current_scores current ON current.user_id=case_row.user_id AND current.signal_family=case_row.signal_family WHERE `+condition+` ORDER BY `+orderColumn+` `+direction+`,case_row.last_hit_at DESC,case_row.id DESC LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -93,6 +95,27 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+func (r *SQLIdentityRepository) WorkOverview(ctx context.Context, actorID int64) (map[string]int, error) {
+	query := riskIndexProjectionCTE() + `, case_counts AS (
+ SELECT COUNT(*) FILTER(WHERE status='pending')::int pending,
+        COUNT(*) FILTER(WHERE assignee_id=$1 AND status IN ('pending','in_review'))::int mine,
+        COUNT(*) FILTER(WHERE status='observing')::int observing
+ FROM risk_review_cases
+), quality_cases AS (
+ SELECT COUNT(*)::int data_quality
+ FROM risk_review_cases quality_case
+ WHERE EXISTS(SELECT 1 FROM risk_signal_processing_jobs job JOIN risk_identity_events event ON event.id=job.event_id
+              WHERE event.user_id=quality_case.user_id AND job.status IN ('retry','failed'))
+)
+SELECT case_counts.pending,case_counts.mine,case_counts.observing,(SELECT COUNT(*)::int FROM risk_index),quality_cases.data_quality
+FROM case_counts CROSS JOIN quality_cases`
+	var pending, mine, observing, atRisk, dataQuality int
+	if err := r.db.QueryRowContext(ctx, query, actorID).Scan(&pending, &mine, &observing, &atRisk, &dataQuality); err != nil {
+		return nil, err
+	}
+	return map[string]int{"pending": pending, "mine": mine, "observing": observing, "at_risk": atRisk, "data_quality": dataQuality}, nil
 }
 
 func pqInt64Array(values []int64) string {

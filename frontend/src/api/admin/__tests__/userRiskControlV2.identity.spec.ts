@@ -16,10 +16,11 @@ describe('user risk identity API', () => {
     expect(mainAdminClient.get).toHaveBeenNthCalledWith(3, '/admin/users/7/associated-users', { params: { page: 2, limit: 20 } })
   })
 
-  it('sends only an exact normalized IP query to the identity endpoint', async () => {
-    vi.mocked(mainAdminClient.get).mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 20 } })
+  it('sends an exact normalized IP in a POST body instead of a URL query', async () => {
+    vi.mocked(mainAdminClient.post).mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 20 } })
     await userRiskControlV2API.listUserIPIdentities(7, 1, 20, ' 8.8.8.8 ')
-    expect(mainAdminClient.get).toHaveBeenCalledWith('/admin/users/7/ip-identities', { params: { page: 1, limit: 20, q: '8.8.8.8' } })
+    expect(mainAdminClient.post).toHaveBeenCalledWith('/admin/users/7/ip-identities/search', { page: 1, limit: 20, query: '8.8.8.8' })
+    expect(mainAdminClient.get).not.toHaveBeenCalled()
   })
 
   it('loads summary and health independently from detail lists', async () => {
