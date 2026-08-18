@@ -87,7 +87,7 @@ func TestRiskIndexPostgresCombinesGenericAndIdentityOnlyRisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO risk_subjects(user_id,risk_type,risk_level,score,reason,last_event_at) VALUES
- (100,'login_failure','high',65,'登录失败达到复核阈值',NOW()-INTERVAL '1 hour'),
+ (1004,'login_failure','high',65,'登录失败达到复核阈值',NOW()-INTERVAL '1 hour'),
  (300,'api_request','none',0,'正常 API 请求观察',NOW())`); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +97,19 @@ func TestRiskIndexPostgresCombinesGenericAndIdentityOnlyRisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := time.Now().UTC()
-	identityUsers := []int64{100, 1001, 1002, 1003, 1004}
-	for index, userID := range identityUsers {
-		if _, err := identity.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("risk-index-%d", index), userID, base.Add(time.Duration(index)*time.Second), "8.8.4.4", "shared-browser")); err != nil {
-			t.Fatal(err)
+	identityGroups := []struct {
+		users   []int64
+		ip      string
+		browser string
+	}{
+		{users: []int64{1000, 1001, 1002, 1003, 1004}, ip: "8.8.4.4", browser: "shared-browser-a"},
+		{users: []int64{2000, 2001, 2002, 2003, 2004}, ip: "1.1.1.1", browser: "shared-browser-b"},
+	}
+	for groupIndex, group := range identityGroups {
+		for userIndex, userID := range group.users {
+			if _, err := identity.Ingest(ctx, registrationIdentityReport(fmt.Sprintf("risk-index-%d-%d", groupIndex, userIndex), userID, base, group.ip, group.browser)); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	items, allIDs, total, err := NewSQLRepository(db).ListRiskIndex(ctx, RiskIndexFilter{MinScore: -1, MaxScore: -1, SortBy: "risk_score", SortOrder: "desc"}, 20, 0)
@@ -111,8 +120,8 @@ func TestRiskIndexPostgresCombinesGenericAndIdentityOnlyRisk(t *testing.T) {
 	for _, item := range items {
 		seen[item.UserID] = item
 	}
-	if total != len(identityUsers) || len(seen) != len(identityUsers) || seen[100].Score <= 65 || seen[100].RiskType == "login_failure" || seen[1004].Score <= 0 || len(allIDs) != total {
-		t.Fatalf("generic=%+v identity=%+v total=%d all_ids=%v", seen[100], seen[1004], total, allIDs)
+	if total != 2 || len(seen) != 2 || seen[1004].Score <= 65 || seen[1004].RiskType == "login_failure" || seen[2004].Score <= 0 || len(allIDs) != total {
+		t.Fatalf("combined=%+v identity_only=%+v total=%d all_ids=%v", seen[1004], seen[2004], total, allIDs)
 	}
 	if _, exists := seen[300]; exists {
 		t.Fatalf("zero-score observation appeared in risk index: %+v", seen[300])
