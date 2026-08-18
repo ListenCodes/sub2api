@@ -120,8 +120,17 @@ func TestRiskIndexPostgresCombinesGenericAndIdentityOnlyRisk(t *testing.T) {
 	for _, item := range items {
 		seen[item.UserID] = item
 	}
-	if total != 2 || len(seen) != 2 || seen[1004].Score <= 65 || seen[1004].RiskType == "login_failure" || seen[2004].Score <= 0 || len(allIDs) != total {
+	expectedIDs := []int64{1002, 1003, 1004, 2002, 2003, 2004}
+	if total != len(expectedIDs) || len(seen) != total || len(allIDs) != total {
 		t.Fatalf("combined=%+v identity_only=%+v total=%d all_ids=%v", seen[1004], seen[2004], total, allIDs)
+	}
+	for index, userID := range expectedIDs {
+		if allIDs[index] != userID || seen[userID].Score <= 0 {
+			t.Fatalf("risk user %d missing or out of order: item=%+v all_ids=%v", userID, seen[userID], allIDs)
+		}
+	}
+	if seen[1004].Score <= 65 || seen[1004].RiskType == "login_failure" || seen[2004].Score <= 0 {
+		t.Fatalf("combined=%+v identity_only=%+v", seen[1004], seen[2004])
 	}
 	if _, exists := seen[300]; exists {
 		t.Fatalf("zero-score observation appeared in risk index: %+v", seen[300])
