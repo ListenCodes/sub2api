@@ -1,0 +1,137 @@
+name: Upstream Stable Preflight
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *'
+
+concurrency:
+  group: upstream-stable-preflight
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: risk_control_test
+          POSTGRES_USER: risk_test
+          POSTGRES_PASSWORD: risk_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U risk_test -d risk_control_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RISK_CONTROL_TEST_DATABASE_URL: postgres://risk_test:risk_test_password@127.0.0.1:5432/risk_control_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: custom-release
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify default-branch workflow mirror
+        shell: bash
+        run: |
+          git fetch --force --no-tags https://github.com/ListenCodes/sub2api.git \
+            refs/heads/main:refs/remotes/origin/main
+          git show origin/main:.github/workflows/upstream-stable-preflight.yml \
+            > "$RUNNER_TEMP/upstream-stable-preflight.yml"
+          cmp "$RUNNER_TEMP/upstream-stable-preflight.yml" \
+            .github/workflows/upstream-stable-preflight.yml
+      - id: candidate
+        name: Prepare unpushed Stable candidate
+        shell: bash
+        run: bash deploy/ci/prepare-upstream-candidate.sh
+      - uses: actions/setup-go@v6
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: |
+            backend/go.sum
+            extensions-self/account-monitor/go.sum
+            extensions-self/risk-control/go.sum
+      - name: Verify Go version
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        run: |
+          expected_go_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          actual_go_version="$(go env GOVERSION)"
+          test "$actual_go_version" = "go${expected_go_version}"
+      - name: Backend unit tests
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: backend
+        run: make test-unit
+      - name: Backend integration tests
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: backend
+        run: make test-integration
+      - name: golangci-lint
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.9.0
+          install-mode: goinstall
+          args: --timeout=30m
+          working-directory: backend
+      - uses: pnpm/action-setup@v6
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Frontend typecheck
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: frontend
+        run: pnpm run typecheck
+      - name: Frontend Vitest
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: frontend
+        run: pnpm run test:run
+      - name: Frontend production build
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: frontend
+        run: pnpm run build
+      - name: Account monitor tests
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: extensions-self/account-monitor
+        run: go test ./...
+      - name: Risk control tests
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        working-directory: extensions-self/risk-control
+        run: go test ./...
+      - name: Deployment contracts
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        run: node --test deploy/tests/*.test.mjs
+      - name: Site bootstrap fixtures
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        run: bash deploy/tests/site-bootstrap-test.sh
+      - name: Operations contracts
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        shell: pwsh
+        run: ./deploy/ops/tests/test-script-contract.ps1
+      - name: Stable Release resolver tests
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        run: bash deploy/ops/tests/test-release-resolver.sh
+      - name: Release pipeline fixtures
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        run: bash deploy/ops/tests/test-release-pipeline.sh
+      - name: Shell syntax
+        if: steps.candidate.outputs.candidate_prepared == 'true'
+        run: find deploy/ops deploy/ci -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
