@@ -8,6 +8,7 @@ UPSTREAM_REMOTE="${SUB2API_UPSTREAM_REMOTE:-upstream}"
 ORIGIN_REMOTE="${SUB2API_ORIGIN_REMOTE:-origin}"
 RESOLVER="${SUB2API_RELEASE_RESOLVER:-$SCRIPT_DIR/resolve-stable-release.sh}"
 STATE_HELPER="${SUB2API_RELEASE_STATE_HELPER:-$SCRIPT_DIR/release-state.sh}"
+COMMON_HELPER="${SUB2API_RELEASE_COMMON_HELPER:-$SCRIPT_DIR/release-common.sh}"
 BASELINE_FILE="${SUB2API_STABLE_BASELINE_FILE:-$REPO/deploy/stable-release-baseline.json}"
 DATA_DIR="${SUB2API_DATA_DIR:-/var/lib/docker/volumes/deploy_sub2api_data/_data}"
 LOG="${SUB2API_SYNC_LOG:-/var/log/sub2api-release.log}"
@@ -16,6 +17,7 @@ CONFLICT_DIR="${SUB2API_SYNC_CONFLICT_DIR:-$DATA_DIR/sync-conflicts}"
 WORKTREE=""
 
 source "$STATE_HELPER"
+source "$COMMON_HELPER"
 
 fail_job() {
   local message="$1"
@@ -93,6 +95,11 @@ RELEASE_TAG_OBJECT_TYPE=''
 RELEASE_COMMIT=''
 parse_release_output "$release_output" || fail_job 'stable Release resolver output was invalid' RELEASE_IDENTITY_INVALID
 [[ "$RELEASE_TAG_OBJECT_TYPE" == tag ]] || fail_job 'latest Release does not use an annotated tag' RELEASE_TAG_NOT_ANNOTATED
+[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ \
+  && "$RELEASE_TAG_OBJECT_SHA" =~ ^[0-9a-f]{40}$ \
+  && "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ \
+  && -n "$RELEASE_PUBLISHED_AT" ]] \
+  || fail_job 'stable Release identity fields are invalid' RELEASE_IDENTITY_INVALID
 
 release_job_update "$JOB_ID" resolving_target "Validating annotated tag $RELEASE_TAG" "$(jq -n \
   --arg tag "$RELEASE_TAG" \
@@ -105,7 +112,10 @@ git fetch "$UPSTREAM_REMOTE" "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" >> 
 
 local_head="$(git rev-parse HEAD)"
 origin_head="$(git rev-parse "$ORIGIN_REMOTE/$BRANCH")"
-git merge-base --is-ancestor "$local_head" "$origin_head" \
+DEPLOYED_COMMIT="${SUB2API_PRODUCTION_COMMIT:-$local_head}"
+[[ "$DEPLOYED_COMMIT" =~ ^[0-9a-f]{40}$ && "$local_head" == "$DEPLOYED_COMMIT" ]] \
+  || fail_job 'VPS source does not match the ledger production commit' SOURCE_BASE_MISMATCH
+git merge-base --is-ancestor "$DEPLOYED_COMMIT" "$origin_head" \
   || fail_job "local $BRANCH is not an ancestor of $ORIGIN_REMOTE/$BRANCH" SOURCE_BASE_MISMATCH
 BASE_COMMIT="$origin_head"
 
@@ -114,52 +124,65 @@ local_tag_object_sha="$(git rev-parse "$RELEASE_TAG^{tag}" 2>/dev/null || true)"
 local_release_commit="$(git rev-parse "$RELEASE_TAG^{commit}" 2>/dev/null || true)"
 [[ "$local_release_commit" == "$RELEASE_COMMIT" ]] || fail_job 'local peeled commit does not match GitHub tag API' RELEASE_COMMIT_MISMATCH
 
-[[ -r "$BASELINE_FILE" ]] || fail_job 'stable Release baseline metadata is missing' BASELINE_MISSING
-baseline_tag="$(jq -er '.tag' "$BASELINE_FILE" 2>/dev/null || true)"
-baseline_tag_object="$(jq -er '.tag_object_sha' "$BASELINE_FILE" 2>/dev/null || true)"
-baseline_commit="$(jq -er '.commit_sha' "$BASELINE_FILE" 2>/dev/null || true)"
-baseline_published="$(jq -er '.published_at' "$BASELINE_FILE" 2>/dev/null || true)"
-[[ "$baseline_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail_job 'baseline tag is invalid' BASELINE_INVALID
-[[ "$baseline_tag_object" =~ ^[0-9a-f]{40}$ && "$baseline_commit" =~ ^[0-9a-f]{40}$ ]] || fail_job 'baseline object identity is invalid' BASELINE_INVALID
-[[ -n "$baseline_published" ]] || fail_job 'baseline publication time is missing' BASELINE_INVALID
-git cat-file -e "$baseline_commit^{commit}" >/dev/null 2>&1 || fail_job 'baseline commit is unavailable' BASELINE_COMMIT_MISSING
-git merge-base --is-ancestor "$baseline_commit" "$RELEASE_COMMIT" || fail_job 'latest Release is not descended from the stable baseline' RELEASE_ANCESTRY_INVALID
+deployed_baseline_json="$(git show "$DEPLOYED_COMMIT:$BASELINE_RELATIVE" 2>/dev/null)" \
+  || fail_job 'deployed source does not contain stable Release baseline metadata' BASELINE_MISSING
+release_stable_baseline_valid "$deployed_baseline_json" \
+  || fail_job 'deployed stable Release baseline is invalid' BASELINE_INVALID
+deployed_baseline_commit="$(jq -r '.commit_sha' <<< "$deployed_baseline_json")"
+git cat-file -e "$deployed_baseline_commit^{commit}" >/dev/null 2>&1 \
+  || fail_job 'deployed baseline commit is unavailable' BASELINE_COMMIT_MISSING
+git merge-base --is-ancestor "$deployed_baseline_commit" "$DEPLOYED_COMMIT" \
+  || fail_job 'deployed source does not contain its recorded Stable baseline commit' BASELINE_INVALID
+git merge-base --is-ancestor "$deployed_baseline_commit" "$RELEASE_COMMIT" \
+  || fail_job 'latest Release is not descended from the deployed stable baseline' RELEASE_ANCESTRY_INVALID
 
-baseline_matches=0
-if [[ "$baseline_tag" == "$RELEASE_TAG" && "$baseline_tag_object" == "$RELEASE_TAG_OBJECT_SHA" \
-  && "$baseline_commit" == "$RELEASE_COMMIT" && "$baseline_published" == "$RELEASE_PUBLISHED_AT" ]]; then
-  baseline_matches=1
+target_baseline_json="$(git show "$BASE_COMMIT:$BASELINE_RELATIVE" 2>/dev/null)" \
+  || fail_job 'stable Release baseline metadata is missing from the approved base' BASELINE_MISSING
+release_stable_baseline_valid "$target_baseline_json" \
+  || fail_job 'approved-base stable Release baseline is invalid' BASELINE_INVALID
+target_baseline_commit="$(jq -r '.commit_sha' <<< "$target_baseline_json")"
+git cat-file -e "$target_baseline_commit^{commit}" >/dev/null 2>&1 \
+  || fail_job 'approved-base baseline commit is unavailable' BASELINE_COMMIT_MISSING
+git merge-base --is-ancestor "$target_baseline_commit" "$BASE_COMMIT" \
+  || fail_job 'approved base does not contain its recorded Stable baseline commit' BASELINE_INVALID
+git merge-base --is-ancestor "$target_baseline_commit" "$RELEASE_COMMIT" \
+  || fail_job 'latest Release is not descended from the approved-base stable baseline' RELEASE_ANCESTRY_INVALID
+
+deployed_baseline_matches=0
+if release_stable_baseline_matches "$deployed_baseline_json" "$RELEASE_TAG" \
+  "$RELEASE_TAG_OBJECT_SHA" "$RELEASE_COMMIT" "$RELEASE_PUBLISHED_AT"; then
+  deployed_baseline_matches=1
 fi
 
 if git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
-  target_baseline_json="$(git show "$BASE_COMMIT:$BASELINE_RELATIVE" 2>/dev/null)" \
-    || fail_job 'integrated target does not contain stable Release baseline metadata' BASELINE_MERGE_IDENTITY_MISMATCH
-  jq -e \
-    --arg tag "$RELEASE_TAG" \
-    --arg tag_object "$RELEASE_TAG_OBJECT_SHA" \
-    --arg commit "$RELEASE_COMMIT" \
-    --arg published "$RELEASE_PUBLISHED_AT" '
-      .repository == "Wei-Shaw/sub2api"
-      and .tag == $tag
-      and .tag_object_sha == $tag_object
-      and .commit_sha == $commit
-      and .published_at == $published
-    ' <<< "$target_baseline_json" >/dev/null \
+  release_stable_baseline_matches "$target_baseline_json" "$RELEASE_TAG" \
+    "$RELEASE_TAG_OBJECT_SHA" "$RELEASE_COMMIT" "$RELEASE_PUBLISHED_AT" \
     || fail_job 'integrated target baseline does not match the resolved Release identity' BASELINE_MERGE_IDENTITY_MISMATCH
 
-  if [[ "$baseline_matches" -ne 1 ]]; then
-    mapfile -t integrated_merges < <(git rev-list --first-parent --merges "$local_head..$BASE_COMMIT")
+  if [[ "$deployed_baseline_matches" -ne 1 ]]; then
+    integrated_merge_output="$(git rev-list --first-parent --merges "$DEPLOYED_COMMIT..$BASE_COMMIT")" \
+      || fail_job 'cannot inspect integrated Stable merge history' BASELINE_MERGE_IDENTITY_MISMATCH
+    integrated_merges=()
+    for candidate_merge in $integrated_merge_output; do
+      read -r candidate_identity candidate_parent_one candidate_parent_two candidate_parent_extra \
+        <<< "$(git rev-list --parents -n 1 "$candidate_merge")"
+      [[ "$candidate_identity" == "$candidate_merge" && -z "$candidate_parent_extra" ]] || continue
+      if git merge-base --is-ancestor "$RELEASE_COMMIT" "$candidate_merge" \
+        && ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$candidate_parent_one"; then
+        integrated_merges+=("$candidate_merge")
+      fi
+    done
     [[ "${#integrated_merges[@]}" -eq 1 ]] \
-      || fail_job 'integrated target does not contain exactly one canonical stable Release merge' BASELINE_MERGE_IDENTITY_MISMATCH
+      || fail_job 'integrated target does not contain exactly one Stable ancestry-introducing merge' BASELINE_MERGE_IDENTITY_MISMATCH
     integrated_merge="${integrated_merges[0]}"
     integrated_subject="$(git show -s --format=%s "$integrated_merge")"
     read -r integrated_identity integrated_parent_one integrated_parent_two integrated_parent_extra \
       <<< "$(git rev-list --parents -n 1 "$integrated_merge")"
     [[ "$integrated_identity" == "$integrated_merge" && -z "$integrated_parent_extra" ]] \
       || fail_job 'integrated stable Release merge must have exactly two parents' BASELINE_MERGE_IDENTITY_MISMATCH
-    [[ "$integrated_subject" == "merge: integrate stable Release $RELEASE_TAG" ]] \
+    [[ "$integrated_subject" == "$(release_stable_merge_subject "$RELEASE_TAG")" ]] \
       || fail_job 'integrated stable Release merge subject does not match the baseline tag' BASELINE_MERGE_IDENTITY_MISMATCH
-    git merge-base --is-ancestor "$local_head" "$integrated_parent_one" \
+    git merge-base --is-ancestor "$DEPLOYED_COMMIT" "$integrated_parent_one" \
       || fail_job 'integrated stable Release merge is not based on the deployed source' BASELINE_MERGE_IDENTITY_MISMATCH
     ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$integrated_parent_one" \
       || fail_job 'integrated stable Release ancestry predates the canonical merge' BASELINE_MERGE_IDENTITY_MISMATCH
@@ -185,8 +208,8 @@ git worktree add --detach "$WORKTREE" "$ORIGIN_REMOTE/$BRANCH" >> "$LOG" 2>&1 ||
 git -C "$WORKTREE" switch -c "$INTEGRATION_BRANCH" >> "$LOG" 2>&1 || fail_job 'create candidate branch failed' INTEGRATION_BRANCH_FAILED
 release_job_update "$JOB_ID" resolving_target "Merging $RELEASE_TAG into $INTEGRATION_BRANCH" "$(jq -n --arg branch "$INTEGRATION_BRANCH" --arg base "$BASE_COMMIT" '{integration_branch:$branch,base_commit:$base}')"
 
-MERGE_SUBJECT="merge: integrate stable Release $RELEASE_TAG"
-if ! git -C "$WORKTREE" merge --no-ff -m "$MERGE_SUBJECT" "$RELEASE_COMMIT" >> "$LOG" 2>&1; then
+MERGE_SUBJECT="$(release_stable_merge_subject "$RELEASE_TAG")"
+if ! release_merge_stable_candidate "$WORKTREE" "$RELEASE_COMMIT" "$RELEASE_TAG" >> "$LOG" 2>&1; then
   conflict_snapshot_dir="$CONFLICT_DIR/$JOB_ID"
   mkdir -p "$conflict_snapshot_dir"
   conflict_files_json="$(git -C "$WORKTREE" diff --name-only --diff-filter=U | jq -R -s 'split("\n") | map(select(length > 0))')"
@@ -216,17 +239,15 @@ if ! git -C "$WORKTREE" merge --no-ff -m "$MERGE_SUBJECT" "$RELEASE_COMMIT" >> "
 fi
 
 MERGE_COMMIT="$(git -C "$WORKTREE" rev-parse HEAD)"
-merge_subject="$(git -C "$WORKTREE" show -s --format=%s "$MERGE_COMMIT")"
-read -r merge_identity merge_parent_one merge_parent_two merge_parent_extra \
-  <<< "$(git -C "$WORKTREE" rev-list --parents -n 1 "$MERGE_COMMIT")"
-[[ "$merge_identity" == "$MERGE_COMMIT" && -z "$merge_parent_extra" ]] \
-  || fail_job 'stable Release integration is not an exact two-parent merge' RELEASE_MERGE_SHAPE_INVALID
-[[ "$merge_subject" == "$MERGE_SUBJECT" ]] \
-  || fail_job 'stable Release integration subject is not canonical' RELEASE_MERGE_SUBJECT_INVALID
-[[ "$merge_parent_one" == "$BASE_COMMIT" ]] \
-  || fail_job 'stable Release integration first parent is not the approved custom-release base' RELEASE_MERGE_FIRST_PARENT_INVALID
-[[ "$merge_parent_two" == "$RELEASE_COMMIT" ]] \
-  || fail_job 'stable Release integration second parent is not the resolved Release commit' RELEASE_MERGE_SECOND_PARENT_INVALID
+if ! release_validate_canonical_stable_merge "$WORKTREE" "$MERGE_COMMIT" "$BASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_TAG"; then
+  case "$RELEASE_STABLE_MERGE_ERROR" in
+    shape) fail_job 'stable Release integration is not an exact two-parent merge' RELEASE_MERGE_SHAPE_INVALID ;;
+    subject) fail_job 'stable Release integration subject is not canonical' RELEASE_MERGE_SUBJECT_INVALID ;;
+    first-parent) fail_job 'stable Release integration first parent is not the approved custom-release base' RELEASE_MERGE_FIRST_PARENT_INVALID ;;
+    second-parent) fail_job 'stable Release integration second parent is not the resolved Release commit' RELEASE_MERGE_SECOND_PARENT_INVALID ;;
+    *) fail_job 'stable Release integration identity is invalid' RELEASE_MERGE_SHAPE_INVALID ;;
+  esac
+fi
 
 jq -n \
   --arg repository 'Wei-Shaw/sub2api' \

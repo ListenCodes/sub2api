@@ -106,6 +106,10 @@ EOF
 
 make_helpers() {
   local root="$1"
+  cp "$ROOT_DIR/deploy/ops/release-common.sh" "$root/release-common.sh"
+  cat >> "$root/release-common.sh" <<'EOF'
+release_validate_installed_ops_at_commit() { return 0; }
+EOF
   cat > "$root/sync.sh" <<'EOF'
 #!/usr/bin/env bash
 set -e
@@ -244,7 +248,7 @@ invoke_prepare() {
     SUB2API_RELEASE_LEDGER_ROOT="$root/data/release-ledger" SUB2API_RELEASE_OPERATIONS_DIR="$root/data/release-ledger/operations" \
     SUB2API_RELEASE_LEDGER_LOCK_FILE="$root/data/release.lock" \
     SUB2API_CURRENT_RELEASE_JOB_FILE="$root/data/release-current-job-id" SUB2API_RELEASE_STATE_FILE="$root/data/release-state.json" \
-    SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" SUB2API_RELEASE_COMMON_HELPER="$ROOT_DIR/deploy/ops/release-common.sh" \
+    SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" SUB2API_RELEASE_COMMON_HELPER="$root/release-common.sh" \
     SUB2API_RELEASE_LEDGER_HELPER="$ROOT_DIR/deploy/ops/release-ledger.sh" SUB2API_SYNC_SCRIPT="$root/sync.sh" \
     SUB2API_SCOPE_SCRIPT="$root/scope.sh" SUB2API_WAIT_ACTIONS_SCRIPT="$root/wait.sh" SUB2API_VERIFY_IMAGES_SCRIPT="$root/verify.sh" \
     SUB2API_PROMOTE_SCRIPT="$root/promote.sh" SUB2API_SYNC_PUBLISH_LOG="$root/release.log" \

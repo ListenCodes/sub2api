@@ -90,6 +90,7 @@ release_job_init update-behind
 SUB2API_REPO="$REPO" \
 SUB2API_RELEASE_RESOLVER="$TMP_DIR/resolver.sh" \
 SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" \
+SUB2API_RELEASE_COMMON_HELPER="$ROOT_DIR/deploy/ops/release-common.sh" \
 SUB2API_SYNC_WORKTREE_ROOT="$TMP_DIR/worktrees" \
 SUB2API_SYNC_CONFLICT_DIR="$TMP_DIR/conflicts" \
 SUB2API_SYNC_LOG="$TMP_DIR/release.log" \
@@ -125,6 +126,7 @@ release_job_init update-bad-resolution
 if SUB2API_REPO="$BAD_REPO" \
   SUB2API_RELEASE_RESOLVER="$TMP_DIR/resolver.sh" \
   SUB2API_RELEASE_STATE_HELPER="$ROOT_DIR/deploy/ops/release-state.sh" \
+  SUB2API_RELEASE_COMMON_HELPER="$ROOT_DIR/deploy/ops/release-common.sh" \
   SUB2API_SYNC_WORKTREE_ROOT="$TMP_DIR/bad-worktrees" \
   SUB2API_SYNC_CONFLICT_DIR="$TMP_DIR/bad-conflicts" \
   SUB2API_SYNC_LOG="$TMP_DIR/bad-release.log" \

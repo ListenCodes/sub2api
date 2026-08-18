@@ -86,8 +86,37 @@ function promote(fixture) {
 
 test('sync-upstream creates the canonical Stable merge subject explicitly', () => {
   const source = readFileSync(resolve(deployRoot, 'ops', 'sync-upstream.sh'), 'utf8')
-  assert.match(source, /MERGE_SUBJECT="merge: integrate stable Release \$RELEASE_TAG"/)
-  assert.match(source, /merge --no-ff -m "\$MERGE_SUBJECT" "\$RELEASE_COMMIT"/)
+  const preflight = readFileSync(resolve(deployRoot, 'ci', 'prepare-upstream-candidate.sh'), 'utf8')
+  const common = readFileSync(resolve(deployRoot, 'ops', 'release-common.sh'), 'utf8')
+  assert.match(common, /git -C "\$repo" merge --no-ff -m "\$\(release_stable_merge_subject "\$release_tag"\)" "\$release_commit"/)
+  assert.match(source, /release_merge_stable_candidate "\$WORKTREE" "\$RELEASE_COMMIT" "\$RELEASE_TAG"/)
+  assert.match(preflight, /release_merge_stable_candidate "\$REPO" "\$RELEASE_COMMIT" "\$RELEASE_TAG"/)
+  assert.match(source, /release_validate_canonical_stable_merge/)
+  assert.match(preflight, /release_validate_canonical_stable_merge/)
+})
+
+test('sync-upstream keeps deployed and locked-target Stable baselines separate', () => {
+  const source = readFileSync(resolve(deployRoot, 'ops', 'sync-upstream.sh'), 'utf8')
+  assert.match(source, /deployed_baseline_json="\$\(git show "\$DEPLOYED_COMMIT:\$BASELINE_RELATIVE"/)
+  assert.match(source, /target_baseline_json="\$\(git show "\$BASE_COMMIT:\$BASELINE_RELATIVE"/)
+  assert.match(source, /deployed_baseline_matches/)
+  assert.match(source, /merge-base --is-ancestor "\$deployed_baseline_commit" "\$DEPLOYED_COMMIT"/)
+  assert.match(source, /merge-base --is-ancestor "\$target_baseline_commit" "\$BASE_COMMIT"/)
+  assert.doesNotMatch(
+    source,
+    /jq -er '\.tag' "\$BASELINE_FILE"/,
+    'a stale host checkout must not supply baseline metadata for the locked remote base'
+  )
+})
+
+test('prepare-release validates installed scripts against the ledger production commit', () => {
+  const source = readFileSync(resolve(deployRoot, 'ops', 'prepare-release.sh'), 'utf8')
+  const productionCommit = source.indexOf('PRODUCTION_COMMIT="$(jq')
+  const gate = source.indexOf('release_validate_installed_ops_at_commit "$REPO" "$PRODUCTION_COMMIT"')
+  const sync = source.indexOf('"$SYNC_SCRIPT" --job-id')
+  assert.ok(productionCommit >= 0 && productionCommit < gate && gate < sync)
+  assert.match(source, /HOST_OPS_DRIFT/)
+  assert.match(source, /SUB2API_PRODUCTION_COMMIT="\$PRODUCTION_COMMIT"/)
 })
 
 test('promotion accepts a canonical merge whose second parent matches the baseline', (t) => {

@@ -59,6 +59,21 @@ the durable job `docs_only=true` without waiting for Actions, verifying GHCR, or
 changing production. Any runtime path in the full production-to-target diff uses
 the normal validation and paired-image gates.
 
+`Upstream Stable Preflight` runs daily and on manual dispatch with read-only
+repository permissions. It checks out `custom-release`, resolves the latest
+annotated Stable Release, prepares the canonical merge and baseline commit only
+inside the disposable Actions checkout, and runs the same backend, frontend,
+extension, and deployment validation surfaces as `Custom Release`. It never
+pushes a branch, publishes images, invokes Compose, or changes production. A
+failed preflight is advance notice that the next administrator update needs a
+code or contract fix; it is not itself a release attempt.
+
+GitHub loads scheduled workflows only from the default `main` branch, so this
+workflow file alone is mirrored verbatim to `main`; the workflow then checks out
+and tests `custom-release`. Its first step compares the `main` and
+`custom-release` workflow copies and fails on drift. Do not merge application or
+release implementation code into `main` for this purpose.
+
 ## Versioned Host Operations
 
 ### Stage A Web mount transition
@@ -160,6 +175,18 @@ inactive, confirm `/root/sub2api` is clean at the ledger's current commit, rerun
 the install commands above, reload systemd, and compare the installed files
 with the deployed source before accepting another administrator trigger. Never
 replace the installed script set while a release operation is active.
+
+`bootstrap-custom-site.sh` performs that comparison automatically after
+installation. During update preparation, `prepare-release.sh` dynamically
+enumerates the root-level `deploy/ops/*.sh` files and
+`actions-check-result.jq` at the ledger's current production commit and rejects
+missing, modified, symlinked, incorrectly permissioned, or obsolete installed
+files with `HOST_OPS_DRIFT` before target resolution. Back up and reinstall the
+complete versioned set from the deployed production commit before retrying; do
+not preinstall scripts from an unapproved target or patch a single installed
+file in place. The known
+host-owned `health-monitor.sh` remains outside this versioned comparison and is
+preserved.
 
 `sub2api-release.path` watches the persistent `release-trigger` created by the
 administrator action. The one-shot service calls only `sync-and-publish.sh`.

@@ -27,6 +27,14 @@ feature -> custom-release -> Custom Release Actions
 -> sub2api-release.path -> durable host state machine -> digest deployment
 ```
 
+The separate `Upstream Stable Preflight` workflow runs daily and on demand. It
+prepares the latest official Stable merge in an unpushed checkout and runs the
+backend, frontend, extension, and release-contract checks without package-write
+permission, image publication, Compose execution, or production access.
+Because GitHub schedules load from the default branch, only the workflow YAML is
+mirrored to `main`; the job checks that mirror byte-for-byte before testing
+`custom-release`.
+
 The paired images are built from one full commit SHA:
 
 ```text
@@ -275,6 +283,15 @@ install -m 0644 deploy/ops/sub2api-release.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now sub2api-release.path
 ```
+
+The bootstrap verifies every installed root-level shell script and
+`actions-check-result.jq` against its Git blob and required mode. Update
+preparation repeats the check against the ledger's current production commit
+before resolving a target. `HOST_OPS_DRIFT` means the complete versioned set
+must be backed up and reinstalled from that deployed commit while
+the release service is inactive; individual host files must not be patched in
+place. The host-owned `health-monitor.sh` is preserved and excluded from this
+versioned set comparison.
 
 Do not call `sync-upstream.sh` or `publish-custom.sh` directly for final
 acceptance. Trigger and monitor the same durable job path used by the

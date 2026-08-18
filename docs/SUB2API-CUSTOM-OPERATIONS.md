@@ -109,10 +109,17 @@ git -C $repo worktree add `
 | 阶段 | 是否自动 | 触发方式 |
 |---|---|---|
 | 测试和双镜像构建 | 自动 | push 到 `custom-release` 或 `integration/release-*` |
+| 官方 Stable 兼容性预检 | 自动且只读 | 每日定时或手动触发；仅生成不推送的临时候选并运行测试 |
 | 生产发布 | 需要管理员授权 | 管理后台左上角更新按钮 |
 | 发布后的备份、部署、健康检查和镜像回退 | 自动 | 按钮创建持久发布任务后执行 |
-| 官方稳定 Release 检查 | 仅在按钮任务中执行 | 不使用定时轮询 |
+| 生产更新检查与候选推进 | 仅在按钮任务中执行 | 不使用定时发布或自动推进 |
 | 健康监控 | 自动且独立 | 保留现有 health-monitor 计划任务 |
+
+`Upstream Stable Preflight` 使用只读仓库权限，在 GitHub 的临时 checkout
+中验证最新 annotated Release、规范 merge、baseline、后端、前端、扩展和发布契约；
+不推分支、不发布镜像、不运行 Compose，也不修改生产。由于 GitHub 只从默认 `main`
+加载定时工作流，该 workflow YAML 单独逐字节镜像到 `main`，任务实际 checkout 和测试的
+仍是 `custom-release`，并在开始时校验两份 YAML 没有漂移。
 
 因此，自定义代码推送后不会自动修改生产。最简人工流程是：
 
@@ -270,6 +277,8 @@ docker compose --project-name deploy \
 `deploy/ops/` 的发布成功后，应先把已安装脚本和两个 systemd unit 备份到
 `release-host-backups/` 并生成 `SHA256SUMS`，再从已部署 commit 重新安装、reload systemd、
 执行 `bash -n`，逐文件比较源码与安装副本。宿主机专用 `health-monitor.sh` 必须保留。
+更新准备会在解析目标前，以账本记录的当前生产 commit 校验完整安装集；`HOST_OPS_DRIFT`
+要求先从该生产 commit 重装，不能预装尚未发布的目标脚本，也不能只覆盖报错文件。
 
 移除 Web 高权限挂载必须分两次生产发布。Stage A 只部署兼容旧五挂载和最终两挂载的
 transition validator，overlay 仍保持旧形态；Stage A 成功并把同 commit 的宿主脚本同步、逐文件

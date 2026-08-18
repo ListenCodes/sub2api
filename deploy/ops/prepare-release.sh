@@ -12,6 +12,7 @@ VERIFY_IMAGES_SCRIPT="${SUB2API_VERIFY_IMAGES_SCRIPT:-$SCRIPT_DIR/verify-release
 SCOPE_SCRIPT="${SUB2API_SCOPE_SCRIPT:-$SCRIPT_DIR/classify-release-scope.sh}"
 PROMOTE_SCRIPT="${SUB2API_PROMOTE_SCRIPT:-$SCRIPT_DIR/promote-release.sh}"
 REPO="${SUB2API_REPO:-/root/sub2api}"
+OPS_INSTALL_ROOT="${SUB2API_OPS_INSTALL_ROOT:-/opt/sub2api-custom}"
 ENV_FILE="${SUB2API_ENV_FILE:-$REPO/deploy/.env}"
 COMPOSE_BASE="${SUB2API_COMPOSE_BASE:-$REPO/deploy/docker-compose.yml}"
 COMPOSE_CUSTOM="${SUB2API_COMPOSE_CUSTOM:-$REPO/deploy/docker-compose.custom.yml}"
@@ -109,9 +110,12 @@ validate_snapshot_against_base_record "$COMPOSE_BASE" "$COMPOSE_CUSTOM" "$ENV_FI
 rm -f "$CURRENT_RENDERED_JSON"
 CURRENT_RENDERED_JSON=''
 
+release_validate_installed_ops_at_commit "$REPO" "$PRODUCTION_COMMIT" "$OPS_INSTALL_ROOT" \
+  || fail_prepare 'installed release scripts do not match the ledger production commit' HOST_OPS_DRIFT
+
 CACHED_OPERATION="$(cat "$JOB_FILE")"
 release_job_update "$JOB_ID" resolving_target 'Checking the locked update target' '{}'
-"$SYNC_SCRIPT" --job-id "$JOB_ID" >> "$LOG" 2>&1 || {
+SUB2API_PRODUCTION_COMMIT="$PRODUCTION_COMMIT" "$SYNC_SCRIPT" --job-id "$JOB_ID" >> "$LOG" 2>&1 || {
   status="$(jq -r '.status // empty' "$JOB_FILE" 2>/dev/null || true)"
   if [[ "$status" == conflict || "$status" == failed ]]; then
     ledger_recover_pre_mutation_terminal "$JOB_ID" || true

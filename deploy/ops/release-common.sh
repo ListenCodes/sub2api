@@ -282,6 +282,122 @@ release_job_fail() {
   release_job_update "$job_id" failed "$message" "$(jq -n --arg code "$code" '{error_code:$code,production_changed:false}')" || true
 }
 
+release_stable_baseline_valid() {
+  local baseline_json="$1"
+  jq -e '
+    .repository == "Wei-Shaw/sub2api"
+    and (.tag | type == "string")
+    and (.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+    and (.tag_object_sha | type == "string")
+    and (.tag_object_sha | test("^[0-9a-f]{40}$"))
+    and (.commit_sha | type == "string")
+    and (.commit_sha | test("^[0-9a-f]{40}$"))
+    and (.published_at | type == "string")
+    and (.published_at | length > 0)
+  ' <<< "$baseline_json" >/dev/null
+}
+
+release_stable_baseline_matches() {
+  local baseline_json="$1" tag="$2" tag_object="$3" commit="$4" published="$5"
+  jq -e \
+    --arg tag "$tag" \
+    --arg tag_object "$tag_object" \
+    --arg commit "$commit" \
+    --arg published "$published" '
+      .repository == "Wei-Shaw/sub2api"
+      and .tag == $tag
+      and .tag_object_sha == $tag_object
+      and .commit_sha == $commit
+      and .published_at == $published
+    ' <<< "$baseline_json" >/dev/null
+}
+
+release_stable_merge_subject() {
+  printf 'merge: integrate stable Release %s\n' "$1"
+}
+
+release_merge_stable_candidate() {
+  local repo="$1" release_commit="$2" release_tag="$3"
+  git -C "$repo" merge --no-ff -m "$(release_stable_merge_subject "$release_tag")" "$release_commit"
+}
+
+release_validate_canonical_stable_merge() {
+  local repo="$1" merge_commit="$2" base_commit="$3" release_commit="$4" release_tag="$5"
+  local identity parent_one parent_two parent_extra subject parents
+  RELEASE_STABLE_MERGE_ERROR=''
+  parents="$(git -C "$repo" rev-list --parents -n 1 "$merge_commit")" || {
+      RELEASE_STABLE_MERGE_ERROR=shape
+      return 1
+    }
+  read -r identity parent_one parent_two parent_extra <<< "$parents"
+  if [[ "$identity" != "$merge_commit" || -n "$parent_extra" ]]; then
+    RELEASE_STABLE_MERGE_ERROR=shape
+    return 1
+  fi
+  subject="$(git -C "$repo" show -s --format=%s "$merge_commit")" || {
+    RELEASE_STABLE_MERGE_ERROR=subject
+    return 1
+  }
+  if [[ "$subject" != "$(release_stable_merge_subject "$release_tag")" ]]; then
+    RELEASE_STABLE_MERGE_ERROR=subject
+    return 1
+  fi
+  if [[ "$parent_one" != "$base_commit" ]]; then
+    RELEASE_STABLE_MERGE_ERROR=first-parent
+    return 1
+  fi
+  if [[ "$parent_two" != "$release_commit" ]]; then
+    RELEASE_STABLE_MERGE_ERROR=second-parent
+    return 1
+  fi
+}
+
+release_validate_installed_ops_at_commit() {
+  local repo="$1" commit="$2" install_root="$3"
+  local relative_path filename expected_mode source_sha installed_sha installed_path
+  local tree_listing installed_listing
+  local expected_names=''
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$install_root" == /* && "$install_root" != / && -d "$install_root" && ! -L "$install_root" ]] || return 1
+  git -C "$repo" cat-file -e "$commit^{commit}" >/dev/null 2>&1 || return 1
+
+  tree_listing="$(git -C "$repo" ls-tree -r --name-only "$commit" -- deploy/ops)" || return 1
+  while IFS= read -r relative_path; do
+    [[ -n "$relative_path" ]] || continue
+    case "$relative_path" in
+      deploy/ops/*.sh) expected_mode=755 ;;
+      deploy/ops/actions-check-result.jq) expected_mode=644 ;;
+      *) continue ;;
+    esac
+    filename="${relative_path##*/}"
+    [[ "$relative_path" == "deploy/ops/$filename" ]] || continue
+    case $'\n'"$expected_names"$'\n' in
+      *$'\n'"$filename"$'\n'*) return 1 ;;
+    esac
+    expected_names="${expected_names}${expected_names:+$'\n'}$filename"
+    installed_path="$install_root/$filename"
+    [[ -f "$installed_path" && ! -L "$installed_path" ]] || return 1
+    [[ "$(stat -c '%a' "$installed_path" 2>/dev/null)" == "$expected_mode" ]] || return 1
+    source_sha="$(git -C "$repo" show "$commit:$relative_path" | sha256sum | awk '{print $1}')" \
+      || return 1
+    installed_sha="$(sha256sum "$installed_path" | awk '{print $1}')" || return 1
+    [[ "$source_sha" == "$installed_sha" ]] || return 1
+  done <<< "$tree_listing"
+  [[ -n "$expected_names" ]] || return 1
+
+  installed_listing="$(find "$install_root" -mindepth 1 -maxdepth 1 \
+    \( -name '*.sh' -o -name 'actions-check-result.jq' \) -print)" || return 1
+  while IFS= read -r installed_path; do
+    [[ -n "$installed_path" ]] || continue
+    filename="${installed_path##*/}"
+    [[ "$filename" != health-monitor.sh ]] || continue
+    case $'\n'"$expected_names"$'\n' in
+      *$'\n'"$filename"$'\n'*) ;;
+      *) return 1 ;;
+    esac
+  done <<< "$installed_listing"
+}
+
 release_json_hash() {
   jq -cS . "$1" | sha256sum | awk '{print $1}'
 }
