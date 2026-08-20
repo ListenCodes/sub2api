@@ -569,7 +569,7 @@ func TestOpsErrorLoggerMiddleware_LocalModelConfigurationFields(t *testing.T) {
 	router.POST("/v1/chat/completions", func(c *gin.Context) {
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
 		c.Set(opsAccountIDKey, int64(99))
-		c.Set(opsUpstreamModelKey, "stale-upstream-model")
+		c.Set(service.OpsUpstreamModelKey, "stale-upstream-model")
 		setActualUpstreamEndpoint(c, "/v1/chat/completions")
 		c.Set(service.OpsUpstreamStatusCodeKey, http.StatusUnauthorized)
 		c.Set(service.OpsUpstreamErrorMessageKey, "stale upstream error")
