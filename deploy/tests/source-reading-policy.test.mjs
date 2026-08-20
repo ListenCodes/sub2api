@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
 import test from 'node:test'
@@ -7,42 +8,25 @@ import { fileURLToPath } from 'node:url'
 const deployRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(deployRoot, '..')
 const frontendSource = resolve(repoRoot, 'frontend', 'src')
+const stableBaseline = JSON.parse(
+  readFileSync(resolve(deployRoot, 'stable-release-baseline.json'), 'utf8')
+)
+const stableBaselineCommit = stableBaseline.commit_sha
 
-const permanentAllowlist = new Map([
-  [
-    'frontend/src/components/common/__tests__/AnnouncementPopup.spec.ts',
-    {
-      readerCalls: 1,
-      targetLiterals: 2,
-      reason: 'JSDOM does not load the shared Markdown stylesheet.',
-    },
-  ],
-  [
-    'frontend/src/views/user/__tests__/stripeLazyLoading.spec.ts',
-    {
-      readerCalls: 1,
-      targetLiterals: 4,
-      reason: 'The test protects the Stripe loader and production chunk boundary.',
-    },
-  ],
-])
+assert.match(stableBaselineCommit, /^[0-9a-f]{40}$/, 'Stable baseline commit must be a full SHA')
+
+// Official tests are accepted only while byte-identical to the recorded Stable
+// baseline. This budget therefore covers custom-owned differences only.
+const permanentAllowlist = new Map([])
 
 // Existing debt is frozen by path, filesystem-reader call sites, and statically
 // named source targets. Migrate these to imports, mounts, or browser tests; do
 // not add new source-reading tests to this list.
 const legacyDebt = new Map([
-  ['frontend/src/components/admin/account/__tests__/ReAuthAccountModal.grok.spec.ts', { readerCalls: 1, targetLiterals: 1 }],
-  ['frontend/src/components/channels/__tests__/AvailableChannelsTable.spec.ts', { readerCalls: 1, targetLiterals: 1 }],
   ['frontend/src/components/layout/__tests__/AppSidebar.spec.ts', { readerCalls: 3, targetLiterals: 3 }],
-  ['frontend/src/components/layout/__tests__/TablePageLayout.spec.ts', { readerCalls: 1, targetLiterals: 1 }],
-  ['frontend/src/components/layout/__tests__/docUrlSanitization.spec.ts', { readerCalls: 3, targetLiterals: 3 }],
-  ['frontend/src/components/layout/__tests__/siteLogoSanitization.spec.ts', { readerCalls: 3, targetLiterals: 3 }],
-  ['frontend/src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts', { readerCalls: 1, targetLiterals: 7 }],
-  ['frontend/src/features/prompt-audit/__tests__/integrationSurface.spec.ts', { readerCalls: 1, targetLiterals: 4 }],
   ['frontend/src/router/__tests__/account-monitor-route.spec.ts', { readerCalls: 2, targetLiterals: 2 }],
   ['frontend/src/router/__tests__/user-risk-control-routes.spec.ts', { readerCalls: 8, targetLiterals: 14 }],
   ['frontend/src/views/admin/__tests__/ExtensionStyleAlignment.spec.ts', { readerCalls: 1, targetLiterals: 12 }],
-  ['frontend/src/views/admin/__tests__/groupsModelsListLayout.spec.ts', { readerCalls: 1, targetLiterals: 1 }],
 ])
 
 function listTestFiles(directory, insideTestDirectory = false) {
@@ -58,6 +42,19 @@ function listTestFiles(directory, insideTestDirectory = false) {
 
 function repoPath(path) {
   return relative(repoRoot, path).replaceAll('\\', '/')
+}
+
+function matchesStableBaseline(path, source) {
+  try {
+    const stableSource = execFileSync(
+      'git',
+      ['show', `${stableBaselineCommit}:${path}`],
+      { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    )
+    return source === stableSource
+  } catch {
+    return false
+  }
 }
 
 function escapeRegExp(value) {
@@ -153,7 +150,10 @@ test('frontend source-reading tests stay within the reviewed debt budget', () =>
   for (const path of listTestFiles(frontendSource)) {
     const source = readFileSync(path, 'utf8')
     const profile = sourceReadingProfile(source)
-    if (profile) actual.set(repoPath(path), profile)
+    const pathFromRoot = repoPath(path)
+    if (profile && !matchesStableBaseline(pathFromRoot, source)) {
+      actual.set(pathFromRoot, profile)
+    }
   }
 
   const expected = new Map([
