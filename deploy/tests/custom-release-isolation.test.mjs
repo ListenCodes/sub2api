@@ -25,25 +25,55 @@ test('stable-owned release hot files match the pinned Stable commit', () => {
   assert.equal(result.status, 0, result.stdout || result.stderr)
 })
 
-test('pinned Stable identity matches the newest Stable Release merge', () => {
+test('pinned Stable identity matches the newest active Stable Release merge', () => {
   const cwd = new URL('../..', import.meta.url)
-  const latestMerge = spawnSync(
+  const mergeHistory = spawnSync(
     'git',
     [
       'log',
       '--first-parent',
       '--merges',
-      '-n',
-      '1',
       '--format=%H%x00%s',
       '--grep=^merge: integrate stable Release v[0-9]',
       'HEAD'
     ],
     { cwd, encoding: 'utf8' }
   )
-  assert.equal(latestMerge.status, 0, latestMerge.stdout || latestMerge.stderr)
+  assert.equal(mergeHistory.status, 0, mergeHistory.stdout || mergeHistory.stderr)
 
-  const [mergeCommit, mergeSubject] = latestMerge.stdout.trim().split('\0')
+  const merges = mergeHistory.stdout.trim().split(/\r?\n/).filter(Boolean)
+  let activeMerge
+  for (const entry of merges) {
+    const [mergeCommit, mergeSubject] = entry.split('\0')
+    const releaseTag = mergeSubject?.match(/^merge: integrate stable Release (v\d+\.\d+\.\d+)$/)?.[1]
+    assert.ok(releaseTag, `invalid Stable integration subject: ${mergeSubject}`)
+
+    if (releaseTag === stableBaseline.tag) {
+      activeMerge = { mergeCommit, mergeSubject }
+      break
+    }
+
+    const firstParentChild = spawnSync(
+      'git',
+      ['log', '--first-parent', '--reverse', '--format=%H%x00%P%x00%s', `${mergeCommit}..HEAD`],
+      { cwd, encoding: 'utf8' }
+    )
+    assert.equal(firstParentChild.status, 0, firstParentChild.stdout || firstParentChild.stderr)
+    const [revertCommit, revertParents, revertSubject] = firstParentChild.stdout.trim().split(/\r?\n/, 1)[0].split('\0')
+    assert.equal(revertParents, mergeCommit, `${mergeSubject} must be reverted by its immediate first-parent child`)
+    assert.equal(revertSubject, `Revert "${mergeSubject}"`, `${mergeSubject} is newer than the pinned Stable baseline without an explicit revert`)
+
+    const revertedTree = spawnSync(
+      'git',
+      ['diff', '--exit-code', `${mergeCommit}^1`, revertCommit],
+      { cwd, encoding: 'utf8' }
+    )
+    assert.equal(revertedTree.status, 0, revertedTree.stdout || revertedTree.stderr)
+  }
+
+  assert.ok(activeMerge, `missing Stable integration for ${stableBaseline.tag}`)
+
+  const { mergeCommit, mergeSubject } = activeMerge
   const releaseTag = mergeSubject?.match(/^merge: integrate stable Release (v\d+\.\d+\.\d+)$/)?.[1]
   assert.equal(stableBaseline.tag, releaseTag)
 
