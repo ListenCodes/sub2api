@@ -49,6 +49,59 @@ func (s *IdentityService) Ingest(ctx context.Context, input IdentityEventReport)
 	return duplicate, nil
 }
 
+func identityMode(cfg IdentityConfig) string {
+	if cfg.CompositeEnforcementEnabled {
+		return "enforce"
+	}
+	return "shadow"
+}
+
+func (s *IdentityService) RegistrationDecision(ctx context.Context, input IdentityEventReport) (Decision, error) {
+	mode := "shadow"
+	if s != nil {
+		mode = identityMode(s.cfg)
+	}
+	decision := Decision{Action: "allow", RiskLevel: "none", Mode: mode}
+	if s == nil || !s.cfg.CompositeEnforcementEnabled {
+		return decision, nil
+	}
+	if s.repo == nil || s.protector == nil {
+		return decision, errors.New("identity service unavailable")
+	}
+	if strings.TrimSpace(input.EventType) != "registration_attempt" || strings.TrimSpace(input.EventClass) != "registration" || strings.TrimSpace(input.Outcome) != "attempt" || input.UserID != 0 {
+		return decision, identityErr("registration_decision_contract")
+	}
+	fact, err := s.prepare(input)
+	if err != nil {
+		return decision, err
+	}
+	if fact.Network == nil || fact.Browser == nil || !fact.IPQualityValid || !fact.DeviceQualityValid {
+		return decision, nil
+	}
+	states, _, err := s.repo.qualityStates(ctx, s.cfg)
+	if err != nil {
+		return decision, err
+	}
+	if states["composite"] != "healthy" {
+		return decision, nil
+	}
+	evaluation, err := s.repo.EvaluateCompositeRegistration(ctx, fact.Network.LookupKey, fact.Browser.LookupKey, fact.OccurredAt)
+	if err != nil {
+		return decision, err
+	}
+	if evaluation.RuleCode == "" || evaluation.Threshold <= 0 || evaluation.AccountCount+1 < evaluation.Threshold {
+		return decision, nil
+	}
+	decision = Decision{
+		Action: "reject_candidate", Score: evaluation.Score, RiskLevel: identityRiskLevel(evaluation.Score),
+		Reason: "composite registration identity threshold reached", RuleCodes: []string{evaluation.RuleCode}, Mode: "enforce",
+	}
+	if err := s.repo.RecordCompositeRegistrationRejection(ctx, fact.EventKey, evaluation); err != nil {
+		return Decision{Action: "allow", RiskLevel: "none", Mode: "enforce"}, err
+	}
+	return decision, nil
+}
+
 func (s *IdentityService) prepare(input IdentityEventReport) (IdentityFact, error) {
 	input.EventKey = strings.TrimSpace(input.EventKey)
 	input.EventType = strings.TrimSpace(input.EventType)
@@ -180,7 +233,7 @@ func (s *IdentityService) Summary(ctx context.Context, userID int64) (IdentitySu
 
 func (s *IdentityService) Health(ctx context.Context) (IdentityHealth, error) {
 	if s == nil || s.repo == nil {
-		return IdentityHealth{Enabled: false, AdminEnabled: false, Mode: "shadow", Schema: "v2", Domains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, QualityDomains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, Quality24H: map[string]any{}}, nil
+		return IdentityHealth{Enabled: false, AdminEnabled: false, Mode: "shadow", Schema: "v2", Domains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, QualityDomains: map[string]string{"ip": "disabled", "device": "disabled", "composite": "disabled"}, Quality24H: map[string]any{}, Features: map[string]bool{"composite_enforcement": false}}, nil
 	}
 	return s.repo.Health(ctx, s.cfg)
 }

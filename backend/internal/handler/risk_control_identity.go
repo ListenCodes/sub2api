@@ -187,6 +187,11 @@ func enqueueRiskIdentity(c *gin.Context, client *service.RiskControlClient, even
 	if client == nil || !client.IdentityEnabled() || c == nil {
 		return
 	}
+	report := buildRiskIdentityReport(c, client, eventType, eventClass, outcome, email, userID, apiKeyID)
+	_ = client.EnqueueIdentity(report)
+}
+
+func buildRiskIdentityReport(c *gin.Context, client *service.RiskControlClient, eventType, eventClass, outcome, email string, userID, apiKeyID int64) service.RiskIdentityReport {
 	identity := requestRiskIdentity(c, client.IdentityDeviceEnabled() && apiKeyID <= 0)
 	report := service.RiskIdentityReport{EventKey: identity.EventRoot + ":identity:" + eventType, EventType: eventType, EventClass: eventClass, Outcome: outcome, OccurredAt: time.Now().UTC(), UserID: userID, Email: strings.TrimSpace(email), ClientIP: identity.ClientIP, IPSource: identity.IPSource, ProxyChainValid: identity.ProxyChainValid, CountryCode: identity.CountryCode, Region: identity.Region, City: identity.City, ASN: identity.ASN, GeoSource: identity.GeoSource, GeoVerified: identity.GeoVerified, BrowserFamily: identity.BrowserFamily, OSFamily: identity.OSFamily, DeviceClass: identity.DeviceClass, LanguageFamily: identity.LanguageFamily, APIKeyID: apiKeyID}
 	if !client.IdentityIPEnabled() {
@@ -199,7 +204,7 @@ func enqueueRiskIdentity(c *gin.Context, client *service.RiskControlClient, even
 		report.BrowserInstanceID = identity.BrowserInstanceID
 		report.BrowserCookieStatus = identity.BrowserCookieStatus
 	}
-	_ = client.EnqueueIdentity(report)
+	return report
 }
 
 func RiskIdentityAuthLifecycleMiddleware(client *service.RiskControlClient) gin.HandlerFunc {

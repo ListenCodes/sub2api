@@ -17,6 +17,7 @@ describe('user risk-control labels', () => {
     expect(formatRiskType('login_failure')).toBe('登录失败')
     expect(formatRiskLevel('critical')).toBe('严重风险')
     expect(formatRiskAction('reject_candidate')).toBe('拒绝注册')
+    expect(formatRiskAction('identity_reject_candidate')).toBe('身份综合规则拒绝注册')
     expect(formatRiskAction('review_case')).toBe('人工复核案件')
     expect(formatAccountStatus('disabled')).toBe('已封禁')
     expect(formatAuditResult('partial')).toBe('部分成功')

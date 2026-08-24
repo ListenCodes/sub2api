@@ -216,7 +216,7 @@ release_manifest_valid() {
       and .extensions_digest == .current_extensions_digest
 	  and (.current_env_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
 	  and .target_env_sha256 != .current_env_sha256
-	  and (.identity_transition | IN("stage0-safe-reset", "stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
+	  and (.identity_transition | IN("stage0-safe-reset", "stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo", "stage5-composite-enforcement"))
     elif .update_kind == "official" then
       .advances_custom_version == false
       and (if .custom_docs_only then .target_custom_commit != .source_commit else .target_custom_commit == .source_commit end)

@@ -34,6 +34,7 @@ const riskActions: Record<string, string> = {
   ban: '封禁账号',
   unban: '解封账号',
   reject_candidate: '拒绝注册',
+  identity_reject_candidate: '身份综合规则拒绝注册',
   auto_ban: '自动封禁',
   create_rule: '新建规则',
   update_rule: '修改规则',

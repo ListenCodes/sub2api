@@ -174,7 +174,7 @@ container_env_value() {
 }
 
 validate_identity_runtime() {
-	local key expected actual health expected_enabled expected_admin expected_geo_source
+	local key expected actual health expected_enabled expected_admin expected_geo_source expected_composite_enforcement
 	[[ "$UPDATE_KIND" == identity-config ]] || return 0
 	if [[ "$IDENTITY_TRANSITION" != stage0-safe-reset ]]; then
 		expected="$(awk -F= '$1=="SERVER_TRUSTED_PROXIES" {value=substr($0,length($1)+2)} END {print value}' "$TARGET_DIR/.env")"
@@ -182,7 +182,7 @@ validate_identity_runtime() {
 		actual="$(container_env_value sub2api SERVER_TRUSTED_PROXIES)" || return 1
 		[[ "$actual" == "$expected" ]] || return 1
 	fi
-  for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_DELIVERY_ENABLED RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
+  for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED RISK_IDENTITY_DELIVERY_ENABLED RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
     expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
     [[ "$expected" == true || "$expected" == false ]] || return 1
     actual="$(container_env_value sub2api "$key")" || return 1
@@ -190,7 +190,7 @@ validate_identity_runtime() {
   done
   for key in RISK_IDENTITY_V2_ENABLED RISK_IDENTITY_IP_COLLECTION_ENABLED RISK_IDENTITY_DEVICE_COLLECTION_ENABLED \
     RISK_IDENTITY_ADMIN_ENABLED RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
-	RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED \
+	RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED \
 	RISK_IDENTITY_CURRENT_SCORE_ENABLED RISK_IDENTITY_CASES_ENABLED RISK_IDENTITY_EXPLAIN_ENABLED RISK_IDENTITY_DELIVERY_ENABLED; do
     expected="$(awk -F= -v key="$key" '$1==key {value=substr($0,length(key)+2)} END {print value}' "$TARGET_DIR/.env")"
     [[ "$expected" == true || "$expected" == false ]] || return 1
@@ -204,12 +204,15 @@ validate_identity_runtime() {
   health="$(docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz)" || return 1
   expected_enabled="$(awk -F= '$1=="RISK_IDENTITY_V2_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
   expected_admin="$(awk -F= '$1=="RISK_IDENTITY_ADMIN_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
-	jq -e --argjson enabled "$expected_enabled" --argjson admin "$expected_admin" --arg geo_source "$expected_geo_source" '
+	expected_composite_enforcement="$(awk -F= '$1=="RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED" {value=$2} END {print value}' "$TARGET_DIR/.env")"
+	jq -e --argjson enabled "$expected_enabled" --argjson admin "$expected_admin" --argjson composite_enforcement "$expected_composite_enforcement" --arg geo_source "$expected_geo_source" '
     .identity.enabled == $enabled and .identity.admin_enabled == $admin
-    and .identity.mode == "shadow" and .identity.schema == "v2"
+	and .identity.mode == (if $composite_enforcement then "enforce" else "shadow" end)
+	and .identity.features.composite_enforcement == $composite_enforcement
+	and .identity.schema == "v2"
 	and .identity.geo_source == $geo_source
 	' <<< "$health" >/dev/null
-	if [[ "$IDENTITY_TRANSITION" == stage3-rules || "$IDENTITY_TRANSITION" == stage4-geo ]]; then
+	if [[ "$IDENTITY_TRANSITION" == stage3-rules || "$IDENTITY_TRANSITION" == stage4-geo || "$IDENTITY_TRANSITION" == stage5-composite-enforcement ]]; then
 		jq -e '
 			.identity.features.current_score and .identity.features.cases
 			and .identity.features.explain and .identity.features.delivery
@@ -229,6 +232,9 @@ validate_identity_runtime() {
 		' <<< "$health" >/dev/null || return 1
 		jq -e '.identity.effective_rule_count >= 5' <<< "$health" >/dev/null || return 1
 	fi
+	if [[ "$IDENTITY_TRANSITION" == stage5-composite-enforcement ]]; then
+		jq -e '.identity.mode == "enforce" and .identity.features.composite_enforcement' <<< "$health" >/dev/null || return 1
+	fi
 	if [[ "$IDENTITY_TRANSITION" == stage0-safe-reset ]]; then
 		jq -e '
 			.identity.domains.ip == "disabled"
@@ -239,6 +245,7 @@ validate_identity_runtime() {
 			and (.identity.features.cases | not)
 			and (.identity.features.explain | not)
 			and (.identity.features.delivery | not)
+			and (.identity.features.composite_enforcement | not)
 		' <<< "$health" >/dev/null || return 1
 	fi
 }
@@ -246,7 +253,7 @@ validate_identity_runtime() {
 validate_identity_pre_switch() {
   local health shadow_until
   [[ "$UPDATE_KIND" == identity-config ]] || return 0
-  [[ "$IDENTITY_TRANSITION" == stage3-rules || "$IDENTITY_TRANSITION" == stage4-geo ]] || return 0
+  [[ "$IDENTITY_TRANSITION" == stage3-rules || "$IDENTITY_TRANSITION" == stage4-geo || "$IDENTITY_TRANSITION" == stage5-composite-enforcement ]] || return 0
   health="$(docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz)" || return 1
   jq -e '
     .status == "ok"
@@ -289,6 +296,12 @@ validate_identity_pre_switch() {
       and .identity.features.cases
     ' <<< "$health" >/dev/null
   fi
+	if [[ "$IDENTITY_TRANSITION" == stage5-composite-enforcement ]]; then
+		jq -e '
+			.identity.geo_source == "cloudflare_verified"
+			and (.identity.features.composite_enforcement | not)
+		' <<< "$health" >/dev/null
+	fi
 }
 
 render_and_match() {
@@ -368,7 +381,7 @@ validate_update_identity_contract() {
 	  and $manifest.extensions_digest == $base.extensions_digest
 	  and $manifest.current_env_sha256 == $base.env_sha256
 	  and $manifest.target_env_sha256 != $base.env_sha256
-	  and ($manifest.identity_transition | IN("stage0-safe-reset", "stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo"))
+	  and ($manifest.identity_transition | IN("stage0-safe-reset", "stage1-v2", "stage1-ip", "stage1-device", "stage2-admin", "stage3-shadow-window", "stage3-rules", "stage4-geo", "stage5-composite-enforcement"))
 	elif $manifest.update_kind == "official" then
       $manifest.advances_custom_version == false
       and $manifest.proposed_custom_sequence == $base.custom_version_sequence
@@ -470,7 +483,7 @@ restore_base_before_main_switch() {
 restore_interrupted_base_runtime() {
   local source_head="$1" source_ref="$2"
   if [[ "$operation_status" == switching_extensions \
-    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage0-safe-reset && "$IDENTITY_TRANSITION" != stage1-* && "$IDENTITY_TRANSITION" != stage4-geo) ]]; then
+    || ("$UPDATE_KIND" == identity-config && "$IDENTITY_TRANSITION" != stage0-safe-reset && "$IDENTITY_TRANSITION" != stage1-* && "$IDENTITY_TRANSITION" != stage4-geo && "$IDENTITY_TRANSITION" != stage5-composite-enforcement) ]]; then
     restore_base_before_main_switch "$source_head" "$source_ref"
   else
     restore_base_runtime "$source_head" "$source_ref"
@@ -682,7 +695,7 @@ SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS
   || abort_apply 'extensions switch failed' EXTENSIONS_SWITCH_FAILED
 wait_container_healthy extensions-self || abort_apply 'extensions health check failed' EXTENSIONS_HEALTH_FAILED
 
-if [[ "$UPDATE_KIND" != identity-config || "$IDENTITY_TRANSITION" == stage0-safe-reset || "$IDENTITY_TRANSITION" == stage1-* || "$IDENTITY_TRANSITION" == stage4-geo ]]; then
+if [[ "$UPDATE_KIND" != identity-config || "$IDENTITY_TRANSITION" == stage0-safe-reset || "$IDENTITY_TRANSITION" == stage1-* || "$IDENTITY_TRANSITION" == stage4-geo || "$IDENTITY_TRANSITION" == stage5-composite-enforcement ]]; then
   release_job_update "$JOB_ID" switching_main "Switching main application to $MAIN_DIGEST" '{}'
   main_switch_started=true
   SUB2API_IMAGE="$MAIN_REPOSITORY@$MAIN_DIGEST" EXTENSIONS_SELF_IMAGE="$EXTENSIONS_REPOSITORY@$EXTENSIONS_DIGEST" \

@@ -53,6 +53,7 @@ export type IdentityRolloutTransition =
   | 'stage3-shadow-window'
   | 'stage3-rules'
   | 'stage4-geo'
+  | 'stage5-composite-enforcement'
 export interface ReleaseIdentity {
   release_id: string
   official_version: string

@@ -313,8 +313,9 @@ const effectiveIdentityRuleCount = computed(() => {
 	return typeof reported === 'number' ? Math.min(enabled, Math.max(reported, 0)) : enabled
 })
 const identityRulesOperating = computed(() => Boolean(identityHealth.value?.enabled && identityHealth.value?.admin_enabled && identityRulesActive.value && effectiveIdentityRuleCount.value > 0))
+const compositeEnforcementActive = computed(() => Boolean(identityHealth.value?.mode === 'enforce' && identityHealth.value?.features?.composite_enforcement))
 const selectedRule = computed(() => identityRules.value.find((rule) => rule.code === selectedIdentityRule.value) || null)
-const identityRulesHeader = computed(() => identityRulesOperating.value ? 'Shadow 观察期' : identityRules.value.some((rule) => ['paused', 'degraded', 'not_evaluable'].includes(rule.state)) ? '数据质量保护中' : '尚未启用')
+const identityRulesHeader = computed(() => compositeEnforcementActive.value ? '综合注册拦截已开启' : identityRulesOperating.value ? 'Shadow 观察期' : identityRules.value.some((rule) => ['paused', 'degraded', 'not_evaluable'].includes(rule.state)) ? '数据质量保护中' : '尚未启用')
 const hasEffectiveSamples = computed(() => ruleEffects.value.some((effect) => effect.hit_events > 0 || effect.unique_subjects > 0 || effect.sample_user_ids?.length))
 const identityRulesStartedAt = computed(() => {
   const values = identityRules.value.filter((rule) => rule.enabled).map((rule) => rule.active_from || rule.updated_at).filter(Boolean).sort()
@@ -323,8 +324,8 @@ const identityRulesStartedAt = computed(() => {
 const identityQualityDomains = computed(() => identityHealth.value?.quality_domains || identityHealth.value?.domains)
 const rebuildQualityReady = computed(() => { const values = Object.values(identityQualityDomains.value || {}); return values.length > 0 && values.every((state) => state === 'healthy') })
 const identityQualityLabel = computed(() => rebuildQualityReady.value ? '数据质量正常' : '数据质量需关注')
-const identityShadowMessage = computed(() => identityRulesOperating.value ? 'Shadow：规则已启用并计算，只记录并进入人工复核，不会自动拒绝或封禁。' : 'Shadow：当前未启用有效计算；不会自动拒绝或封禁。')
-const identityShadowWindow = computed(() => identityRulesOperating.value ? identityHealth.value?.shadow_until ? `截止：${formatDateOnly(identityHealth.value.shadow_until)}` : '截止：未配置' : '观察窗口：未生效')
+const identityShadowMessage = computed(() => compositeEnforcementActive.value ? '综合注册拦截：同 IP + 同浏览器实例在 10 分钟内达到第 3 个候选账号时自动拒绝；不会自动封禁现有账号。其他身份规则仍为 Shadow，只记录并进入人工复核。' : identityRulesOperating.value ? 'Shadow：规则已启用并计算，只记录并进入人工复核，不会自动拒绝或封禁。' : 'Shadow：当前未启用有效计算；不会自动拒绝或封禁。')
+const identityShadowWindow = computed(() => identityRulesOperating.value ? identityHealth.value?.shadow_until ? `${compositeEnforcementActive.value ? '其他规则观察截止' : '截止'}：${formatDateOnly(identityHealth.value.shadow_until)}` : '截止：未配置' : '观察窗口：未生效')
 function currentPreflightFingerprint() {
 	const rules = identityRules.value.map((rule) => `${rule.code}:${rule.revision}:${rule.enabled}:${rule.state}`).sort().join('|')
 	const quality = identityQualityDomains.value ? Object.entries(identityQualityDomains.value).sort().map(([domain, state]) => `${domain}:${state}`).join('|') : ''
@@ -359,7 +360,7 @@ function identityRuleName(code: string) { return ({ v2_registration_email_retrie
 function retiredRuleName(rule: Rule) { return ({ registration_abuse: '历史注册频率规则', registration_identity_abuse: '历史账号与设备注册规则', registration_ip_multi_account: '历史共享 IP 注册规则', api_request_observation: '历史正常 API 流量记录', api_error_burst: '已迁移的 API 可靠性规则', upstream_error: '已迁移的上游可靠性规则' } as Record<string, string>)[rule.code] || '历史事件规则' }
 function identityDomainLabel(domain: IdentityRule['domain']) { return ({ account: '邮箱', ip: 'IP', device: '设备', composite: '综合关联' } as Record<IdentityRule['domain'], string>)[domain] }
 function identityRuleCondition(rule: IdentityRule) { const unit = rule.domain === 'account' ? '次注册尝试' : '个成功账号'; return `${Math.round(rule.window_seconds / 60)} 分钟内 ${rule.threshold} ${unit}` }
-function identityRuleStatus(rule: IdentityRule) { return rule.enabled ? '已启用 · Shadow' : rule.state === 'paused' ? '数据质量异常 · 已暂停' : rule.state === 'degraded' ? '样本不足 · 暂不计算' : rule.state === 'not_evaluable' ? '数据缺口 · 不可计算' : rule.configured_enabled ? '配置已开 · 尚未生效' : '已停用' }
+function identityRuleStatus(rule: IdentityRule) { return rule.enabled ? compositeEnforcementActive.value && rule.code === 'v2_registration_composite_accounts' ? '已启用 · 自动拒绝候选' : '已启用 · Shadow' : rule.state === 'paused' ? '数据质量异常 · 已暂停' : rule.state === 'degraded' ? '样本不足 · 暂不计算' : rule.state === 'not_evaluable' ? '数据缺口 · 不可计算' : rule.configured_enabled ? '配置已开 · 尚未生效' : '已停用' }
 function percentage(value: number) { return `${(Number(value || 0) * 100).toFixed(1)}%` }
 function formatDate(value?: string) { return value ? new Date(value).toLocaleString() : '-' }
 function formatDateOnly(value?: string) { return value ? value.slice(0, 10) : '-' }

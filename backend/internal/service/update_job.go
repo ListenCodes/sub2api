@@ -80,6 +80,7 @@ const (
 	IdentityTransitionStage3ShadowWindow = "stage3-shadow-window"
 	IdentityTransitionStage3Rules        = "stage3-rules"
 	IdentityTransitionStage4Geo          = "stage4-geo"
+	IdentityTransitionStage5Composite    = "stage5-composite-enforcement"
 
 	defaultUpdateScriptPath = "/app/scripts/sync-upstream.sh"
 	defaultUpdateJobsDir    = "/app/data/release-jobs"

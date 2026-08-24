@@ -69,6 +69,18 @@ func (h *AuthHandler) preflightRegistrationRisk(c *gin.Context, email, source st
 	if h == nil || h.riskControlClient == nil || c == nil {
 		return nil
 	}
+	if h.riskControlClient.IdentityCompositeEnforcementEnabled() {
+		report := buildRiskIdentityReport(c, h.riskControlClient, "registration_attempt", "registration", "attempt", email, 0, 0)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 700*time.Millisecond)
+		decision, err := h.riskControlClient.EvaluateIdentityRegistration(ctx, report)
+		cancel()
+		_ = h.riskControlClient.EnqueueIdentity(report)
+		if err != nil {
+			slog.Warn("identity registration decision failed open", "error", err)
+			return nil
+		}
+		return riskDecisionError(decision, "registration")
+	}
 	enqueueRiskIdentity(c, h.riskControlClient, "registration_attempt", "registration", "attempt", email, 0, 0)
 	if h.riskControlClient.IdentityEnabled() {
 		return nil

@@ -124,7 +124,7 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
-	if r.URL.Path == "/api/v1/internal/identity-events" || r.URL.Path == "/api/v1/internal/identity-delivery" {
+	if r.URL.Path == "/api/v1/internal/identity-events" || r.URL.Path == "/api/v1/internal/identity-delivery" || r.URL.Path == "/api/v1/internal/identity-registration-decision" {
 		if int64(len(body)) > s.cfg.Identity.MaxBodyBytes {
 			writeError(w, http.StatusRequestEntityTooLarge, errors.New("identity request body too large"))
 			return
@@ -186,6 +186,8 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleIdentityEvent(w, r, body)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/identity-delivery":
 		s.handleIdentityDelivery(w, r, body)
+	case r.Method == http.MethodPost && path == "/api/v1/internal/identity-registration-decision":
+		s.handleIdentityRegistrationDecision(w, r, body)
 	case r.Method == http.MethodPost && path == "/api/v1/internal/audit":
 		s.handleAuditIngest(w, r, body)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/overview":
@@ -277,6 +279,34 @@ func (s *HTTPServer) handleIdentityEvent(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "duplicate": duplicate, "mode": "shadow"})
+}
+
+func (s *HTTPServer) handleIdentityRegistrationDecision(w http.ResponseWriter, r *http.Request, body []byte) {
+	if s.identity == nil || !s.cfg.Identity.CompositeEnforcementEnabled {
+		writeJSON(w, http.StatusOK, Decision{Action: "allow", RiskLevel: "none", Mode: "shadow"})
+		return
+	}
+	var input IdentityEventReport
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, errors.New("identity decision request must contain one JSON object"))
+		return
+	}
+	decision, err := s.identity.RegistrationDecision(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, ErrInvalidIdentity) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, decision)
 }
 
 func (s *HTTPServer) handleIdentityDelivery(w http.ResponseWriter, r *http.Request, body []byte) {

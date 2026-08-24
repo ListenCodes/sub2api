@@ -115,3 +115,31 @@ func TestRiskControlClientAddsStableAuditKeyForRetries(t *testing.T) {
 		t.Fatalf("attempts=%d keys=%#v, want same non-empty key across retries", attempts, keys)
 	}
 }
+
+func TestRiskControlClientEvaluatesSignedIdentityRegistration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/internal/identity-registration-decision" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("X-Risk-Signature-Version") != "v2" {
+			t.Fatalf("signature version = %q", r.Header.Get("X-Risk-Signature-Version"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"decision":"reject_candidate","score":90,"risk_level":"critical","reason":"composite registration identity threshold","rule_codes":["v2_registration_composite_accounts"],"mode":"enforce"}`)
+	}))
+	defer server.Close()
+
+	client := &RiskControlClient{
+		baseURL: server.URL, secret: []byte("test-risk-secret"), http: server.Client(),
+		identityEnabled: true, identityIPEnabled: true, identityDeviceEnabled: true, identityCompositeEnforce: true, identityDeliveryEnabled: true,
+	}
+	decision, err := client.EvaluateIdentityRegistration(context.Background(), RiskIdentityReport{
+		EventKey: "registration-attempt-1", EventType: "registration_attempt", EventClass: "registration", Outcome: "attempt", OccurredAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != "reject_candidate" || decision.Mode != "enforce" || len(decision.RuleCodes) != 1 {
+		t.Fatalf("decision = %+v", decision)
+	}
+}

@@ -36,34 +36,35 @@ func validateConfig(cfg Config) error {
 }
 
 type IdentityConfig struct {
-	Enabled                 bool
-	IPCollectionEnabled     bool
-	DeviceCollectionEnabled bool
-	AdminEnabled            bool
-	RulesEnabled            bool
-	IPDomainEnabled         bool
-	DeviceDomainEnabled     bool
-	CompositeDomainEnabled  bool
-	CurrentScoreEnabled     bool
-	CasesEnabled            bool
-	ExplainEnabled          bool
-	DeliveryEnabled         bool
-	HMACKey                 string
-	EncryptionKey           string
-	EncryptionKeyID         string
-	PreviousEncryptionKey   string
-	PreviousEncryptionKeyID string
-	GeoSource               string
-	ShadowUntil             time.Time
-	MaxBodyBytes            int64
-	QualityMinEvents        int64
-	QualityMinCoverage      int64
-	QualityMinUsers         int64
-	QualityMaxIPShare       int64
+	Enabled                     bool
+	IPCollectionEnabled         bool
+	DeviceCollectionEnabled     bool
+	AdminEnabled                bool
+	RulesEnabled                bool
+	IPDomainEnabled             bool
+	DeviceDomainEnabled         bool
+	CompositeDomainEnabled      bool
+	CompositeEnforcementEnabled bool
+	CurrentScoreEnabled         bool
+	CasesEnabled                bool
+	ExplainEnabled              bool
+	DeliveryEnabled             bool
+	HMACKey                     string
+	EncryptionKey               string
+	EncryptionKeyID             string
+	PreviousEncryptionKey       string
+	PreviousEncryptionKeyID     string
+	GeoSource                   string
+	ShadowUntil                 time.Time
+	MaxBodyBytes                int64
+	QualityMinEvents            int64
+	QualityMinCoverage          int64
+	QualityMinUsers             int64
+	QualityMaxIPShare           int64
 }
 
 func (c IdentityConfig) active() bool {
-	return c.Enabled || c.IPCollectionEnabled || c.DeviceCollectionEnabled || c.AdminEnabled || c.RulesEnabled || c.IPDomainEnabled || c.DeviceDomainEnabled || c.CompositeDomainEnabled || c.CurrentScoreEnabled || c.CasesEnabled || c.ExplainEnabled || c.DeliveryEnabled
+	return c.Enabled || c.IPCollectionEnabled || c.DeviceCollectionEnabled || c.AdminEnabled || c.RulesEnabled || c.IPDomainEnabled || c.DeviceDomainEnabled || c.CompositeDomainEnabled || c.CompositeEnforcementEnabled || c.CurrentScoreEnabled || c.CasesEnabled || c.ExplainEnabled || c.DeliveryEnabled
 }
 
 func (c IdentityConfig) Validate() error {
@@ -93,6 +94,9 @@ func (c IdentityConfig) Validate() error {
 	if c.RulesEnabled && c.ShadowUntil.IsZero() {
 		return errors.New("RISK_IDENTITY_SHADOW_UNTIL is required while identity rules are enabled")
 	}
+	if c.CompositeEnforcementEnabled && (!c.Enabled || !c.IPCollectionEnabled || !c.DeviceCollectionEnabled || !c.AdminEnabled || !c.RulesEnabled || !c.IPDomainEnabled || !c.DeviceDomainEnabled || !c.CompositeDomainEnabled || !c.CurrentScoreEnabled || !c.CasesEnabled || !c.ExplainEnabled || !c.DeliveryEnabled || c.GeoSource != "cloudflare_verified") {
+		return errors.New("RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED requires the complete healthy V2 rollout and verified geo")
+	}
 	return nil
 }
 
@@ -121,30 +125,31 @@ func loadConfig() Config {
 		AdminProxyTimeout: int(envInt64("RISK_CONTROL_ADMIN_TIMEOUT_MS", 3000)),
 		AccountMonitor:    accountmonitor.LoadConfig(os.Getenv),
 		Identity: IdentityConfig{
-			Enabled:                 envBool("RISK_IDENTITY_V2_ENABLED", false),
-			IPCollectionEnabled:     envBool("RISK_IDENTITY_IP_COLLECTION_ENABLED", false),
-			DeviceCollectionEnabled: envBool("RISK_IDENTITY_DEVICE_COLLECTION_ENABLED", false),
-			AdminEnabled:            envBool("RISK_IDENTITY_ADMIN_ENABLED", false),
-			RulesEnabled:            envBool("RISK_IDENTITY_RULES_ENABLED", false),
-			IPDomainEnabled:         envBoolFallback("RISK_IDENTITY_IP_RULES_ENABLED", "RISK_IDENTITY_IP_DOMAIN_ENABLED", false),
-			DeviceDomainEnabled:     envBoolFallback("RISK_IDENTITY_DEVICE_RULES_ENABLED", "RISK_IDENTITY_DEVICE_DOMAIN_ENABLED", false),
-			CompositeDomainEnabled:  envBoolFallback("RISK_IDENTITY_COMPOSITE_RULES_ENABLED", "RISK_IDENTITY_COMPOSITE_DOMAIN_ENABLED", false),
-			CurrentScoreEnabled:     envBool("RISK_IDENTITY_CURRENT_SCORE_ENABLED", false),
-			CasesEnabled:            envBool("RISK_IDENTITY_CASES_ENABLED", false),
-			ExplainEnabled:          envBool("RISK_IDENTITY_EXPLAIN_ENABLED", false),
-			DeliveryEnabled:         envBool("RISK_IDENTITY_DELIVERY_ENABLED", false),
-			HMACKey:                 strings.TrimSpace(os.Getenv("RISK_IDENTITY_HMAC_KEY")),
-			EncryptionKey:           strings.TrimSpace(os.Getenv("RISK_IDENTITY_ENCRYPTION_KEY")),
-			EncryptionKeyID:         strings.TrimSpace(os.Getenv("RISK_IDENTITY_ENCRYPTION_KEY_ID")),
-			PreviousEncryptionKey:   strings.TrimSpace(os.Getenv("RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY")),
-			PreviousEncryptionKeyID: strings.TrimSpace(os.Getenv("RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY_ID")),
-			GeoSource:               envOr("RISK_IDENTITY_GEO_SOURCE", "cloudflare_or_local"),
-			ShadowUntil:             envTime("RISK_IDENTITY_SHADOW_UNTIL"),
-			MaxBodyBytes:            envInt64("RISK_IDENTITY_MAX_BODY_BYTES", 32*1024),
-			QualityMinEvents:        envInt64("RISK_IDENTITY_QUALITY_MIN_EVENTS", 50),
-			QualityMinCoverage:      envInt64("RISK_IDENTITY_QUALITY_MIN_COVERAGE_PERCENT", 80),
-			QualityMinUsers:         envInt64("RISK_IDENTITY_QUALITY_MIN_USERS", 50),
-			QualityMaxIPShare:       envInt64("RISK_IDENTITY_QUALITY_MAX_IP_SHARE_PERCENT", 20),
+			Enabled:                     envBool("RISK_IDENTITY_V2_ENABLED", false),
+			IPCollectionEnabled:         envBool("RISK_IDENTITY_IP_COLLECTION_ENABLED", false),
+			DeviceCollectionEnabled:     envBool("RISK_IDENTITY_DEVICE_COLLECTION_ENABLED", false),
+			AdminEnabled:                envBool("RISK_IDENTITY_ADMIN_ENABLED", false),
+			RulesEnabled:                envBool("RISK_IDENTITY_RULES_ENABLED", false),
+			IPDomainEnabled:             envBoolFallback("RISK_IDENTITY_IP_RULES_ENABLED", "RISK_IDENTITY_IP_DOMAIN_ENABLED", false),
+			DeviceDomainEnabled:         envBoolFallback("RISK_IDENTITY_DEVICE_RULES_ENABLED", "RISK_IDENTITY_DEVICE_DOMAIN_ENABLED", false),
+			CompositeDomainEnabled:      envBoolFallback("RISK_IDENTITY_COMPOSITE_RULES_ENABLED", "RISK_IDENTITY_COMPOSITE_DOMAIN_ENABLED", false),
+			CompositeEnforcementEnabled: envBool("RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED", false),
+			CurrentScoreEnabled:         envBool("RISK_IDENTITY_CURRENT_SCORE_ENABLED", false),
+			CasesEnabled:                envBool("RISK_IDENTITY_CASES_ENABLED", false),
+			ExplainEnabled:              envBool("RISK_IDENTITY_EXPLAIN_ENABLED", false),
+			DeliveryEnabled:             envBool("RISK_IDENTITY_DELIVERY_ENABLED", false),
+			HMACKey:                     strings.TrimSpace(os.Getenv("RISK_IDENTITY_HMAC_KEY")),
+			EncryptionKey:               strings.TrimSpace(os.Getenv("RISK_IDENTITY_ENCRYPTION_KEY")),
+			EncryptionKeyID:             strings.TrimSpace(os.Getenv("RISK_IDENTITY_ENCRYPTION_KEY_ID")),
+			PreviousEncryptionKey:       strings.TrimSpace(os.Getenv("RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY")),
+			PreviousEncryptionKeyID:     strings.TrimSpace(os.Getenv("RISK_IDENTITY_PREVIOUS_ENCRYPTION_KEY_ID")),
+			GeoSource:                   envOr("RISK_IDENTITY_GEO_SOURCE", "cloudflare_or_local"),
+			ShadowUntil:                 envTime("RISK_IDENTITY_SHADOW_UNTIL"),
+			MaxBodyBytes:                envInt64("RISK_IDENTITY_MAX_BODY_BYTES", 32*1024),
+			QualityMinEvents:            envInt64("RISK_IDENTITY_QUALITY_MIN_EVENTS", 50),
+			QualityMinCoverage:          envInt64("RISK_IDENTITY_QUALITY_MIN_COVERAGE_PERCENT", 80),
+			QualityMinUsers:             envInt64("RISK_IDENTITY_QUALITY_MIN_USERS", 50),
+			QualityMaxIPShare:           envInt64("RISK_IDENTITY_QUALITY_MAX_IP_SHARE_PERCENT", 20),
 		},
 	}
 }

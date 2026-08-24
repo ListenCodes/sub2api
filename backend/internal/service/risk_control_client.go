@@ -46,6 +46,7 @@ type RiskControlClient struct {
 	identityEnabled           bool
 	identityIPEnabled         bool
 	identityDeviceEnabled     bool
+	identityCompositeEnforce  bool
 	identityDeliveryEnabled   bool
 	identitySource            string
 	identityGeneration        string
@@ -163,6 +164,7 @@ func NewRiskControlClientFromEnv() *RiskControlClient {
 	client.identityEnabled = envBoolValue("RISK_IDENTITY_V2_ENABLED")
 	client.identityIPEnabled = envBoolValue("RISK_IDENTITY_IP_COLLECTION_ENABLED")
 	client.identityDeviceEnabled = envBoolValue("RISK_IDENTITY_DEVICE_COLLECTION_ENABLED")
+	client.identityCompositeEnforce = envBoolValue("RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED")
 	client.identityDeliveryEnabled = envBoolValue("RISK_IDENTITY_DELIVERY_ENABLED")
 	client.identitySource = strings.TrimSpace(os.Getenv("RISK_IDENTITY_DELIVERY_SOURCE"))
 	if client.identitySource == "" {
@@ -196,6 +198,9 @@ func (c *RiskControlClient) IdentityIPEnabled() bool {
 }
 func (c *RiskControlClient) IdentityDeviceEnabled() bool {
 	return c != nil && c.identityEnabled && c.identityDeviceEnabled
+}
+func (c *RiskControlClient) IdentityCompositeEnforcementEnabled() bool {
+	return c != nil && c.identityEnabled && c.identityIPEnabled && c.identityDeviceEnabled && c.identityDeliveryEnabled && c.identityCompositeEnforce
 }
 
 func (c *RiskControlClient) EnqueueIdentity(input RiskIdentityReport) bool {
@@ -421,6 +426,28 @@ func (c *RiskControlClient) EvaluateEvent(ctx context.Context, input RiskEventRe
 	var decision RiskDecision
 	if err := json.Unmarshal(responseBody, &decision); err != nil {
 		return nil, fmt.Errorf("decode risk decision: %w", err)
+	}
+	return &decision, nil
+}
+
+func (c *RiskControlClient) EvaluateIdentityRegistration(ctx context.Context, input RiskIdentityReport) (*RiskDecision, error) {
+	if c == nil || !c.IdentityCompositeEnforcementEnabled() {
+		return nil, nil
+	}
+	if input.OccurredAt.IsZero() {
+		input.OccurredAt = time.Now().UTC()
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	responseBody, _, _, err := c.identitySignedRequestOnce(ctx, http.MethodPost, "/api/v1/internal/identity-registration-decision", body)
+	if err != nil {
+		return nil, err
+	}
+	var decision RiskDecision
+	if err := json.Unmarshal(responseBody, &decision); err != nil {
+		return nil, fmt.Errorf("decode identity registration decision: %w", err)
 	}
 	return &decision, nil
 }

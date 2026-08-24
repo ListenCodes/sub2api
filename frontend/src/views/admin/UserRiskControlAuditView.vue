@@ -117,7 +117,7 @@ const auditCategories: Array<{ value: NonNullable<AuditFilters['category']>; lab
   { value: 'sensitive', label: '敏感数据查看' },
 ]
 const auditActionsByCategory: Record<NonNullable<AuditFilters['category']>, string[]> = {
-  security: ['ban', 'unban', 'auto_ban', 'mark_processed', 'claim_risk_review_case', 'review_risk_case', 'label_shared_network'],
+  security: ['ban', 'unban', 'auto_ban', 'identity_reject_candidate', 'mark_processed', 'claim_risk_review_case', 'review_risk_case', 'label_shared_network'],
   rules: ['create_rule', 'update_rule', 'rule_test', 'disable_identity_rule', 'purge_legacy_v1', 'identity_rebuild_dry_run', 'identity_rebuild'],
   sensitive: ['view_identity_detail'],
 }

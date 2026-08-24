@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,62 @@ const riskSchemaAdvisoryLockID int64 = 7357811167603551941
 
 func NewSQLIdentityRepository(db *sql.DB) *SQLIdentityRepository {
 	return &SQLIdentityRepository{db: db}
+}
+
+func (r *SQLIdentityRepository) EvaluateCompositeRegistration(ctx context.Context, networkLookupKey, browserLookupKey string, occurredAt time.Time) (CompositeRegistrationEvaluation, error) {
+	var result CompositeRegistrationEvaluation
+	if r == nil || r.db == nil || strings.TrimSpace(networkLookupKey) == "" || strings.TrimSpace(browserLookupKey) == "" {
+		return result, errors.New("identity repository unavailable")
+	}
+	err := r.db.QueryRowContext(ctx, `WITH active_rule AS (
+ SELECT code,window_seconds,threshold,score,revision
+ FROM risk_identity_rules
+ WHERE code='v2_registration_composite_accounts' AND enabled AND mode='shadow'
+   AND active_from<=$3 AND (active_until IS NULL OR active_until>$3)
+), matched_identity AS (
+ SELECT network.id network_id,browser.id browser_id
+ FROM risk_network_identities network
+ CROSS JOIN risk_device_identities browser
+ WHERE network.lookup_key=$1 AND browser.identity_kind='browser_instance' AND browser.lookup_key=$2
+   AND NOT EXISTS(
+     SELECT 1 FROM risk_shared_network_labels label
+     WHERE label.network_identity_id=network.id
+       AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat')
+   )
+), evidence AS (
+ SELECT COUNT(DISTINCT event.user_id)::int account_count
+ FROM active_rule rule
+ LEFT JOIN matched_identity matched ON TRUE
+ LEFT JOIN risk_identity_events event
+   ON event.network_identity_id=matched.network_id AND event.browser_identity_id=matched.browser_id
+  AND event.event_class='registration' AND event.outcome='success'
+  AND event.ip_quality_valid AND event.device_quality_valid AND event.user_id>0
+  AND event.occurred_at BETWEEN $3-(rule.window_seconds*interval '1 second') AND $3
+)
+SELECT rule.code,rule.window_seconds,rule.threshold,rule.score,rule.revision,evidence.account_count
+FROM active_rule rule CROSS JOIN evidence`, networkLookupKey, browserLookupKey, occurredAt.UTC()).Scan(
+		&result.RuleCode, &result.WindowSeconds, &result.Threshold, &result.Score, &result.Revision, &result.AccountCount,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CompositeRegistrationEvaluation{}, nil
+	}
+	return result, err
+}
+
+func (r *SQLIdentityRepository) RecordCompositeRegistrationRejection(ctx context.Context, eventKey string, evaluation CompositeRegistrationEvaluation) error {
+	if r == nil || r.db == nil {
+		return errors.New("identity repository unavailable")
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"rule_code": evaluation.RuleCode, "rule_revision": evaluation.Revision,
+		"evidence_accounts": evaluation.AccountCount, "candidate_account_count": evaluation.AccountCount + 1,
+		"threshold": evaluation.Threshold, "window_seconds": evaluation.WindowSeconds, "score": evaluation.Score,
+	})
+	auditKey := fmt.Sprintf("identity-enforcement:%x", sha256.Sum256([]byte(strings.TrimSpace(eventKey))))
+	_, err := r.db.ExecContext(ctx, `INSERT INTO risk_audit_logs(audit_key,actor_id,action,target_type,target_id,result,reason,metadata,created_at)
+VALUES($1,0,'identity_reject_candidate','registration','candidate','success','composite registration identity threshold reached',$2,NOW())
+ON CONFLICT DO NOTHING`, auditKey, metadata)
+	return err
 }
 
 func (r *SQLIdentityRepository) ActivateShadowRules(ctx context.Context) error {
@@ -587,7 +644,7 @@ ON CONFLICT(user_id) DO UPDATE SET overall_score=EXCLUDED.overall_score,ip_score
 }
 
 func (r *SQLIdentityRepository) Summary(ctx context.Context, userID int64, cfg IdentityConfig) (IdentitySummary, error) {
-	result := IdentitySummary{UserID: userID, IdentityVersion: identityVersionV2, Mode: "shadow"}
+	result := IdentitySummary{UserID: userID, IdentityVersion: identityVersionV2, Mode: identityMode(cfg)}
 	var legacyCleaned bool
 	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM risk_schema_migrations WHERE version=$1)`, legacyV1CleanupMigrationVersion).Scan(&legacyCleaned); err != nil {
 		return result, err
@@ -1062,11 +1119,12 @@ func maskIdentityIP(raw string) string {
 }
 
 func (r *SQLIdentityRepository) Health(ctx context.Context, cfg IdentityConfig) (IdentityHealth, error) {
-	result := IdentityHealth{Enabled: cfg.Enabled, AdminEnabled: cfg.AdminEnabled, Mode: "shadow", Schema: "v2", KeyID: cfg.EncryptionKeyID, GeoSource: cfg.GeoSource, Domains: map[string]string{}, Quality24H: map[string]any{}, Delivery: map[string]any{}, Processing: map[string]any{}, Features: map[string]bool{
-		"current_score": cfg.CurrentScoreEnabled,
-		"cases":         cfg.CasesEnabled,
-		"explain":       cfg.ExplainEnabled,
-		"delivery":      cfg.DeliveryEnabled,
+	result := IdentityHealth{Enabled: cfg.Enabled, AdminEnabled: cfg.AdminEnabled, Mode: identityMode(cfg), Schema: "v2", KeyID: cfg.EncryptionKeyID, GeoSource: cfg.GeoSource, Domains: map[string]string{}, Quality24H: map[string]any{}, Delivery: map[string]any{}, Processing: map[string]any{}, Features: map[string]bool{
+		"current_score":         cfg.CurrentScoreEnabled,
+		"cases":                 cfg.CasesEnabled,
+		"explain":               cfg.ExplainEnabled,
+		"delivery":              cfg.DeliveryEnabled,
+		"composite_enforcement": cfg.CompositeEnforcementEnabled,
 	}}
 	if !cfg.ShadowUntil.IsZero() {
 		result.ShadowUntil = cfg.ShadowUntil.Format(time.RFC3339)

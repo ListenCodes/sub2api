@@ -87,6 +87,7 @@ has_identity_state_to_reset() {
     RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_ADMIN_ENABLED \
     RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
     RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED \
+    RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED \
     RISK_IDENTITY_CURRENT_SCORE_ENABLED RISK_IDENTITY_CASES_ENABLED \
     RISK_IDENTITY_EXPLAIN_ENABLED RISK_IDENTITY_DELIVERY_ENABLED \
     RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
@@ -131,6 +132,40 @@ validate_stage3_prerequisites() {
 		and .identity.features.explain
 		and (.identity.features.current_score | not)
 		and (.identity.features.cases | not)
+		and .identity.processing.pending == 0
+		and .identity.processing.retry == 0
+		and .identity.processing.failed == 0
+		and .identity.delivery.sources > 0
+		and .identity.delivery.gap_sources == 0
+		and .identity.delivery.stale_sources == 0
+		and .identity.delivery.queue_depth == 0
+		and .identity.delivery.dropped == 0
+		and .identity.delivery.failed == 0
+	' <<< "$health" >/dev/null
+}
+
+validate_stage5_prerequisites() {
+	local health
+	health="$(identity_health)" || return 1
+	jq -e '
+		.status == "ok"
+		and .identity.enabled and .identity.admin_enabled
+		and .identity.mode == "shadow" and .identity.schema == "v2"
+		and .identity.geo_source == "cloudflare_verified"
+		and .identity.domains.ip == "healthy"
+		and .identity.domains.device == "healthy"
+		and .identity.domains.composite == "healthy"
+		and .identity.quality_domains.ip == "healthy"
+		and .identity.quality_domains.device == "healthy"
+		and .identity.quality_domains.composite == "healthy"
+		and .identity.configured_rule_count >= 5
+		and .identity.prospective_rule_count >= 5
+		and .identity.effective_rule_count >= 5
+		and .identity.features.current_score
+		and .identity.features.cases
+		and .identity.features.explain
+		and .identity.features.delivery
+		and (.identity.features.composite_enforcement | not)
 		and .identity.processing.pending == 0
 		and .identity.processing.retry == 0
 		and .identity.processing.failed == 0
@@ -228,6 +263,7 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED RISK_IDENTITY_ADMIN_ENABLED \
         RISK_IDENTITY_RULES_ENABLED RISK_IDENTITY_IP_RULES_ENABLED \
         RISK_IDENTITY_DEVICE_RULES_ENABLED RISK_IDENTITY_COMPOSITE_RULES_ENABLED \
+        RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED \
         RISK_IDENTITY_CURRENT_SCORE_ENABLED RISK_IDENTITY_CASES_ENABLED \
         RISK_IDENTITY_EXPLAIN_ENABLED RISK_IDENTITY_DELIVERY_ENABLED \
         RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS; do
@@ -242,6 +278,7 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED false RISK_IDENTITY_ADMIN_ENABLED false \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false \
 		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
 		RISK_IDENTITY_EXPLAIN_ENABLED false RISK_IDENTITY_DELIVERY_ENABLED false \
         || return 1
@@ -261,6 +298,7 @@ apply_transition() {
 	  set_env_value "$target" RISK_IDENTITY_IP_RULES_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_DEVICE_RULES_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_COMPOSITE_RULES_ENABLED false || return 1
+	  set_env_value "$target" RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_CURRENT_SCORE_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_CASES_ENABLED false || return 1
 	  set_env_value "$target" RISK_IDENTITY_EXPLAIN_ENABLED false || return 1
@@ -272,7 +310,7 @@ apply_transition() {
     stage1-ip)
       require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED false \
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED false RISK_IDENTITY_ADMIN_ENABLED false RISK_IDENTITY_RULES_ENABLED false \
-		RISK_IDENTITY_DELIVERY_ENABLED false \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false RISK_IDENTITY_DELIVERY_ENABLED false \
         || return 1
 	  set_env_value "$target" RISK_IDENTITY_IP_COLLECTION_ENABLED true || return 1
 	  set_env_value "$target" RISK_IDENTITY_DELIVERY_ENABLED true
@@ -280,7 +318,7 @@ apply_transition() {
     stage1-device)
       require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED true \
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED false RISK_IDENTITY_ADMIN_ENABLED false RISK_IDENTITY_RULES_ENABLED false \
-		RISK_IDENTITY_DELIVERY_ENABLED true \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
       set_env_value "$target" RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true
       ;;
@@ -289,6 +327,7 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED false \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false \
 		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
 		RISK_IDENTITY_EXPLAIN_ENABLED false RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
@@ -300,6 +339,7 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false \
 		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
 		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
@@ -312,6 +352,7 @@ apply_transition() {
         RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
         RISK_IDENTITY_RULES_ENABLED false RISK_IDENTITY_IP_RULES_ENABLED false \
         RISK_IDENTITY_DEVICE_RULES_ENABLED false RISK_IDENTITY_COMPOSITE_RULES_ENABLED false \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false \
 		RISK_IDENTITY_CURRENT_SCORE_ENABLED false RISK_IDENTITY_CASES_ENABLED false \
 		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
         || return 1
@@ -330,12 +371,27 @@ apply_transition() {
 	    RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
 	    RISK_IDENTITY_RULES_ENABLED true RISK_IDENTITY_IP_RULES_ENABLED true \
 	    RISK_IDENTITY_DEVICE_RULES_ENABLED true RISK_IDENTITY_COMPOSITE_RULES_ENABLED true \
+		RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false \
 		RISK_IDENTITY_CURRENT_SCORE_ENABLED true RISK_IDENTITY_CASES_ENABLED true \
 		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
 	    RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS false \
 	    || return 1
 	  set_env_value "$target" RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true
 	  set_env_value "$target" RISK_IDENTITY_GEO_SOURCE cloudflare_verified
+	  ;;
+	stage5-composite-enforcement)
+	  require_flags RISK_IDENTITY_V2_ENABLED true RISK_IDENTITY_IP_COLLECTION_ENABLED true \
+	    RISK_IDENTITY_DEVICE_COLLECTION_ENABLED true RISK_IDENTITY_ADMIN_ENABLED true \
+	    RISK_IDENTITY_RULES_ENABLED true RISK_IDENTITY_IP_RULES_ENABLED true \
+	    RISK_IDENTITY_DEVICE_RULES_ENABLED true RISK_IDENTITY_COMPOSITE_RULES_ENABLED true \
+	    RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED false \
+		RISK_IDENTITY_CURRENT_SCORE_ENABLED true RISK_IDENTITY_CASES_ENABLED true \
+		RISK_IDENTITY_EXPLAIN_ENABLED true RISK_IDENTITY_DELIVERY_ENABLED true \
+	    RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS true \
+	    || return 1
+	  [[ "$(env_value "$ENV_FILE" RISK_IDENTITY_GEO_SOURCE)" == cloudflare_verified ]] || return 1
+	  validate_stage5_prerequisites || return 1
+	  set_env_value "$target" RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED true
 	  ;;
     *) return 1 ;;
   esac
@@ -348,7 +404,7 @@ touch "$LOG"
   && "$(jq -r '.update_kind // empty' "$JOB_FILE")" == identity-config ]] \
   || fail_prepare 'identity rollout job contract is invalid' INVALID_IDENTITY_OPERATION
 IDENTITY_TRANSITION="$(jq -r '.identity_transition // empty' "$JOB_FILE")"
-[[ "$IDENTITY_TRANSITION" =~ ^stage(0-safe-reset|1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo)$ ]] \
+[[ "$IDENTITY_TRANSITION" =~ ^stage(0-safe-reset|1-(v2|ip|device)|2-admin|3-(shadow-window|rules)|4-geo|5-composite-enforcement)$ ]] \
   || fail_prepare 'identity rollout transition is invalid' INVALID_IDENTITY_TRANSITION
 
 LEDGER_STATE_PATH="$(ledger_state_path)"

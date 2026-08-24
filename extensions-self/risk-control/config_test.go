@@ -55,6 +55,30 @@ func TestInitialIdentityShadowRequiresFourteenFullDays(t *testing.T) {
 	}
 }
 
+func TestCompositeEnforcementRequiresCompleteVerifiedRollout(t *testing.T) {
+	keyA := base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
+	keyB := base64.StdEncoding.EncodeToString([]byte("abcdefghijklmnopqrstuvwxyzABCDEF"))
+	cfg := IdentityConfig{
+		Enabled: true, IPCollectionEnabled: true, DeviceCollectionEnabled: true, AdminEnabled: true,
+		RulesEnabled: true, IPDomainEnabled: true, DeviceDomainEnabled: true, CompositeDomainEnabled: true,
+		CompositeEnforcementEnabled: true, CurrentScoreEnabled: true, CasesEnabled: true, ExplainEnabled: true,
+		DeliveryEnabled: true, GeoSource: "cloudflare_verified", ShadowUntil: time.Now().UTC().Add(24 * time.Hour),
+		HMACKey: keyA, EncryptionKey: keyB, EncryptionKeyID: "v1",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("complete enforcement rollout rejected: %v", err)
+	}
+	cfg.DeliveryEnabled = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("composite enforcement accepted without delivery health coverage")
+	}
+	cfg.DeliveryEnabled = true
+	cfg.GeoSource = "cloudflare_or_local"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("composite enforcement accepted without verified geo rollout")
+	}
+}
+
 func TestIdentityPreviousEncryptionKeyRequiresCompleteDistinctPair(t *testing.T) {
 	keyA := base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
 	keyB := base64.StdEncoding.EncodeToString([]byte("abcdefghijklmnopqrstuvwxyzABCDEF"))

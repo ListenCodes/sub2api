@@ -424,7 +424,9 @@ Identity V2 must advance in order. A failure rolls back only the current identit
 1. Stage 0 applies additive schema with every `RISK_IDENTITY_*_ENABLED=false`. If an older deployment left identity switches enabled, use the audited `stage0-safe-reset` transition before Stage 1; it disables all identity collection, delivery, reads, rules, cases, explain, and Cloudflare-trust switches without deleting tables, events, decisions, or evidence.
 2. Stage 1 enables `RISK_IDENTITY_V2_ENABLED`, then separately enables `RISK_IDENTITY_IP_COLLECTION_ENABLED` and `RISK_IDENTITY_DEVICE_COLLECTION_ENABLED` while verifying queue drops, encryption keys, trusted client IPs, browser identity quality, and geo source health.
 3. Stage 2 enables `RISK_IDENTITY_ADMIN_ENABLED` for administrator sampling of full IP, browser instance, API client, and associated-account evidence. The extension never receives main-user-table credentials.
-4. Stage 3 sets `RISK_IDENTITY_SHADOW_UNTIL` at least 14 days ahead on initial activation, then enables the global, IP, device, and composite rule switches. Every V2 signal remains Shadow; registration rejection and automatic bans are forbidden.
+4. Stage 3 sets `RISK_IDENTITY_SHADOW_UNTIL` at least 14 days ahead on initial activation, then enables the global, IP, device, and composite rule switches. Every persisted V2 rule and signal remains Shadow.
+5. Stage 4 enables the verified Cloudflare geography trust boundary.
+6. Stage 5 may enable only the approved composite registration candidate rejection. It never bans existing accounts and does not change persisted identity rule rows out of Shadow.
 
 On the first extensions start with V2 rules enabled, migration version 3 performs
 the approved one-time V1 cleanup inside one transaction. It deletes the current
@@ -440,7 +442,7 @@ administrator-only `POST /api/v1/admin/system/identity-rollout/prepare` and
 `POST /api/v1/admin/system/identity-rollout/apply` two-phase endpoints. Prepare
 accepts exactly one transition name: `stage0-safe-reset`, `stage1-v2`, `stage1-ip`,
 `stage1-device`, `stage2-admin`, `stage3-shadow-window`, `stage3-rules`, or
-`stage4-geo`.
+`stage4-geo`, or `stage5-composite-enforcement`.
 `stage0-safe-reset` is also the supported fail-safe rollback from any enabled
 identity stage. It recreates both application containers, requires every rule
 domain to report disabled with zero effective rules, and preserves all database
@@ -456,7 +458,7 @@ a root-owned mode `0700` directory, when
 the file is absent. Secret values never enter the request, operation JSON, or
 release log. Preserve that file separately from database backups. Stage 1
 recreates `extensions-self` before `sub2api`; Stage 2 and Stage 3 recreate only
-`extensions-self`, while Stage 4 again recreates both services. Every apply validates the exact expected identity flags and
+`extensions-self`, while Stages 4 and 5 recreate both services. Every apply validates the exact expected identity flags and
 identity health before committing the ledger, and restores the prepared base
 snapshot on failure. Keep `RISK_IDENTITY_TRUST_CLOUDFLARE_HEADERS=false`
 unless the direct-origin Cloudflare trust boundary has been independently
@@ -474,6 +476,19 @@ and `sub2api`, validates the environment and health projection, and remains
 fail-open when a location field is unavailable. It does not enable enforcement
 or extend the Shadow deadline.
 
+`stage5-composite-enforcement` is an explicit, one-way transition after Stage 4.
+Prepare requires all identity collection, delivery, administration, rule, score,
+case, explain, and verified-geo switches to be enabled; all three identity quality
+domains must be healthy, processing and delivery queues must be clean, and the
+enforcement feature must still be off. Apply sets only
+`RISK_IDENTITY_COMPOSITE_ENFORCEMENT_ENABLED=true`, recreates `extensions-self`
+and `sub2api`, and verifies health reports `mode=enforce` plus
+`features.composite_enforcement=true`. The synchronous decision rejects only the
+third candidate for `v2_registration_composite_accounts` in its 10-minute window.
+Known shared networks, missing/invalid evidence, unhealthy quality, timeouts, and
+extension errors remain fail-open. A rejection audit contains rule/count metadata
+but no raw IP or email.
+
 During `stage1-v2`, prepare resolves the current `deploy_sub2api-network`
 gateway and builds `SERVER_TRUSTED_PROXIES` from that one `/32` or `/128` peer
 plus the reviewed Cloudflare IPv4 and IPv6 CIDRs. This lets Gin peel the Nginx
@@ -483,7 +498,7 @@ untrusted public peer, so a caller-supplied prefix cannot replace the client
 address. Any missing or ambiguous gateway fails prepare. Update the pinned
 Cloudflare list from the official published ranges as a reviewed code change.
 
-After the full 14-day Shadow period, run `POST /api/v1/admin/risk-rebuilds/dry-run` and manually sample the reconciliation output before any write rebuild. Applying the rebuild, entering review mode, or any enforcement requires separate approval. This runbook has no automatic enforce step. Missing keys, failed identity migration, unavailable geo data, or a data-quality circuit breaker must remain fail-open for the main application.
+After the full 14-day Shadow period, run `POST /api/v1/admin/risk-rebuilds/dry-run` and manually sample the reconciliation output before any write rebuild. Applying the rebuild, entering review mode, expanding rejection beyond the approved Stage 5 composite candidate, or enabling automatic bans requires separate approval. Missing keys, failed identity migration, unavailable geo data, or a data-quality circuit breaker must remain fail-open for the main application.
 
 The unified extension service is sourced from the approved main repository checkout:
 

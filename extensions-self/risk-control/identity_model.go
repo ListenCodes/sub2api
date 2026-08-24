@@ -78,6 +78,15 @@ type IdentityFact struct {
 	EvidenceSnapshot   map[string]any
 }
 
+type CompositeRegistrationEvaluation struct {
+	RuleCode      string
+	WindowSeconds int
+	Threshold     int
+	Score         int
+	Revision      int
+	AccountCount  int
+}
+
 type PersistedIdentityEvent struct {
 	ID                 int64
 	UserID             int64

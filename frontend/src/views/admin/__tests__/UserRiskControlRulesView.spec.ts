@@ -131,6 +131,28 @@ describe('UserRiskControlRulesView', () => {
 		expect(status).toContain('数据质量正常')
 	})
 
+	it('shows composite registration enforcement without claiming other identity rules enforce', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([
+			{ code: 'v2_registration_device_accounts', domain: 'device', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 3, score: 70, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
+			{ code: 'v2_registration_composite_accounts', domain: 'composite', configured_enabled: true, enabled: true, state: 'healthy', window_seconds: 600, threshold: 3, score: 90, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' },
+		])
+		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({
+			enabled: true, admin_enabled: true, mode: 'enforce', shadow_until: '2026-09-01T00:00:00Z', schema: 'v2',
+			geo_source: 'cloudflare_verified', domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' },
+			quality_24h: {}, effective_rule_count: 2, features: { composite_enforcement: true },
+		})
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+
+		const panel = wrapper.get('[data-testid="identity-v2-rules"]')
+		expect(panel.text()).toContain('综合注册拦截已开启')
+		expect(panel.text()).toContain('10 分钟内达到第 3 个候选账号时自动拒绝')
+		expect(panel.text()).toContain('不会自动封禁现有账号')
+		expect(panel.get('[data-testid="identity-rule-v2_registration_composite_accounts"]').text()).toContain('自动拒绝候选')
+		expect(panel.get('[data-testid="identity-rule-v2_registration_device_accounts"]').text()).toContain('Shadow')
+	})
+
 	it('does not claim Shadow is calculating when rollout or effective rules are disabled', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: false, admin_enabled: true, mode: 'shadow', schema: 'identity', geo_source: 'none', domains: { ip: 'disabled', device: 'disabled', composite: 'disabled' }, quality_24h: {}, effective_rule_count: 0 })

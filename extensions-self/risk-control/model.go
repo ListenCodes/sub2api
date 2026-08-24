@@ -140,6 +140,7 @@ var auditCategoryActions = map[string]map[string]struct{}{
 	"security": {
 		"ban": {}, "unban": {}, "auto_ban": {}, "mark_processed": {},
 		"claim_risk_review_case": {}, "review_risk_case": {}, "label_shared_network": {},
+		"identity_reject_candidate": {},
 	},
 	"rules": {
 		"create_rule": {}, "update_rule": {}, "rule_test": {}, "disable_identity_rule": {},
