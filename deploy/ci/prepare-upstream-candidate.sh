@@ -85,19 +85,21 @@ git merge-base --is-ancestor "$baseline_commit" "$BASE_COMMIT" \
 git merge-base --is-ancestor "$baseline_commit" "$RELEASE_COMMIT" \
   || fail 'latest Release is not descended from the recorded Stable baseline'
 
-if git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
-  release_stable_baseline_matches "$baseline_json" "$RELEASE_TAG" \
-    "$RELEASE_TAG_OBJECT_SHA" "$RELEASE_COMMIT" "$RELEASE_PUBLISHED_AT" \
-    || fail 'integrated Release baseline does not match the latest Release identity'
-  write_output candidate_prepared false
-  write_output stable_tag "$RELEASE_TAG"
-  write_output target_commit "$BASE_COMMIT"
-  printf 'Stable Release %s is already integrated at %s\n' "$RELEASE_TAG" "$BASE_COMMIT"
-  exit 0
-fi
-
 git config --local user.name 'Sub2API Upstream Preflight'
 git config --local user.email 'actions@users.noreply.github.com'
+if git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
+  if release_stable_baseline_matches "$baseline_json" "$RELEASE_TAG" \
+    "$RELEASE_TAG_OBJECT_SHA" "$RELEASE_COMMIT" "$RELEASE_PUBLISHED_AT"; then
+    write_output candidate_prepared false
+    write_output stable_tag "$RELEASE_TAG"
+    write_output target_commit "$BASE_COMMIT"
+    printf 'Stable Release %s is already integrated at %s\n' "$RELEASE_TAG" "$BASE_COMMIT"
+    exit 0
+  fi
+  release_find_reverted_stable_integration "$REPO" "$BASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_TAG" \
+    || fail 'integrated Release baseline does not match the latest Release identity'
+fi
+
 MERGE_SUBJECT="$(release_stable_merge_subject "$RELEASE_TAG")"
 if ! release_merge_stable_candidate "$REPO" "$RELEASE_COMMIT" "$RELEASE_TAG" >/dev/null; then
   printf 'conflicting files:\n' >&2

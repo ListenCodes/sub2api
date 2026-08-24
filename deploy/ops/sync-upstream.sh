@@ -154,10 +154,19 @@ if release_stable_baseline_matches "$deployed_baseline_json" "$RELEASE_TAG" \
   deployed_baseline_matches=1
 fi
 
+release_commit_is_ancestor=0
+release_commit_was_reverted=0
 if git merge-base --is-ancestor "$RELEASE_COMMIT" "$BASE_COMMIT"; then
-  release_stable_baseline_matches "$target_baseline_json" "$RELEASE_TAG" \
-    "$RELEASE_TAG_OBJECT_SHA" "$RELEASE_COMMIT" "$RELEASE_PUBLISHED_AT" \
-    || fail_job 'integrated target baseline does not match the resolved Release identity' BASELINE_MERGE_IDENTITY_MISMATCH
+  release_commit_is_ancestor=1
+  if ! release_stable_baseline_matches "$target_baseline_json" "$RELEASE_TAG" \
+    "$RELEASE_TAG_OBJECT_SHA" "$RELEASE_COMMIT" "$RELEASE_PUBLISHED_AT"; then
+    release_find_reverted_stable_integration "$REPO" "$BASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_TAG" \
+      || fail_job 'integrated target baseline does not match the resolved Release identity' BASELINE_MERGE_IDENTITY_MISMATCH
+    release_commit_was_reverted=1
+  fi
+fi
+
+if [[ "$release_commit_is_ancestor" -eq 1 && "$release_commit_was_reverted" -eq 0 ]]; then
 
   if [[ "$deployed_baseline_matches" -ne 1 ]]; then
     integrated_merge_output="$(git rev-list --first-parent --merges "$DEPLOYED_COMMIT..$BASE_COMMIT")" \

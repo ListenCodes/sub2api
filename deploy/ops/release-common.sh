@@ -316,8 +316,52 @@ release_stable_merge_subject() {
   printf 'merge: integrate stable Release %s\n' "$1"
 }
 
+release_find_reverted_stable_integration() {
+  local repo="$1" base_commit="$2" release_commit="$3" release_tag="$4"
+  local expected_subject expected_revert_subject merge_commit parents identity parent_one parent_two parent_extra
+  local revert_commit revert_parents revert_identity revert_parent revert_extra revert_subject
+  local matches=()
+  RELEASE_REVERTED_STABLE_MERGE=''
+  RELEASE_REVERTED_STABLE_REVERT=''
+  expected_subject="$(release_stable_merge_subject "$release_tag")"
+  expected_revert_subject="Revert \"$expected_subject\""
+
+  while IFS= read -r merge_commit; do
+    [[ -n "$merge_commit" ]] || continue
+    parents="$(git -C "$repo" rev-list --parents -n 1 "$merge_commit")" || return 1
+    read -r identity parent_one parent_two parent_extra <<< "$parents"
+    [[ "$identity" == "$merge_commit" && -z "$parent_extra" && "$parent_two" == "$release_commit" ]] || continue
+    [[ "$(git -C "$repo" show -s --format=%s "$merge_commit")" == "$expected_subject" ]] || continue
+
+    revert_commit="$(git -C "$repo" rev-list --first-parent --reverse "$merge_commit..$base_commit" | head -n 1)"
+    [[ -n "$revert_commit" ]] || continue
+    revert_parents="$(git -C "$repo" rev-list --parents -n 1 "$revert_commit")" || return 1
+    read -r revert_identity revert_parent revert_extra <<< "$revert_parents"
+    [[ "$revert_identity" == "$revert_commit" && "$revert_parent" == "$merge_commit" && -z "$revert_extra" ]] || continue
+    revert_subject="$(git -C "$repo" show -s --format=%s "$revert_commit")" || return 1
+    [[ "$revert_subject" == "$expected_revert_subject" ]] || continue
+    git -C "$repo" diff --quiet "$parent_one" "$revert_commit" -- || continue
+    matches+=("$merge_commit:$revert_commit")
+  done < <(git -C "$repo" log --first-parent --merges --format=%H "$base_commit")
+
+  [[ "${#matches[@]}" -eq 1 ]] || return 1
+  RELEASE_REVERTED_STABLE_MERGE="${matches[0]%%:*}"
+  RELEASE_REVERTED_STABLE_REVERT="${matches[0]#*:}"
+}
+
 release_merge_stable_candidate() {
   local repo="$1" release_commit="$2" release_tag="$3"
+  local base_commit tree merge_commit
+  base_commit="$(git -C "$repo" rev-parse HEAD)" || return 1
+  if git -C "$repo" merge-base --is-ancestor "$release_commit" "$base_commit"; then
+    release_find_reverted_stable_integration "$repo" "$base_commit" "$release_commit" "$release_tag" || return 1
+    git -C "$repo" revert --no-commit "$RELEASE_REVERTED_STABLE_REVERT" || return 1
+    tree="$(git -C "$repo" write-tree)" || return 1
+    merge_commit="$(printf '%s\n' "$(release_stable_merge_subject "$release_tag")" \
+      | git -C "$repo" commit-tree "$tree" -p "$base_commit" -p "$release_commit")" || return 1
+    git -C "$repo" update-ref HEAD "$merge_commit" "$base_commit" || return 1
+    return 0
+  fi
   git -C "$repo" merge --no-ff -m "$(release_stable_merge_subject "$release_tag")" "$release_commit"
 }
 

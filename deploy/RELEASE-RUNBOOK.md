@@ -392,6 +392,14 @@ a local `custom-release` worktree, run the normal tests, push
 `origin/custom-release`, and retry the update;
 do not use `git reset --hard` or a forced `ours`/`theirs` merge.
 
+If a canonical Stable integration was immediately and completely reverted,
+the next preparation may reactivate that exact Release only after verifying
+the merge subject, two-parent identity, immediate single-parent revert, and
+tree equality with the pre-merge base. The candidate reapplies the verified
+revert inverse in a temporary worktree and records a fresh canonical
+two-parent merge. Any ambiguity or conflict fails before promotion and leaves
+production unchanged.
+
 ## VPS Fallback Release
 
 Use this path when the local development machine is unavailable or an urgent
