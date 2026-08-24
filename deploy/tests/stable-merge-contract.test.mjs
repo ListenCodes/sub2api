@@ -126,6 +126,23 @@ function reactivateStable(fixture) {
   )
 }
 
+function findIntegratedStable(fixture, deployedCommit, baseCommit) {
+  return spawnSync(
+    process.env.BASH_BIN || 'bash',
+    [
+      '-c',
+      'source "$1"\nrelease_find_integrated_stable_merge "$2" "$3" "$4" "$5" v0.1.180\nprintf "%s\\n" "$RELEASE_INTEGRATED_STABLE_MERGE"',
+      'bash',
+      releaseCommonScript,
+      fixture.repository,
+      deployedCommit,
+      baseCommit,
+      fixture.stableCommit
+    ],
+    { cwd: repositoryRoot, encoding: 'utf8', env: { ...process.env } }
+  )
+}
+
 test('sync-upstream creates the canonical Stable merge subject explicitly', () => {
   const source = readFileSync(resolve(deployRoot, 'ops', 'sync-upstream.sh'), 'utf8')
   const preflight = readFileSync(resolve(deployRoot, 'ci', 'prepare-upstream-candidate.sh'), 'utf8')
@@ -172,6 +189,43 @@ test('a fully reverted Stable integration is rebuilt as a fresh canonical merge'
   assert.equal(readFileSync(resolve(fixture.repository, 'stable.txt'), 'utf8').trim(), 'stable')
   assert.equal(readFileSync(resolve(fixture.repository, 'later.txt'), 'utf8').trim(), 'later custom change')
   assert.equal(git(fixture.repository, 'status', '--porcelain'), '')
+})
+
+test('a reactivated Stable integration remains the unique current merge on the next resolution', (t) => {
+  const fixture = revertedIntegrationFixture()
+  t.after(() => rmSync(fixture.root, { recursive: true, force: true }))
+  const reactivation = reactivateStable(fixture)
+  if (reactivation.error?.code === 'ENOENT') {
+    t.skip('bash is unavailable')
+    return
+  }
+  assert.equal(reactivation.status, 0, reactivation.stderr || reactivation.stdout)
+  const targetCommit = git(fixture.repository, 'rev-parse', 'HEAD')
+  const result = findIntegratedStable(fixture, fixture.baseCommit, targetCommit)
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  assert.equal(result.stdout.trim(), targetCommit)
+})
+
+test('a duplicate Stable reactivation after the active merge is rejected', (t) => {
+  const fixture = revertedIntegrationFixture()
+  t.after(() => rmSync(fixture.root, { recursive: true, force: true }))
+  const reactivation = reactivateStable(fixture)
+  if (reactivation.error?.code === 'ENOENT') {
+    t.skip('bash is unavailable')
+    return
+  }
+  assert.equal(reactivation.status, 0, reactivation.stderr || reactivation.stdout)
+  const activeCommit = git(fixture.repository, 'rev-parse', 'HEAD')
+  const tree = git(fixture.repository, 'rev-parse', `${activeCommit}^{tree}`)
+  const duplicate = run(
+    'git',
+    ['commit-tree', tree, '-p', activeCommit, '-p', fixture.stableCommit, '-m', 'merge: integrate stable Release v0.1.180'],
+    fixture.repository
+  )
+  git(fixture.repository, 'update-ref', 'HEAD', duplicate, activeCommit)
+
+  const result = findIntegratedStable(fixture, fixture.baseCommit, duplicate)
+  assert.notEqual(result.status, 0)
 })
 
 test('prepare-release validates installed scripts against the ledger production commit', () => {

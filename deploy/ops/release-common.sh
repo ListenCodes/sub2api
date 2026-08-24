@@ -349,6 +349,58 @@ release_find_reverted_stable_integration() {
   RELEASE_REVERTED_STABLE_REVERT="${matches[0]#*:}"
 }
 
+release_stable_ancestry_is_strictly_reverted() {
+  local repo="$1" base_commit="$2" release_commit="$3" release_tag="$4"
+  local merge_commit parents index
+  local -a parent_list=()
+
+  release_find_reverted_stable_integration "$repo" "$base_commit" "$release_commit" "$release_tag" \
+    || return 1
+  while IFS= read -r merge_commit; do
+    [[ -n "$merge_commit" ]] || continue
+    parents="$(git -C "$repo" rev-list --parents -n 1 "$merge_commit")" || return 1
+    read -r -a parent_list <<< "$parents"
+    for ((index=2; index<${#parent_list[@]}; index++)); do
+      [[ "${parent_list[$index]}" != "$release_commit" ]] || return 1
+    done
+  done < <(git -C "$repo" rev-list --first-parent --merges "$RELEASE_REVERTED_STABLE_REVERT..$base_commit")
+}
+
+release_find_integrated_stable_merge() {
+  local repo="$1" deployed_commit="$2" base_commit="$3" release_commit="$4" release_tag="$5"
+  local expected_subject merge_commit parents parent_one parent_two relevant
+  local -a parent_list=() matches=()
+  RELEASE_INTEGRATED_STABLE_MERGE=''
+  expected_subject="$(release_stable_merge_subject "$release_tag")"
+
+  while IFS= read -r merge_commit; do
+    [[ -n "$merge_commit" ]] || continue
+    parents="$(git -C "$repo" rev-list --parents -n 1 "$merge_commit")" || return 1
+    read -r -a parent_list <<< "$parents"
+    [[ "${parent_list[0]:-}" == "$merge_commit" ]] || return 1
+    parent_one="${parent_list[1]:-}"
+    parent_two="${parent_list[2]:-}"
+    relevant=0
+    if [[ "$parent_two" == "$release_commit" ]] \
+      || { git -C "$repo" merge-base --is-ancestor "$release_commit" "$merge_commit" \
+        && ! git -C "$repo" merge-base --is-ancestor "$release_commit" "$parent_one"; }; then
+      relevant=1
+    fi
+    [[ "$relevant" -eq 1 ]] || continue
+    [[ "${#parent_list[@]}" -eq 3 && "$parent_two" == "$release_commit" ]] || return 1
+    [[ "$(git -C "$repo" show -s --format=%s "$merge_commit")" == "$expected_subject" ]] || return 1
+    git -C "$repo" merge-base --is-ancestor "$deployed_commit" "$parent_one" || return 1
+    if git -C "$repo" merge-base --is-ancestor "$release_commit" "$parent_one"; then
+      release_stable_ancestry_is_strictly_reverted "$repo" "$parent_one" "$release_commit" "$release_tag" \
+        || return 1
+    fi
+    matches+=("$merge_commit")
+  done < <(git -C "$repo" rev-list --first-parent --merges "$deployed_commit..$base_commit")
+
+  [[ "${#matches[@]}" -eq 1 ]] || return 1
+  RELEASE_INTEGRATED_STABLE_MERGE="${matches[0]}"
+}
+
 release_merge_stable_candidate() {
   local repo="$1" release_commit="$2" release_tag="$3"
   local base_commit tree merge_commit

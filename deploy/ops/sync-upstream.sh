@@ -169,21 +169,10 @@ fi
 if [[ "$release_commit_is_ancestor" -eq 1 && "$release_commit_was_reverted" -eq 0 ]]; then
 
   if [[ "$deployed_baseline_matches" -ne 1 ]]; then
-    integrated_merge_output="$(git rev-list --first-parent --merges "$DEPLOYED_COMMIT..$BASE_COMMIT")" \
-      || fail_job 'cannot inspect integrated Stable merge history' BASELINE_MERGE_IDENTITY_MISMATCH
-    integrated_merges=()
-    for candidate_merge in $integrated_merge_output; do
-      read -r candidate_identity candidate_parent_one candidate_parent_two candidate_parent_extra \
-        <<< "$(git rev-list --parents -n 1 "$candidate_merge")"
-      [[ "$candidate_identity" == "$candidate_merge" && -z "$candidate_parent_extra" ]] || continue
-      if git merge-base --is-ancestor "$RELEASE_COMMIT" "$candidate_merge" \
-        && ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$candidate_parent_one"; then
-        integrated_merges+=("$candidate_merge")
-      fi
-    done
-    [[ "${#integrated_merges[@]}" -eq 1 ]] \
+    release_find_integrated_stable_merge "$REPO" "$DEPLOYED_COMMIT" "$BASE_COMMIT" \
+      "$RELEASE_COMMIT" "$RELEASE_TAG" \
       || fail_job 'integrated target does not contain exactly one Stable ancestry-introducing merge' BASELINE_MERGE_IDENTITY_MISMATCH
-    integrated_merge="${integrated_merges[0]}"
+    integrated_merge="$RELEASE_INTEGRATED_STABLE_MERGE"
     integrated_subject="$(git show -s --format=%s "$integrated_merge")"
     read -r integrated_identity integrated_parent_one integrated_parent_two integrated_parent_extra \
       <<< "$(git rev-list --parents -n 1 "$integrated_merge")"
@@ -193,8 +182,6 @@ if [[ "$release_commit_is_ancestor" -eq 1 && "$release_commit_was_reverted" -eq 
       || fail_job 'integrated stable Release merge subject does not match the baseline tag' BASELINE_MERGE_IDENTITY_MISMATCH
     git merge-base --is-ancestor "$DEPLOYED_COMMIT" "$integrated_parent_one" \
       || fail_job 'integrated stable Release merge is not based on the deployed source' BASELINE_MERGE_IDENTITY_MISMATCH
-    ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$integrated_parent_one" \
-      || fail_job 'integrated stable Release ancestry predates the canonical merge' BASELINE_MERGE_IDENTITY_MISMATCH
     [[ "$integrated_parent_two" == "$RELEASE_COMMIT" ]] \
       || fail_job 'integrated stable Release merge second parent does not match the resolved Release' BASELINE_MERGE_IDENTITY_MISMATCH
   fi
