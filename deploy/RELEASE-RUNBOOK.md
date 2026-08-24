@@ -397,8 +397,10 @@ the next preparation may reactivate that exact Release only after verifying
 the merge subject, two-parent identity, immediate single-parent revert, and
 tree equality with the pre-merge base. The candidate reapplies the verified
 revert inverse in a temporary worktree and records a fresh canonical
-two-parent merge. Any ambiguity or conflict fails before promotion and leaves
-production unchanged.
+two-parent merge. Later preparation recognizes only that fresh merge as the
+active integration and rejects duplicate reactivation or non-canonical merges
+after the verified revert. Any ambiguity or conflict fails before promotion
+and leaves production unchanged.
 
 ## VPS Fallback Release
 
