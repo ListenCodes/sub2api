@@ -8,6 +8,7 @@ import audit from './audit'
 import userRiskControl from './userRiskControl'
 import accountMonitor from './accountMonitor'
 import promptAudit from './promptAudit'
+import plugins from './plugins'
 
 export default {
   ...overview,
@@ -20,4 +21,5 @@ export default {
   ...userRiskControl,
   ...accountMonitor,
   ...promptAudit,
+  ...plugins,
 }
