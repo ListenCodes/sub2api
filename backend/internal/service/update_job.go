@@ -209,7 +209,16 @@ func newReleaseOperationID(kind string) (string, error) {
 }
 
 func readUpdateStatus(path, expectedJobID string) (*UpdateJob, error) {
-	raw, err := os.ReadFile(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrUpdateJobNotFound
+		}
+		return nil, fmt.Errorf("open update status directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	raw, err := root.ReadFile(filepath.Base(path))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrUpdateJobNotFound

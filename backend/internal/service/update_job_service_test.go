@@ -50,6 +50,27 @@ func TestReleaseOperationRejectsLegacyRecordWithoutKind(t *testing.T) {
 	require.Equal(t, "LEGACY_SINGLE_PHASE_UNSUPPORTED", infraerrors.Reason(err))
 }
 
+func TestReadUpdateStatusRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	operationsDir := filepath.Join(root, "operations")
+	require.NoError(t, os.Mkdir(operationsDir, 0755))
+
+	outsidePath := filepath.Join(root, "outside.json")
+	require.NoError(t, writeUpdateStatus(outsidePath, &UpdateJob{
+		JobID:         "update-linked",
+		OperationKind: ReleaseOperationUpdate,
+		Action:        ReleasePhasePrepare,
+		Status:        ReleaseStatusPrepared,
+	}))
+	linkPath := filepath.Join(operationsDir, "update-linked.json")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	_, err := readUpdateStatus(linkPath, "update-linked")
+	require.Error(t, err)
+}
+
 func TestReleaseOperationPrepareDoesNotTriggerOverLegacyCurrentJob(t *testing.T) {
 	root := t.TempDir()
 	operationsDir := filepath.Join(root, "release-ledger", "operations")
