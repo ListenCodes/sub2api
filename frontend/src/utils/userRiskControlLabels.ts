@@ -29,6 +29,7 @@ const riskLevels: Record<string, string> = {
 }
 
 const riskActions: Record<string, string> = {
+  allow: '放行',
   none: '无实际动作',
   observe: '仅记录',
   review: '人工复核',
