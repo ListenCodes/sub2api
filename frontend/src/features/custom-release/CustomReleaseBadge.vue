@@ -39,7 +39,7 @@
           ref="dropdownRef"
           :style="dropdownStyle"
           class="absolute left-0 z-50 mt-2 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="(rollbackPanelOpen || identityPanelOpen) && isReleaseBuild ? 'w-80' : 'w-64'"
+          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
         >
           <!-- Header with refresh button -->
           <div
@@ -597,31 +597,6 @@
                 </transition>
               </div>
 
-              <div v-if="isReleaseBuild" class="mt-2 border-t border-gray-100 pt-2 dark:border-dark-700">
-                <button
-                  data-testid="identity-rollout-toggle"
-                  @click="toggleIdentityPanel"
-                  class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
-                >
-                  <span class="flex items-center gap-1.5">
-                    <Icon name="cog" size="xs" :stroke-width="2" />
-                    {{ t('version.identityRollout') }}
-                  </span>
-                  <Icon
-                    name="chevronDown"
-                    size="xs"
-                    :stroke-width="2"
-                    class="transition-transform duration-200"
-                    :class="{ 'rotate-180': identityPanelOpen }"
-                  />
-                </button>
-                <IdentityRolloutPanel
-                  v-if="identityPanelOpen"
-                  class="mt-2"
-                  :blocked="updating || rollingBack || Boolean(preparedJobID) || Boolean(preparedRollbackJobID)"
-                  @active-change="handleIdentityActivity"
-                />
-              </div>
             </template>
           </div>
         </div>
@@ -641,7 +616,6 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores'
 import { useCustomReleaseStore } from './store'
 import ReleaseRollbackPanel from './ReleaseRollbackPanel.vue'
-import IdentityRolloutPanel from './IdentityRolloutPanel.vue'
 import {
   prepareUpdate,
   applyUpdate,
@@ -686,7 +660,6 @@ const customReleaseMessages = {
       updateConflictLog: 'Diagnostic artifact',
       updateConflictCommits: 'Merge base -> stable Release',
       retryPreparation: 'Retry preparation',
-      identityRollout: 'Identity rollout',
       requiredCheck: 'Required check',
       checkConclusion: 'Conclusion',
       errorCode: 'Error code',
@@ -745,7 +718,6 @@ const customReleaseMessages = {
       updateConflictLog: '诊断资料',
       updateConflictCommits: '合并基线 -> 稳定 Release',
       retryPreparation: '重试准备',
-      identityRollout: '身份能力发布',
       requiredCheck: '必需检查',
       checkConclusion: '结论',
       errorCode: '错误代码',
@@ -874,7 +846,6 @@ const applying = ref(false)
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
-const identityPanelOpen = ref(false)
 const identityRolloutActive = ref(false)
 const identityRolloutJobID = ref('')
 const rollbackReleases = ref<ReleaseIdentity[]>([])
@@ -1380,7 +1351,6 @@ function resetRollbackState() {
 
 async function toggleRollbackPanel() {
   if (!isAdmin.value || identityRolloutActive.value || updating.value || preparedJobID.value) return
-  identityPanelOpen.value = false
   rollbackPanelOpen.value = !rollbackPanelOpen.value
   void nextTick(updateDropdownGeometry)
   // Source builds only show a hint. Release builds load rollback-only data on demand.
@@ -1394,12 +1364,6 @@ async function toggleRollbackPanel() {
     requests.push(loadRollbackVersions())
   }
   await Promise.all(requests)
-}
-
-function toggleIdentityPanel() {
-  rollbackPanelOpen.value = false
-  identityPanelOpen.value = !identityPanelOpen.value
-  void nextTick(updateDropdownGeometry)
 }
 
 function handleIdentityActivity(active: boolean, jobID?: string) {

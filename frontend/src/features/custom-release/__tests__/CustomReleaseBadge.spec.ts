@@ -36,8 +36,6 @@ const mocks = vi.hoisted(() => ({
   getRollbackReleases: vi.fn(),
   prepareRollback: vi.fn(),
   applyRollback: vi.fn(),
-  prepareIdentityRollout: vi.fn(),
-  applyIdentityRollout: vi.fn(),
   rollback: vi.fn(),
   restartService: vi.fn()
 }))
@@ -63,8 +61,6 @@ vi.mock('@/features/custom-release/api', () => ({
   getRollbackReleases: mocks.getRollbackReleases,
   prepareRollback: mocks.prepareRollback,
   applyRollback: mocks.applyRollback,
-  prepareIdentityRollout: mocks.prepareIdentityRollout,
-  applyIdentityRollout: mocks.applyIdentityRollout,
   rollback: mocks.rollback,
   restartService: mocks.restartService,
   isTerminalUpdateStatus: (status: string) =>
@@ -1029,79 +1025,16 @@ describe('VersionBadge conflict reporting', () => {
     wrapper.unmount()
   })
 
-  it('ignores a stale identity response after a newer job starts', async () => {
-    vi.useFakeTimers()
-    let resolveOldPoll!: (value: Record<string, unknown>) => void
-    const oldPoll = new Promise<Record<string, unknown>>((resolve) => { resolveOldPoll = resolve })
-    mocks.getUpdateStatus.mockReset()
-    mocks.getUpdateStatus
-      .mockResolvedValueOnce({
-        job_id: 'update-identity-a', update_kind: 'identity-config',
-        action: 'apply', status: 'apply_queued', message: 'A queued', need_restart: false
-      })
-      .mockReturnValueOnce(oldPoll)
-
-    const wrapper = mount(VersionBadge, {
-      props: { version: '0.1.164' },
-      global: {
-        stubs: {
-          Icon: true,
-          IdentityRolloutPanel: {
-            name: 'IdentityRolloutPanel',
-            emits: ['activeChange'],
-            template: '<div data-testid="identity-rollout-panel-stub" />'
-          }
-        }
-      }
-    })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(3000)
-    await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
-    await wrapper.get('[data-testid="identity-rollout-toggle"]').trigger('click')
-    const panel = wrapper.getComponent({ name: 'IdentityRolloutPanel' })
-    panel.vm.$emit('activeChange', false, 'update-identity-a')
-    panel.vm.$emit('activeChange', true, 'update-identity-b')
-    await nextTick()
-    panel.vm.$emit('activeChange', false, 'update-identity-a')
-    await nextTick()
-    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
-
-    resolveOldPoll({
-      job_id: 'update-identity-a', update_kind: 'identity-config',
-      action: 'apply', status: 'success', message: 'A complete', need_restart: false
-    })
-    await flushPromises()
-    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
-    wrapper.unmount()
-  })
-
-  it('locks ordinary release actions before identity preparation returns', async () => {
-    let resolvePrepare!: (value: Awaited<ReturnType<typeof mocks.prepareIdentityRollout>>) => void
-    mocks.prepareIdentityRollout.mockReturnValue(new Promise((resolve) => { resolvePrepare = resolve }))
-
+  it('does not expose the completed identity rollout controls', async () => {
     const wrapper = mount(VersionBadge, {
       props: { version: '0.1.164' },
       global: { stubs: { Icon: true } }
     })
     await flushPromises()
     await wrapper.get('[data-testid="custom-release-badge"]').trigger('click')
-    await wrapper.get('[data-testid="rollback-toggle"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="rollback-panel"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="identity-rollout-toggle"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="identity-rollout-panel"]').exists()).toBe(true)
-
-    await wrapper.get('[data-testid="identity-prepare"]').trigger('click')
-    expect(wrapper.get('[data-testid="rollback-toggle"]').attributes('disabled')).toBeDefined()
-    expect(mocks.prepareUpdate).not.toHaveBeenCalled()
-
-    resolvePrepare({
-      job_id: 'update-identity-prepared', update_kind: 'identity-config',
-      identity_transition: 'stage0-safe-reset', action: 'prepare', status: 'prepared',
-      message: 'prepared', expires_at: new Date(Date.now() + 60_000).toISOString(), need_restart: false
-    })
-    await flushPromises()
+    expect(wrapper.find('[data-testid="identity-rollout-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="identity-rollout-panel"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('version.identityRollout')
     wrapper.unmount()
   })
 })
