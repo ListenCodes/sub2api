@@ -81,7 +81,9 @@
           <DataTable :key="`risk-users-${tableSortKey}-${sortOrder}`" :columns="columns" :data="users" :loading="loading" row-key="id" :clickable-rows="true" :server-side-sort="true" :default-sort-key="tableSortKey" :default-sort-order="sortOrder" @row-click="selectedUser = $event" @sort="handleTableSort">
             <template #header-select><input v-model="allSelected" type="checkbox" data-testid="select-current-page" class="rounded border-gray-300 text-primary-600" aria-label="选择当前页" @click.stop /></template>
             <template #cell-select="{ row: user }"><input :checked="selectedIds.has(user.id)" type="checkbox" :data-testid="`user-select-${user.id}`" class="rounded border-gray-300 text-primary-600" :aria-label="`选择账号 ${user.email || user.username || user.id}`" @click.stop @change.stop="toggleSelection(user.id)" /></template>
-			<template #cell-account="{ row: user }"><div class="min-w-0 max-w-[50vw] text-left sm:max-w-none" :data-testid="`user-row-${user.id}`"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :data-testid="`account-secondary-${user.id}`"><span v-if="user.username">{{ user.username }} · </span>#{{ user.id }} · {{ formatAccountStatus(user.status) }}</p></div></template>
+			<template #cell-account="{ row: user }"><div class="min-w-0 max-w-[50vw] text-left sm:max-w-none" :data-testid="`user-row-${user.id}`"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :data-testid="`account-secondary-${user.id}`"><span v-if="user.username">{{ user.username }} · </span>#{{ user.id }}</p></div></template>
+			<template #cell-accountStatus="{ row: user }"><span class="font-medium">{{ formatAccountStatus(user.status) }}</span></template>
+			<template #cell-evaluation="{ row: user }"><span>{{ evaluationCoverageLabel(user) }}</span><span class="mt-1 block text-xs text-gray-400">{{ user.identity?.active_rule_count || 0 }} 条有效规则</span></template>
 			<template #cell-riskType="{ row: user }"><div class="max-w-sm whitespace-normal text-left"><p class="font-medium text-gray-800 dark:text-gray-200">{{ displayReason(user) }}</p><p class="mt-1 text-xs text-gray-400">证据强度：{{ evidenceStrengthLabel(user.evidence_strength) }}</p></div></template>
 			<template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /><span v-if="(user.historical_max_score || 0) > (user.risk_score || 0)" class="mt-1 block text-xs text-gray-400">历史最高 {{ user.historical_max_score }}</span></template>
             <template #cell-lastEvent="{ row: user }">{{ formatDate(user.last_event_at) }}</template>
@@ -152,6 +154,8 @@ let workOverviewRequestID = 0
 const columns: Column[] = [
   { key: 'select', label: '选择', class: 'w-12 text-center' },
   { key: 'account', label: t('admin.userRiskControl.table.account') },
+	{ key: 'accountStatus', label: '账号状态' },
+	{ key: 'evaluation', label: '评估覆盖' },
 	{ key: 'riskScore', label: '当前风险', sortable: true },
 	{ key: 'riskType', label: '主信号' },
 	{ key: 'lastEvent', label: '最近命中', sortable: true },
@@ -423,6 +427,7 @@ function toggleSelection(id: number) {
 function clearSelection() { selectedIds.value = new Set() }
 function displayReason(user: RiskUserRow) { return user.risk_type?.startsWith('v2_') ? formatIdentitySignal(user.risk_type) : formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
 function evidenceStrengthLabel(value?: string) { return ({ observation: '仅观察', weak: '弱', medium_high: '中高', high: '高' } as Record<string, string>)[value || ''] || '未评估' }
+function evaluationCoverageLabel(user: RiskUserRow) { const state = user.identity?.quality_state; return ({ healthy: '评估完整', degraded: '部分覆盖', not_evaluable: '不可评估', paused: '质量保护暂停', disabled: '评估关闭' } as Record<string, string>)[state || ''] || '尚无身份数据' }
 function caseStatusLabel(value?: string | null) { return ({ pending: '待复核', in_review: '复核中', observing: '观察中', resolved: '已处理' } as Record<string, string>)[value || ''] || '无案件' }
 function formatDate(value?: string | null) { return value ? new Date(value).toLocaleString() : '-' }
 function handleUpdated(updated: RiskUserRow) {

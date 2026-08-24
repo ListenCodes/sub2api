@@ -71,8 +71,8 @@ func TestCompositeRegistrationEnforcementRejectsThresholdCandidateAndAuditsWitho
 	expectHealthyCompositeQuality(mock)
 	mock.ExpectQuery(`(?s)WITH active_rule AS .*v2_registration_composite_accounts.*risk_shared_network_labels.*mobile_cgnat.*COUNT\(DISTINCT event.user_id\)`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"code", "window_seconds", "threshold", "score", "revision", "account_count"}).
-			AddRow("v2_registration_composite_accounts", 600, 3, 90, 2, 2))
+		WillReturnRows(sqlmock.NewRows([]string{"code", "window_seconds", "threshold", "score", "revision", "account_count", "configured_action"}).
+			AddRow("v2_registration_composite_accounts", 600, 3, 90, 2, 2, "reject_candidate"))
 	eventKey := "registration-attempt-test"
 	auditKey := fmt.Sprintf("identity-enforcement:%x", sha256.Sum256([]byte(eventKey)))
 	mock.ExpectExec(`INSERT INTO risk_audit_logs`).
@@ -128,5 +128,54 @@ func TestCompositeRegistrationEnforcementStaysFailOpenWhenQualityIsNotHealthy(t 
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCompositeRegistrationEnforcementHonorsConfiguredObserveAction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service, err := NewIdentityService(compositeEnforcementTestConfig(), NewSQLIdentityRepository(db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectHealthyCompositeQuality(mock)
+	mock.ExpectQuery(`(?s)WITH active_rule AS .*v2_registration_composite_accounts.*COUNT\(DISTINCT event.user_id\)`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"code", "window_seconds", "threshold", "score", "revision", "account_count", "configured_action"}).
+			AddRow("v2_registration_composite_accounts", 600, 3, 90, 2, 2, "observe"))
+
+	decision, err := service.RegistrationDecision(context.Background(), IdentityEventReport{
+		EventKey: "configured-observe", EventType: "registration_attempt", EventClass: "registration", Outcome: "attempt",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), ClientIP: "8.8.4.4", IPSource: "remote_addr",
+		ProxyChainValid: true, BrowserInstanceID: "browser-observe-test", BrowserCookieStatus: "valid",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != "allow" || decision.Mode != "enforce" || decision.Score != 0 {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdentityRuleApprovalAlwaysRequiresSimulationAndConfirmsHighImpactActions(t *testing.T) {
+	if err := validateIdentityRuleApproval("v2_registration_ip_accounts", "review", identityRulePublishApproval{Reason: "reduce false positives"}); err == nil {
+		t.Fatal("ordinary publish accepted without a simulation")
+	}
+	if err := validateIdentityRuleApproval("v2_registration_ip_accounts", "review", identityRulePublishApproval{Reason: "reduce false positives", SimulationID: 9}); err != nil {
+		t.Fatalf("ordinary simulated publish rejected: %v", err)
+	}
+	approval := identityRulePublishApproval{Reason: "block third candidate", SimulationID: 10, Confirmed: true, Confirmation: "PUBLISH v2_registration_composite_accounts"}
+	if err := validateIdentityRuleApproval("v2_registration_composite_accounts", "reject_candidate", approval); err != nil {
+		t.Fatalf("confirmed high-impact publish rejected: %v", err)
+	}
+	approval.Confirmation = "PUBLISH wrong-rule"
+	if err := validateIdentityRuleApproval("v2_registration_composite_accounts", "reject_candidate", approval); err == nil {
+		t.Fatal("high-impact publish accepted with a mismatched confirmation")
 	}
 }

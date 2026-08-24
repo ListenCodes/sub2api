@@ -57,7 +57,7 @@ func TestInternalEventIsIdempotentAndReturnsDecision(t *testing.T) {
 
 func TestAdminRuleUpdateRequiresExpectedRevision(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(defaultRules()))
-	body := []byte(`{"enabled":false,"window_seconds":600,"threshold":5,"score":30,"risk_level":"medium","action":"review","revision":99}`)
+	body := []byte(`{"enabled":false,"window_seconds":600,"threshold":5,"score":30,"risk_level":"medium","action":"review","revision":99,"reason":"verify optimistic locking"}`)
 	request := signedRequest(http.MethodPut, "/api/v1/admin/rules/login_failure_burst", body, testSecret, "nonce-admin-1", time.Now())
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	response := serveJSON(server, request)
@@ -68,7 +68,7 @@ func TestAdminRuleUpdateRequiresExpectedRevision(t *testing.T) {
 
 func TestAdminRuleUpdateRejectsAmbiguousStrategySemantics(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(defaultRules()))
-	body := []byte(`{"name":"Login failures","event_types":["login_failure"],"count_strategy":"ip_distinct_success_users","enabled":true,"window_seconds":600,"threshold":5,"score":70,"risk_level":"high","action":"review","revision":1}`)
+	body := []byte(`{"name":"Login failures","event_types":["login_failure"],"count_strategy":"ip_distinct_success_users","enabled":true,"window_seconds":600,"threshold":5,"score":70,"risk_level":"high","action":"review","revision":1,"reason":"verify invalid strategy"}`)
 	request := signedRequest(http.MethodPut, "/api/v1/admin/rules/login_failure_burst", body, testSecret, "nonce-admin-strategy", time.Now())
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	response := serveJSON(server, request)
@@ -79,7 +79,7 @@ func TestAdminRuleUpdateRejectsAmbiguousStrategySemantics(t *testing.T) {
 
 func TestAdminRuleTestTreatsSubmittedRuleAsEnabled(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(nil))
-	body := []byte(`{"event_type":"login_failure","count":5,"rule":{"code":"login_failure","threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
+	body := []byte(`{"sample":{"event_type":"login_failure","observed_count":5,"user_id":42},"rule":{"code":"login_failure","event_types":["login_failure"],"count_strategy":"user_events","threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
 	request := signedRequest(http.MethodPost, "/api/v1/admin/rules/test", body, testSecret, "nonce-rule-test", time.Now())
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	response := serveJSON(server, request)
@@ -92,6 +92,27 @@ func TestAdminRuleTestTreatsSubmittedRuleAsEnabled(t *testing.T) {
 	decodeBody(t, response, &payload)
 	if !payload.Matched {
 		t.Fatalf("rule test payload = %s, want matched", response.Body.String())
+	}
+}
+
+func TestAdminRuleCreatePersistsSubmittedCountStrategyContract(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, repo)
+	body := []byte(`{"code":"registration_email_retries","name":"Registration email retries","event_types":["registration_attempt"],"count_strategy":"email_subject_events","enabled":true,"window_seconds":600,"threshold":5,"score":0,"risk_level":"low","action":"observe","reason":"create explicit registration counter"}`)
+	request := signedRequest(http.MethodPost, "/api/v1/admin/rules", body, testSecret, "nonce-create-count-strategy", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var created Rule
+	decodeBody(t, response, &created)
+	if created.CountStrategy != countStrategyEmailSubjectEvents {
+		t.Fatalf("response count_strategy = %q", created.CountStrategy)
+	}
+	rules, err := repo.ListRules(context.Background())
+	if err != nil || len(rules) != 1 || rules[0].CountStrategy != countStrategyEmailSubjectEvents {
+		t.Fatalf("persisted rules = %+v, error = %v", rules, err)
 	}
 }
 
@@ -208,6 +229,29 @@ func TestAdminAuditSeparatesSensitiveRecordsFromDefaultCategory(t *testing.T) {
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	if response = serveJSON(server, request); response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid category status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSensitiveIdentityAuditMergesSectionsWithinOneViewSession(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	for _, audit := range []AuditRecord{
+		{AuditKey: "identity-view:session-1", ActorID: 7, Action: "view_identity_detail", TargetType: "user", TargetID: "42", Result: "success", Metadata: map[string]any{"section": "identity-summary", "sections": []string{"identity-summary"}}},
+		{AuditKey: "identity-view:session-1", ActorID: 7, Action: "view_identity_detail", TargetType: "user", TargetID: "42", Result: "success", Metadata: map[string]any{"section": "ip-identities", "sections": []string{"ip-identities"}}},
+	} {
+		if err := repo.InsertAudit(context.Background(), audit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, total, err := repo.ListAudit(context.Background(), 20, 0, "view_identity_detail", 42, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("session audit count = %d, items = %+v", total, items)
+	}
+	sections, ok := items[0].Metadata["sections"].([]string)
+	if !ok || len(sections) != 2 || sections[0] != "identity-summary" || sections[1] != "ip-identities" {
+		t.Fatalf("merged sections = %#v", items[0].Metadata["sections"])
 	}
 }
 

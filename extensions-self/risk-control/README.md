@@ -98,10 +98,26 @@ most 100 requested user IDs for current-page completion. The main backend keeps
 PII authoritative, excludes risk IDs in its normal-account database query, and
 never exposes the internal index response directly to the browser.
 
-Identity rules remain Shadow-only. The primary UI uses readable Chinese names;
-protocol identifiers, source event IDs, rule revisions, request IDs, and other
-technical values stay behind collapsed technical details. Zero-score API client
-and successful login/API observations never become a primary risk conclusion.
+Identity rule rows remain evidence evaluators with the persisted `mode='shadow'`,
+but that storage detail is not presented as the decision outcome. Admin responses
+separate detection state, decision mode, configured action, effective action,
+data quality, and configuration source. The composite registration rule may use
+the independently gated `reject_candidate` decision when quality is healthy; it
+only rejects the threshold candidate and never changes existing account status.
+Unsupported `auto_ban` configurations fail safe to manual review.
+
+Identity rule changes use a draft -> simulation -> publish/enable/rollback
+workflow. Every operation requires an unexpired simulation owned by the current
+administrator; candidate rejection and auto-ban configurations additionally
+require the exact `PUBLISH <rule-code>` confirmation. Shared-network labels use
+impact preview and an operator reason. Safe shared labels resolve current IP and
+composite signals without deleting identity facts; revoking a label requires a
+subsequent controlled replay before any old signal can become current again.
+
+The primary UI uses readable Chinese names; protocol identifiers, source event
+IDs, rule revisions, request IDs, and other technical values stay behind
+collapsed technical details. Zero-score API client and successful login/API
+observations never become a primary risk conclusion.
 
 The service owns the extensions database, including risk-control and account-monitor
 tables. Back it up separately from Sub2API:

@@ -74,6 +74,22 @@ func TestSchemaMigratesLegacyRegistrationRulesToExplicitStrategies(t *testing.T)
 	}
 }
 
+func TestIdentityRuleWorkflowSchemaHasVersionedActionsAndApprovalState(t *testing.T) {
+	for _, expected := range []string{
+		"ALTER TABLE risk_identity_rules ADD COLUMN IF NOT EXISTS configured_action",
+		"CREATE TABLE IF NOT EXISTS risk_identity_rule_drafts",
+		"CREATE TABLE IF NOT EXISTS risk_identity_rule_simulations",
+		"CREATE TABLE IF NOT EXISTS risk_shared_network_label_history",
+		"UPDATE risk_identity_rules SET configured_action='review'",
+		"UPDATE risk_identity_rules SET configured_action='reject_candidate'",
+		"INSERT INTO risk_schema_migrations(version) VALUES (7)",
+	} {
+		if !strings.Contains(schemaSQL, expected) {
+			t.Fatalf("identity rule workflow schema is missing %q", expected)
+		}
+	}
+}
+
 func TestSchemaDisablesUnsafeLegacyEventRuleSemantics(t *testing.T) {
 	for _, expected := range []string{
 		"jsonb_array_elements_text(event_types)",

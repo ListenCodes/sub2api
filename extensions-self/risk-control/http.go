@@ -228,6 +228,16 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleIdentityRules(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/identity-rule-effects":
 		s.handleIdentityRuleEffects(w, r)
+	case (r.Method == http.MethodGet || r.Method == http.MethodPost) && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/draft"):
+		s.handleIdentityRuleDraft(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/simulations"):
+		s.handleIdentityRuleSimulation(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/publish"):
+		s.handleIdentityRuleLifecycle(w, r, path, body, "publish")
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/enable"):
+		s.handleIdentityRuleLifecycle(w, r, path, body, "enable")
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/rollback"):
+		s.handleIdentityRuleLifecycle(w, r, path, body, "rollback")
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/versions"):
 		s.handleIdentityRuleVersions(w, r, path)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/identity-rules/") && strings.HasSuffix(path, "/disable"):
@@ -236,10 +246,18 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleWorkOverview(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/review-cases":
 		s.handleReviewCases(w, r)
+	case r.Method == http.MethodPost && path == "/api/v1/admin/review-cases":
+		s.handleReviewCaseCreate(w, r, body)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/claim"):
 		s.handleReviewCaseClaim(w, r, path)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/feedback"):
 		s.handleReviewCaseFeedback(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/observe"):
+		s.handleReviewCaseObserve(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/network-identities/") && strings.HasSuffix(path, "/label-preview"):
+		s.handleNetworkIdentityLabelPreview(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/network-identities/") && strings.HasSuffix(path, "/label-revoke"):
+		s.handleNetworkIdentityLabelRevoke(w, r, path, body)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/network-identities/") && strings.HasSuffix(path, "/label"):
 		s.handleNetworkIdentityLabel(w, r, path, body)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/risk-rebuilds/dry-run":

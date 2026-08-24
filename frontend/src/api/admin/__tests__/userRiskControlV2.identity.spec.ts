@@ -31,6 +31,18 @@ describe('user risk identity API', () => {
     expect(mainAdminClient.get).toHaveBeenNthCalledWith(2, '/admin/identity-health')
   })
 
+  it('adds a stable view-session header only when the caller provides one', async () => {
+    vi.mocked(mainAdminClient.get).mockResolvedValue({ data: { user_id: 9, domains: [] } })
+    vi.mocked(mainAdminClient.post).mockResolvedValue({ data: { items: [], total: 0 } })
+
+    await userRiskControlV2API.getUserIdentitySummary(9, 'drawer-session-1')
+    await userRiskControlV2API.listUserIPIdentities(9, 1, 20, '8.8.8.8', 'drawer-session-1')
+
+    const config = { headers: { 'X-Risk-View-Session': 'drawer-session-1' } }
+    expect(mainAdminClient.get).toHaveBeenCalledWith('/admin/users/9/identity-summary', config)
+    expect(mainAdminClient.post).toHaveBeenCalledWith('/admin/users/9/ip-identities/search', { page: 1, limit: 20, query: '8.8.8.8' }, config)
+  })
+
   it('uses the server-side risk queue with account completion and masked identity summary', async () => {
     vi.mocked(mainAdminClient.get).mockResolvedValueOnce({ data: { items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', identity: { user_id: 7, latest_ip: '203.0.113.0/24', country_code: 'US', region: 'CA', browser_instance_count: 2, api_client_count: 1, associated_account_count: 3, active_rule_count: 1, quality_state: 'healthy' } }], total: 1 } })
 

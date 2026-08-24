@@ -15,6 +15,8 @@ vi.mock('@/api/admin/userRiskControlV2', async (importOriginal) => {
     userRiskControlV2API: {
       getUserDetail: vi.fn(),
       claimReviewCase: vi.fn(),
+	  createReviewCase: vi.fn(),
+	  observeReviewCase: vi.fn(),
       submitReviewFeedback: vi.fn(),
       setUserStatus: vi.fn(),
     },
@@ -62,6 +64,8 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
     vi.clearAllMocks()
     vi.mocked(userRiskControlV2API.getUserDetail).mockResolvedValue({ user, events: [], audit: [] })
     vi.mocked(userRiskControlV2API.claimReviewCase).mockResolvedValue()
+	vi.mocked(userRiskControlV2API.createReviewCase).mockResolvedValue({ id: 32, status: 'pending' })
+	vi.mocked(userRiskControlV2API.observeReviewCase).mockResolvedValue()
     vi.mocked(userRiskControlV2API.submitReviewFeedback).mockResolvedValue()
     vi.mocked(userRiskControlV2API.setUserStatus).mockResolvedValue({ user, result: 'success' })
   })
@@ -79,6 +83,32 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
     expect(wrapper.emitted('updated')).toBeUndefined()
     expect(wrapper.find('[data-testid="review-feedback-type"]').exists()).toBe(true)
   })
+
+	it('creates a manual review case with a required operator reason', async () => {
+		const wrapper = mountDrawer({ case_id: undefined, case_status: undefined })
+		await flushPromises()
+		await wrapper.get('[data-testid="create-review-case"]').trigger('click')
+		expect(userRiskControlV2API.createReviewCase).not.toHaveBeenCalled()
+		expect(wrapper.text()).toContain('建案原因不能为空')
+
+		await wrapper.get('[data-testid="manual-case-reason"] textarea').setValue('客服升级的异常注册线索')
+		await wrapper.get('[data-testid="create-review-case"]').trigger('click')
+		await flushPromises()
+		expect(userRiskControlV2API.createReviewCase).toHaveBeenCalledWith(7, '客服升级的异常注册线索', 'pending')
+		expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, case_id: 32, case_status: 'pending' })
+	})
+
+	it('moves a pending case to observation without changing account status', async () => {
+		const wrapper = mountDrawer()
+		await flushPromises()
+		await wrapper.get('[data-testid="manual-case-reason"] textarea').setValue('等待补充业务证据')
+		await wrapper.get('[data-testid="observe-review-case"]').trigger('click')
+		await flushPromises()
+
+		expect(userRiskControlV2API.observeReviewCase).toHaveBeenCalledWith(31, '等待补充业务证据')
+		expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
+		expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, status: 'active', case_status: 'observing' })
+	})
 
   it('requires claim and a reason before recording feedback without enforcing an account action', async () => {
     const wrapper = mountDrawer()

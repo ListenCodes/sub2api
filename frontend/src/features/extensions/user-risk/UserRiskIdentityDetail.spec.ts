@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskIdentityDetail from './UserRiskIdentityDetail.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 
@@ -10,7 +10,7 @@ vi.mock('vue-i18n', async (importOriginal) => {
 
 vi.mock('@/api/admin/userRiskControlV2', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/admin/userRiskControlV2')>()
-  return { ...actual, userRiskControlV2API: { getUserIdentitySummary: vi.fn(), getIdentityHealth: vi.fn(), listUserIPIdentities: vi.fn(), listUserDeviceIdentities: vi.fn(), listAssociatedUsers: vi.fn() } }
+  return { ...actual, userRiskControlV2API: { getUserIdentitySummary: vi.fn(), getIdentityHealth: vi.fn(), listUserIPIdentities: vi.fn(), listUserDeviceIdentities: vi.fn(), listAssociatedUsers: vi.fn(), previewNetworkLabel: vi.fn(), applyNetworkLabel: vi.fn(), revokeNetworkLabel: vi.fn() } }
 })
 
 describe('UserRiskIdentityDetail', () => {
@@ -21,16 +21,22 @@ describe('UserRiskIdentityDetail', () => {
     vi.mocked(userRiskControlV2API.listUserIPIdentities).mockResolvedValue({ items: [], total: 0 })
     vi.mocked(userRiskControlV2API.listUserDeviceIdentities).mockResolvedValue({ items: [], total: 0 })
     vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({ items: [], total: 0 })
+	vi.mocked(userRiskControlV2API.previewNetworkLabel).mockResolvedValue({ network_id: 11, proposed_label: 'unknown', affected_signal_count: 2, affected_account_count: 2, affected_decision_count: 1, resolved_domains: [], requires_rebuild: false })
+	vi.mocked(userRiskControlV2API.applyNetworkLabel).mockResolvedValue({ updated: true, impact: { network_id: 11, proposed_label: 'unknown', affected_signal_count: 2, affected_account_count: 2, affected_decision_count: 1, resolved_domains: [], requires_rebuild: false } })
+	vi.mocked(userRiskControlV2API.revokeNetworkLabel).mockResolvedValue({ network_id: 11, current_label: 'company', affected_signal_count: 0, affected_account_count: 0, affected_decision_count: 0, resolved_domains: [], requires_rebuild: true })
   })
+	afterEach(() => { document.body.innerHTML = '' })
 
   it('loads only summary and health until a detail tab is activated', async () => {
     const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
     await flushPromises()
-    expect(userRiskControlV2API.getUserIdentitySummary).toHaveBeenCalledWith(7)
+    expect(userRiskControlV2API.getUserIdentitySummary).toHaveBeenCalledWith(7, expect.any(String))
+    const viewSession = vi.mocked(userRiskControlV2API.getUserIdentitySummary).mock.calls[0][1]
+    expect(viewSession).toBeTruthy()
     expect(userRiskControlV2API.listUserIPIdentities).not.toHaveBeenCalled()
     await wrapper.findAll('[role="tab"]')[1].trigger('click')
     await flushPromises()
-    expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenCalledWith(7, 1, 20, '')
+    expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenCalledWith(7, 1, 20, '', viewSession)
     expect(userRiskControlV2API.listUserDeviceIdentities).not.toHaveBeenCalled()
   })
 
@@ -44,12 +50,58 @@ describe('UserRiskIdentityDetail', () => {
     await input.setValue(' 8.8.8.8 ')
     await wrapper.get('form[role="search"]').trigger('submit')
     await flushPromises()
-    expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenLastCalledWith(7, 1, 20, '8.8.8.8')
+    const viewSession = vi.mocked(userRiskControlV2API.getUserIdentitySummary).mock.calls[0][1]
+    expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenLastCalledWith(7, 1, 20, '8.8.8.8', viewSession)
 
     await wrapper.get('button[title="common.close"]').trigger('click')
     await flushPromises()
-    expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenLastCalledWith(7, 1, 20, '')
+    expect(userRiskControlV2API.listUserIPIdentities).toHaveBeenLastCalledWith(7, 1, 20, '', viewSession)
   })
+
+	it('previews impact and requires a reason before applying a shared-network label', async () => {
+		vi.mocked(userRiskControlV2API.listUserIPIdentities).mockResolvedValue({ items: [{ id: 11, ip: '8.8.8.8', ip_family: 4, ip_source: 'remote_addr', is_public: true, country_code: 'US', region: 'CA', city: '', asn: 15169, geo_source: 'cloudflare', geo_verified: true, availability: 'available', data_source: 'identity_v2', first_seen_at: '2026-08-24T00:00:00Z', last_seen_at: '2026-08-24T00:00:00Z', registration_success_count: 2, login_success_count: 0, api_success_count: 0, associated_account_count: 2 }], total: 1 })
+		const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+		await flushPromises()
+		await wrapper.findAll('[role="tab"]')[1].trigger('click')
+		await flushPromises()
+		await wrapper.get('[data-testid="label-network-11"]').trigger('click')
+		await flushPromises()
+		expect(document.body.querySelector<HTMLElement>('[role="dialog"]')?.style.zIndex).toBe('80')
+		const reason = document.body.querySelector<HTMLTextAreaElement>('[data-testid="network-label-reason"] textarea')!
+		reason.value = '无法确认网络性质，先标记未知'
+		reason.dispatchEvent(new Event('input', { bubbles: true }))
+		document.body.querySelector<HTMLButtonElement>('[data-testid="preview-network-label"]')!.click()
+		await flushPromises()
+
+		expect(userRiskControlV2API.previewNetworkLabel).toHaveBeenCalledWith(11, 'unknown')
+		expect(document.body.querySelector('[data-testid="network-label-impact"]')?.textContent).toContain('2 个账号')
+		document.body.querySelector<HTMLButtonElement>('[data-testid="apply-network-label"]')!.click()
+		await flushPromises()
+		expect(userRiskControlV2API.applyNetworkLabel).toHaveBeenCalledWith(11, 'unknown', '无法确认网络性质，先标记未知')
+	})
+
+	it('requires a revoke preview before removing a shared-network label', async () => {
+		vi.mocked(userRiskControlV2API.listUserIPIdentities).mockResolvedValue({ items: [{ id: 11, ip: '8.8.8.8', ip_family: 4, ip_source: 'remote_addr', is_public: true, country_code: 'US', region: 'CA', city: '', asn: 15169, geo_source: 'cloudflare', geo_verified: true, availability: 'available', data_source: 'identity_v2', network_label: 'company', first_seen_at: '2026-08-24T00:00:00Z', last_seen_at: '2026-08-24T00:00:00Z', registration_success_count: 2, login_success_count: 0, api_success_count: 0, associated_account_count: 2 }], total: 1 })
+		vi.mocked(userRiskControlV2API.previewNetworkLabel).mockResolvedValue({ network_id: 11, current_label: 'company', affected_signal_count: 0, affected_account_count: 0, affected_decision_count: 0, resolved_domains: [], requires_rebuild: true })
+		const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+		await flushPromises()
+		await wrapper.findAll('[role="tab"]')[1].trigger('click')
+		await flushPromises()
+		await wrapper.get('[data-testid="label-network-11"]').trigger('click')
+		await flushPromises()
+		const reason = document.body.querySelector<HTMLTextAreaElement>('[data-testid="network-label-reason"] textarea')!
+		reason.value = '网络归类已失效'
+		reason.dispatchEvent(new Event('input', { bubbles: true }))
+		document.body.querySelector<HTMLButtonElement>('[data-testid="preview-revoke-network-label"]')!.click()
+		await flushPromises()
+
+		expect(userRiskControlV2API.revokeNetworkLabel).not.toHaveBeenCalled()
+		expect(userRiskControlV2API.previewNetworkLabel).toHaveBeenCalledWith(11, '')
+		expect(document.body.textContent).toContain('需完成历史回放')
+		document.body.querySelector<HTMLButtonElement>('[data-testid="confirm-revoke-network-label"]')!.click()
+		await flushPromises()
+		expect(userRiskControlV2API.revokeNetworkLabel).toHaveBeenCalledWith(11, '网络归类已失效')
+	})
 
   it('renders signal reasons and keeps global data diagnostics folded', async () => {
     const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })

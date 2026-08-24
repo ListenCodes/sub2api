@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -248,5 +249,24 @@ func (h *CustomUserHandler) recordIdentityDetailAudit(c *gin.Context, userID int
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 300*time.Millisecond)
 	defer cancel()
-	_ = h.riskControlClient.ReportAudit(ctx, service.RiskAuditReport{AuditKey: "identity-view:" + uuid.NewString(), ActorID: getAdminIDFromContext(c), Action: "view_identity_detail", TargetType: "user", TargetID: strconv.FormatInt(userID, 10), Result: result, Metadata: map[string]any{"section": section}})
+	sessionID := strings.TrimSpace(c.GetHeader("X-Risk-View-Session"))
+	if !validRiskViewSession(sessionID) {
+		sessionID = uuid.NewString()
+	}
+	actorID := getAdminIDFromContext(c)
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s", actorID, userID, sessionID)))
+	_ = h.riskControlClient.ReportAudit(ctx, service.RiskAuditReport{AuditKey: fmt.Sprintf("identity-view:%x", digest), ActorID: actorID, Action: "view_identity_detail", TargetType: "user", TargetID: strconv.FormatInt(userID, 10), Result: result, Metadata: map[string]any{"section": section, "sections": []string{section}}})
+}
+
+func validRiskViewSession(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("-_.:", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }

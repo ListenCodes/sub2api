@@ -245,7 +245,7 @@ func (r *SQLIdentityRepository) DisableIdentityRule(ctx context.Context, code, r
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_rule_versions(rule_kind,rule_code,revision,signal_family,domain,active_from,enabled,rule_snapshot)
-SELECT 'identity',code,revision,signal_family,domain,active_from,FALSE,jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind,'enabled',FALSE)
+SELECT 'identity',code,revision,signal_family,domain,active_from,FALSE,jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'configured_action',configured_action,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind,'enabled',FALSE)
 FROM risk_identity_rules WHERE code=$1 ON CONFLICT(rule_kind,rule_code,revision) DO NOTHING`, code); err != nil {
 		return 0, err
 	}
@@ -341,8 +341,7 @@ WHERE activity.client_kind='api_client' AND activity.event_class=$1 AND activity
 
 func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkID, actorID int64, label, reason string) error {
 	label, reason = strings.TrimSpace(label), strings.TrimSpace(reason)
-	validLabels := map[string]struct{}{"home": {}, "company": {}, "school": {}, "public_proxy": {}, "trusted_egress": {}, "mobile_cgnat": {}, "unknown": {}}
-	if _, ok := validLabels[label]; !ok || networkID <= 0 || actorID <= 0 || reason == "" || len([]rune(reason)) > 500 {
+	if !validSharedNetworkLabel(label) || networkID <= 0 || actorID <= 0 || reason == "" || len([]rune(reason)) > 500 {
 		return errors.New("invalid network label")
 	}
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -358,11 +357,13 @@ func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkI
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_shared_network_labels(network_identity_id,label,reason,actor_id) VALUES($1,$2,$3,$4) ON CONFLICT(network_identity_id) DO UPDATE SET label=EXCLUDED.label,reason=EXCLUDED.reason,actor_id=EXCLUDED.actor_id,updated_at=NOW()`, networkID, label, reason, actorID); err != nil {
 		return err
 	}
-	safeShared := label == "home" || label == "company" || label == "school" || label == "trusted_egress" || label == "mobile_cgnat"
-	if !safeShared {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_shared_network_label_history(network_identity_id,action,label,reason,actor_id) VALUES($1,'apply',$2,$3,$4)`, networkID, label, reason, actorID); err != nil {
+		return err
+	}
+	if !safeSharedNetworkLabel(label) {
 		return tx.Commit()
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM risk_identity_signals WHERE network_identity_id=$1 AND domain='ip' AND status='active' AND user_id>0`, networkID)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM risk_identity_signals WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND status='active' AND user_id>0`, networkID)
 	if err != nil {
 		return err
 	}
@@ -378,10 +379,10 @@ func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkI
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='resolved' WHERE network_identity_id=$1 AND domain='ip' AND status='active'`, networkID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='resolved' WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND status='active'`, networkID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='resolved',current_score=0 WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.network_identity_id=$1 AND signal.domain='ip' AND signal.status='resolved')`, networkID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='resolved',current_score=0 WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.network_identity_id=$1 AND signal.domain IN ('ip','composite') AND signal.status='resolved')`, networkID); err != nil {
 		return err
 	}
 	for _, userID := range userIDs {

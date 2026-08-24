@@ -419,7 +419,15 @@ func (r *SQLRepository) ListEvents(ctx context.Context, limit, offset int, userI
 
 func (r *SQLRepository) InsertAudit(ctx context.Context, audit AuditRecord) error {
 	metadata, _ := json.Marshal(audit.Metadata)
-	_, err := r.db.ExecContext(ctx, `INSERT INTO risk_audit_logs(audit_key,actor_id,action,target_type,target_id,result,reason,metadata,created_at) VALUES(NULLIF($1,''),$2,$3,$4,$5,$6,$7,$8,COALESCE(NULLIF($9,'')::timestamptz,NOW())) ON CONFLICT DO NOTHING`, audit.AuditKey, audit.ActorID, audit.Action, audit.TargetType, audit.TargetID, audit.Result, audit.Reason, metadata, audit.CreatedAt)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO risk_audit_logs(audit_key,actor_id,action,target_type,target_id,result,reason,metadata,created_at)
+VALUES(NULLIF($1,''),$2,$3,$4,$5,$6,$7,$8,COALESCE(NULLIF($9,'')::timestamptz,NOW()))
+ON CONFLICT(audit_key) WHERE audit_key IS NOT NULL AND audit_key<>'' DO UPDATE SET
+ result=CASE WHEN risk_audit_logs.result='failed' OR EXCLUDED.result='failed' THEN 'failed' ELSE risk_audit_logs.result END,
+ metadata=(risk_audit_logs.metadata || EXCLUDED.metadata || jsonb_build_object('sections',(
+   SELECT COALESCE(jsonb_agg(section ORDER BY section),'[]'::jsonb) FROM (
+     SELECT DISTINCT jsonb_array_elements_text(COALESCE(risk_audit_logs.metadata->'sections','[]'::jsonb) || COALESCE(EXCLUDED.metadata->'sections','[]'::jsonb)) section
+   ) unique_sections
+ )))`, audit.AuditKey, audit.ActorID, audit.Action, audit.TargetType, audit.TargetID, audit.Result, audit.Reason, metadata, audit.CreatedAt)
 	return err
 }
 

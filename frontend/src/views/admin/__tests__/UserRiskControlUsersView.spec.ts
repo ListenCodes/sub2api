@@ -172,14 +172,15 @@ describe('UserRiskControlUsersView', () => {
     await flushPromises()
 
 		expect(wrapper.get('[data-testid="account-primary-7"]').text()).toBe('alice@example.com')
-		expect(wrapper.get('[data-testid="account-secondary-7"]').text()).toContain('Alice · #7 ·')
+		expect(wrapper.get('[data-testid="account-secondary-7"]').text()).toContain('Alice · #7')
     expect(wrapper.get('[data-testid="user-row-7"]').classes()).toEqual(expect.arrayContaining(['max-w-[50vw]', 'sm:max-w-none']))
     expect(wrapper.get('[data-testid="risk-users-table"]').classes()).toContain('w-full')
     expect(wrapper.findComponent(DataTable).props('stickyFirstColumn')).toBe(true)
 		expect(wrapper.text()).toContain('当前风险')
 		expect(wrapper.text()).toContain('主信号')
 		expect(wrapper.text()).toContain('案件状态')
-		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'riskScore', 'riskType', 'lastEvent', 'processing'])
+		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'accountStatus', 'evaluation', 'riskScore', 'riskType', 'lastEvent', 'processing'])
+		expect(wrapper.text()).toContain('评估完整')
 		expect(wrapper.text()).not.toContain('203.0.113.0/24')
   })
 
@@ -222,13 +223,13 @@ describe('UserRiskControlUsersView', () => {
     expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ pageSize: 20 }))
   })
 
-  it('keeps six high-priority columns at a 1280px desktop width', async () => {
+	it('keeps account status, evaluation coverage, and risk conclusion distinct at desktop width', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 80, page: 1, page_size: 20 })
     const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-    expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'riskScore', 'riskType', 'lastEvent', 'processing'])
+		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'accountStatus', 'evaluation', 'riskScore', 'riskType', 'lastEvent', 'processing'])
     wrapper.getComponent(Pagination).vm.$emit('update:pageSize', 50)
     await flushPromises()
     expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ pageSize: 50 }))

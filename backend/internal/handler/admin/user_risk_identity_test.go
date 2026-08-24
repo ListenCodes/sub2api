@@ -78,6 +78,61 @@ func TestProxyUserRiskIdentitySearchKeepsExactIPOutOfTheURL(t *testing.T) {
 	}
 }
 
+func TestProxyUserRiskIdentityReusesHashedAuditKeyWithinOneViewSession(t *testing.T) {
+	var auditReports []service.RiskAuditReport
+	const sessionID = "drawer-session-sensitive-1"
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/admin/users/9/identity-summary":
+			_, _ = writer.Write([]byte(`{"user_id":9,"domains":[]}`))
+		case "/api/v1/admin/users/9/ip-identities":
+			_, _ = writer.Write([]byte(`{"items":[],"total":0}`))
+		case "/api/v1/internal/audit":
+			var report service.RiskAuditReport
+			if err := json.NewDecoder(request.Body).Decode(&report); err != nil {
+				t.Error(err)
+			}
+			auditReports = append(auditReports, report)
+			writer.WriteHeader(http.StatusAccepted)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "identity-session-test-secret")
+
+	handler := &CustomUserHandler{riskControlClient: service.NewRiskControlClientFromEnv()}
+	engine := gin.New()
+	engine.GET("/admin/users/:id/:section", func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
+		handler.ProxyUserRiskIdentity(c)
+	})
+	for _, path := range []string{"/admin/users/9/identity-summary", "/admin/users/9/ip-identities"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("X-Risk-View-Session", sessionID)
+		engine.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	if len(auditReports) != 2 || auditReports[0].AuditKey == "" || auditReports[0].AuditKey != auditReports[1].AuditKey {
+		t.Fatalf("session audit reports = %+v", auditReports)
+	}
+	encoded, err := json.Marshal(auditReports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(sessionID)) {
+		t.Fatalf("audit payload leaked the raw view session: %s", encoded)
+	}
+	if auditReports[0].Metadata["section"] != "identity-summary" || auditReports[1].Metadata["section"] != "ip-identities" {
+		t.Fatalf("audit sections = %+v", auditReports)
+	}
+}
+
 func TestProxyRiskWorkOverviewReturnsOneServerAggregate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/api/v1/admin/work-overview" {

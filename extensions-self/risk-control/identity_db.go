@@ -36,7 +36,7 @@ func (r *SQLIdentityRepository) EvaluateCompositeRegistration(ctx context.Contex
 		return result, errors.New("identity repository unavailable")
 	}
 	err := r.db.QueryRowContext(ctx, `WITH active_rule AS (
- SELECT code,window_seconds,threshold,score,revision
+	 SELECT code,window_seconds,threshold,score,revision,configured_action
  FROM risk_identity_rules
  WHERE code='v2_registration_composite_accounts' AND enabled AND mode='shadow'
    AND active_from<=$3 AND (active_until IS NULL OR active_until>$3)
@@ -60,9 +60,9 @@ func (r *SQLIdentityRepository) EvaluateCompositeRegistration(ctx context.Contex
   AND event.ip_quality_valid AND event.device_quality_valid AND event.user_id>0
   AND event.occurred_at BETWEEN $3-(rule.window_seconds*interval '1 second') AND $3
 )
-SELECT rule.code,rule.window_seconds,rule.threshold,rule.score,rule.revision,evidence.account_count
+SELECT rule.code,rule.window_seconds,rule.threshold,rule.score,rule.revision,evidence.account_count,rule.configured_action
 FROM active_rule rule CROSS JOIN evidence`, networkLookupKey, browserLookupKey, occurredAt.UTC()).Scan(
-		&result.RuleCode, &result.WindowSeconds, &result.Threshold, &result.Score, &result.Revision, &result.AccountCount,
+		&result.RuleCode, &result.WindowSeconds, &result.Threshold, &result.Score, &result.Revision, &result.AccountCount, &result.ConfiguredAction,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CompositeRegistrationEvaluation{}, nil
@@ -158,7 +158,7 @@ func (r *SQLIdentityRepository) ListIdentityRules(ctx context.Context) ([]Identi
 	if r == nil || r.db == nil {
 		return nil, errors.New("identity repository unavailable")
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT code,domain,enabled,window_seconds,threshold,score,mode,revision,signal_family,subject_kind,
+	rows, err := r.db.QueryContext(ctx, `SELECT code,domain,enabled,window_seconds,threshold,score,mode,configured_action,revision,signal_family,subject_kind,
 COALESCE(to_char(active_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),''),
 COALESCE(to_char(active_until AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),''),
 COALESCE(to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'')
@@ -170,7 +170,7 @@ FROM risk_identity_rules ORDER BY CASE domain WHEN 'account' THEN 1 WHEN 'ip' TH
 	result := make([]IdentityRule, 0, 4)
 	for rows.Next() {
 		var rule IdentityRule
-		if err := rows.Scan(&rule.Code, &rule.Domain, &rule.ConfiguredEnabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.Mode, &rule.Revision, &rule.SignalFamily, &rule.SubjectKind, &rule.ActiveFrom, &rule.ActiveUntil, &rule.UpdatedAt); err != nil {
+		if err := rows.Scan(&rule.Code, &rule.Domain, &rule.ConfiguredEnabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.Mode, &rule.ConfiguredAction, &rule.Revision, &rule.SignalFamily, &rule.SubjectKind, &rule.ActiveFrom, &rule.ActiveUntil, &rule.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, rule)
@@ -433,7 +433,7 @@ FROM risk_identity_rules rule WHERE signal.rule_code=rule.code AND signal.status
 	states := identityDomainStates(cfg, qualityCounts)
 	if _, err := r.db.ExecContext(ctx, `INSERT INTO risk_rule_versions(rule_kind,rule_code,revision,signal_family,domain,active_from,active_until,enabled,rule_snapshot)
 SELECT 'identity',code,revision,signal_family,domain,active_from,active_until,enabled,
- jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind)
+ jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'configured_action',configured_action,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind)
 FROM risk_identity_rules ON CONFLICT(rule_kind,rule_code,revision) DO NOTHING`); err != nil {
 		return err
 	}
@@ -783,7 +783,7 @@ SELECT COUNT(*) FROM grouped l JOIN risk_network_identities n ON n.id=l.network_
 ), grouped AS (
  SELECT network_identity_id,MIN(first_seen_at) first_seen_at,MAX(last_seen_at) last_seen_at,SUM(registration_success_count) registration_success_count,SUM(login_success_count) login_success_count,SUM(api_success_count) api_success_count FROM links GROUP BY network_identity_id
 )
-SELECT n.id,n.lookup_key,n.ip_ciphertext,n.ip_nonce,n.encryption_key_id,n.ip_family,n.ip_source,n.is_public,n.country_code,n.region,n.city,n.asn,n.geo_source,n.geo_verified,COALESCE(label.label,''),l.first_seen_at,l.last_seen_at,l.registration_success_count,l.login_success_count,l.api_success_count,
+SELECT n.id,n.lookup_key,n.ip_ciphertext,n.ip_nonce,n.encryption_key_id,n.ip_family,n.ip_source,n.is_public,n.country_code,n.region,n.city,n.asn,n.geo_source,n.geo_verified,COALESCE(label.label,''),COALESCE(label.reason,''),l.first_seen_at,l.last_seen_at,l.registration_success_count,l.login_success_count,l.api_success_count,
 (SELECT COUNT(DISTINCT linked.user_id) FROM (
  SELECT user_id FROM risk_user_ip_links WHERE network_identity_id=n.id
  UNION ALL SELECT user_id FROM risk_identity_activity_daily WHERE network_identity_id=n.id
@@ -797,7 +797,7 @@ FROM grouped l JOIN risk_network_identities n ON n.id=l.network_identity_id LEFT
 	for rows.Next() {
 		var item NetworkIdentityRow
 		var first, last time.Time
-		if err := rows.Scan(&item.ID, &item.LookupKey, &item.Ciphertext, &item.Nonce, &item.KeyID, &item.IPFamily, &item.IPSource, &item.Public, &item.CountryCode, &item.Region, &item.City, &item.ASN, &item.GeoSource, &item.GeoVerified, &item.NetworkLabel, &first, &last, &item.RegistrationSuccesses, &item.LoginSuccesses, &item.APISuccesses, &item.AssociatedAccountCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.LookupKey, &item.Ciphertext, &item.Nonce, &item.KeyID, &item.IPFamily, &item.IPSource, &item.Public, &item.CountryCode, &item.Region, &item.City, &item.ASN, &item.GeoSource, &item.GeoVerified, &item.NetworkLabel, &item.NetworkLabelReason, &first, &last, &item.RegistrationSuccesses, &item.LoginSuccesses, &item.APISuccesses, &item.AssociatedAccountCount); err != nil {
 			return nil, 0, err
 		}
 		item.DataSource = strings.TrimSpace(item.GeoSource)

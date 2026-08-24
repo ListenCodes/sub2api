@@ -142,8 +142,10 @@ func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
 	if !allowedRiskControlPath(http.MethodPost, "/identity-rules/v2_registration_ip_accounts/disable") {
 		t.Fatal("POST /identity-rules/:code/disable must be allowlisted")
 	}
-	if allowedRiskControlPath(http.MethodPost, "/identity-rules/v2_registration_ip_accounts/enable") {
-		t.Fatal("online identity rule enable must remain blocked")
+	for _, path := range []string{"/identity-rules/v2_registration_ip_accounts/draft", "/identity-rules/v2_registration_ip_accounts/simulations", "/identity-rules/v2_registration_ip_accounts/publish", "/identity-rules/v2_registration_ip_accounts/enable", "/identity-rules/v2_registration_ip_accounts/rollback"} {
+		if !allowedRiskControlPath(http.MethodPost, path) {
+			t.Fatalf("controlled identity lifecycle path must be allowlisted: %s", path)
+		}
 	}
 	if allowedRiskControlPath(http.MethodPost, "/users/not-an-id/processed") {
 		t.Fatal("processed path must require a numeric user id")

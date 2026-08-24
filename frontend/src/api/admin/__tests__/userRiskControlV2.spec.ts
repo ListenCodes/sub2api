@@ -135,10 +135,10 @@ describe('userRiskControlV2API', () => {
     const rule = { code: 'login_failure', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high' as const, action: 'review' as const, revision: 3 }
 
     await userRiskControlV2API.updateRule(1, rule)
-    await expect(userRiskControlV2API.testRule(rule, { count: 5, event_type: 'login_failure' })).resolves.toMatchObject({ matched: true, score: 80, riskLevel: 'high', action: 'review' })
+    await expect(userRiskControlV2API.testRule(rule, { sample: { observed_count: 5, event_type: 'login_failure', user_id: 7 } })).resolves.toMatchObject({ matched: true, score: 80, riskLevel: 'high', action: 'review' })
 
     expect(put).toHaveBeenCalledWith('/admin/user-risk-control/rules/login_failure', expect.objectContaining({ window_seconds: 300, threshold: 5, revision: 3 }))
-    expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules/test', expect.objectContaining({ count: 5, event_type: 'login_failure' }))
+	expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules/test', expect.objectContaining({ sample: expect.objectContaining({ observed_count: 5, event_type: 'login_failure', user_id: 7 }) }))
     expect(post).toHaveBeenCalledWith('/admin/user-risk-control/rules/test', expect.objectContaining({ rule: expect.objectContaining({ enabled: true }) }))
   })
 

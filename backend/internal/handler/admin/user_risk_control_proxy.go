@@ -294,30 +294,38 @@ func allowedRiskControlPath(method, path string) bool {
 		return true
 	case method == http.MethodPut && strings.HasPrefix(path, "/rules/"):
 		return true
-	case method == http.MethodPost && (path == "/rules" || path == "/rules/test" || isProcessedUserPath(path) || isReviewCaseActionPath(path) || isNetworkLabelPath(path) || isIdentityRuleDisablePath(path)):
+	case method == http.MethodPost && (path == "/rules" || path == "/rules/test" || path == "/review-cases" || isProcessedUserPath(path) || isReviewCaseActionPath(path) || isNetworkLabelActionPath(path) || isIdentityRuleActionPath(path)):
 		return true
 	default:
 		return false
 	}
 }
 
-func isIdentityRuleDisablePath(path string) bool {
+func isIdentityRuleActionPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 3 && parts[0] == "identity-rules" && parts[1] != "" && parts[2] == "disable"
+	if len(parts) != 3 || parts[0] != "identity-rules" || parts[1] == "" {
+		return false
+	}
+	switch parts[2] {
+	case "draft", "simulations", "publish", "enable", "disable", "rollback":
+		return true
+	default:
+		return false
+	}
 }
 
 func isReviewCaseActionPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 3 || parts[0] != "review-cases" || (parts[2] != "claim" && parts[2] != "feedback") {
+	if len(parts) != 3 || parts[0] != "review-cases" || (parts[2] != "claim" && parts[2] != "feedback" && parts[2] != "observe") {
 		return false
 	}
 	id, err := strconv.ParseInt(parts[1], 10, 64)
 	return err == nil && id > 0
 }
 
-func isNetworkLabelPath(path string) bool {
+func isNetworkLabelActionPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 3 || parts[0] != "network-identities" || parts[2] != "label" {
+	if len(parts) != 3 || parts[0] != "network-identities" || (parts[2] != "label" && parts[2] != "label-preview" && parts[2] != "label-revoke") {
 		return false
 	}
 	id, err := strconv.ParseInt(parts[1], 10, 64)

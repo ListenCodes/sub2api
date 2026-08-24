@@ -92,6 +92,9 @@ func (s *IdentityService) RegistrationDecision(ctx context.Context, input Identi
 	if evaluation.RuleCode == "" || evaluation.Threshold <= 0 || evaluation.AccountCount+1 < evaluation.Threshold {
 		return decision, nil
 	}
+	if evaluation.ConfiguredAction != "reject_candidate" {
+		return decision, nil
+	}
 	decision = Decision{
 		Action: "reject_candidate", Score: evaluation.Score, RiskLevel: identityRiskLevel(evaluation.Score),
 		Reason: "composite registration identity threshold reached", RuleCodes: []string{evaluation.RuleCode}, Mode: "enforce",
@@ -254,6 +257,30 @@ func (s *IdentityService) Rules(ctx context.Context) ([]IdentityRule, error) {
 		state := identityRuleEffectiveState(s.cfg, rules[index].Domain, states)
 		rules[index].State = state
 		rules[index].Enabled = rules[index].ConfiguredEnabled && state == "healthy"
+		rules[index].DetectionState = state
+		rules[index].DataQuality = state
+		rules[index].ConfigSource = "database"
+		rules[index].DecisionMode = "shadow"
+		rules[index].EffectiveAction = "none"
+		rules[index].ReasonCodes = []string{}
+		if !rules[index].ConfiguredEnabled {
+			rules[index].ReasonCodes = append(rules[index].ReasonCodes, "rule_disabled")
+		} else if state != "healthy" {
+			rules[index].ReasonCodes = append(rules[index].ReasonCodes, "data_quality_"+state)
+		} else {
+			rules[index].EffectiveAction = rules[index].ConfiguredAction
+		}
+		if rules[index].ConfiguredAction == "reject_candidate" && rules[index].Code == "v2_registration_composite_accounts" && s.cfg.CompositeEnforcementEnabled && rules[index].Enabled {
+			rules[index].DecisionMode = "enforce"
+			rules[index].EnforcementEligible = true
+		} else if rules[index].ConfiguredAction == "auto_ban" {
+			rules[index].EffectiveAction = "review"
+			rules[index].ReasonCodes = append(rules[index].ReasonCodes, "auto_ban_not_supported_safe_default")
+		} else if rules[index].ConfiguredAction == "reject_candidate" {
+			rules[index].EffectiveAction = "review"
+			rules[index].ReasonCodes = append(rules[index].ReasonCodes, "candidate_rejection_not_eligible")
+		}
+		rules[index].Mode = rules[index].DecisionMode
 	}
 	return rules, nil
 }

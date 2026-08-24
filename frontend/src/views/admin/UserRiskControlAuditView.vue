@@ -53,6 +53,7 @@
               </button>
               <template v-if="record.action !== 'view_identity_detail' || sensitiveExpanded(record.id)">
                 <p>{{ record.reason || formatSensitiveSection(record) || '无操作原因' }}</p>
+				<p v-if="record.metadata?.diff && record.action !== 'view_identity_detail'" class="mt-1 text-xs text-gray-500">字段变化：{{ formatRuleDiff(record.metadata.diff) }}</p>
                 <p v-if="record.failure_reason" class="mt-1 text-red-600 dark:text-red-400">失败原因：{{ record.failure_reason }}</p>
               </template>
               <button v-if="hasTechnicalDetails(record)" type="button" class="mt-1 text-xs font-medium text-gray-500 underline" :data-testid="`audit-technical-${record.id}`" @click="toggleTechnical(record.id)">技术详情</button>
@@ -117,8 +118,8 @@ const auditCategories: Array<{ value: NonNullable<AuditFilters['category']>; lab
   { value: 'sensitive', label: '敏感数据查看' },
 ]
 const auditActionsByCategory: Record<NonNullable<AuditFilters['category']>, string[]> = {
-  security: ['ban', 'unban', 'auto_ban', 'identity_reject_candidate', 'mark_processed', 'claim_risk_review_case', 'review_risk_case', 'label_shared_network'],
-  rules: ['create_rule', 'update_rule', 'rule_test', 'disable_identity_rule', 'purge_legacy_v1', 'identity_rebuild_dry_run', 'identity_rebuild'],
+  security: ['ban', 'unban', 'auto_ban', 'identity_reject_candidate', 'mark_processed', 'create_risk_review_case', 'claim_risk_review_case', 'observe_risk_review_case', 'review_risk_case', 'label_shared_network', 'revoke_shared_network_label'],
+  rules: ['create_rule', 'update_rule', 'rule_test', 'simulate_identity_rule', 'publish_identity_rule', 'enable_identity_rule', 'disable_identity_rule', 'rollback_identity_rule', 'purge_legacy_v1', 'identity_rebuild_dry_run', 'identity_rebuild'],
   sensitive: ['view_identity_detail'],
 }
 const auditActionFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allActions') }, ...riskActionOptions.filter((option) => auditActionsByCategory[draft.category || 'security'].includes(option.value))])
@@ -271,9 +272,11 @@ function toggleSensitive(id: number) { const next = new Set(expandedSensitiveIDs
 function technicalExpanded(id: number) { return expandedTechnicalIDs.value.has(id) }
 function toggleTechnical(id: number) { const next = new Set(expandedTechnicalIDs.value); next.has(id) ? next.delete(id) : next.add(id); expandedTechnicalIDs.value = next }
 function formatSensitiveSection(record: RiskAuditRecord) {
-  const section = String(record.metadata?.section || '')
-  return ({ 'identity-summary': '身份摘要', 'ip-identities': 'IP 身份', 'device-identities': '设备身份', 'associated-users': '关联账号' } as Record<string, string>)[section] || ''
+	const labels = ({ 'identity-summary': '身份摘要', 'ip-identities': 'IP 身份', 'device-identities': '设备身份', 'associated-users': '关联账号' } as Record<string, string>)
+	const sections = Array.isArray(record.metadata?.sections) ? record.metadata.sections.map(String) : [String(record.metadata?.section || '')]
+	return [...new Set(sections.filter(Boolean).map((section) => labels[section] || section))].join('、')
 }
+function formatRuleDiff(value: unknown) { if (!value || typeof value !== 'object') return '-'; const labels: Record<string, string> = { enabled: '启用状态', window_seconds: '时间窗口', threshold: '阈值', score: '风险分', risk_level: '风险等级', action: '配置动作', configured_action: '配置动作', count_strategy: '计数口径', event_types: '事件类型', revision: '版本' }; return Object.entries(value as Record<string, unknown>).map(([key, raw]) => { const change = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}; return `${labels[key] || key}：${String(change.before ?? '-')} → ${String(change.after ?? '-')}` }).join('；') || '-' }
 restoreRouteState()
 watch(() => route?.fullPath, () => {
   if (writingQuery) return

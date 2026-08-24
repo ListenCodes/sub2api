@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -193,6 +194,11 @@ func (s *HTTPServer) handleRuleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Code = strings.TrimSpace(input.Code)
 	input.Name = strings.TrimSpace(input.Name)
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.Reason == "" {
+		writeError(w, http.StatusBadRequest, errors.New("reason is required"))
+		return
+	}
 	for index := range input.EventTypes {
 		input.EventTypes[index] = strings.TrimSpace(input.EventTypes[index])
 	}
@@ -214,7 +220,8 @@ func (s *HTTPServer) handleRuleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := actorID(r)
-	if err := s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "create_rule", TargetType: "rule", TargetID: created.Code, Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"revision": created.Revision}}); err != nil {
+	after := eventRuleSnapshot(created)
+	if err := s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "create_rule", TargetType: "rule", TargetID: created.Code, Result: "success", Reason: input.Reason, Metadata: map[string]any{"revision": created.Revision, "before": map[string]any{}, "after": after, "diff": ruleFieldDiff(map[string]any{}, after)}}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -231,21 +238,33 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		writeError(w, http.StatusBadRequest, errors.New("revision is required"))
 		return
 	}
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.Reason == "" {
+		writeError(w, http.StatusBadRequest, errors.New("reason is required"))
+		return
+	}
+	var current Rule
+	currentFound := false
+	currentRules, err := s.service.repo.ListRules(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, candidate := range currentRules {
+		if candidate.Code == code {
+			current, currentFound = candidate, true
+			break
+		}
+	}
+	if !currentFound {
+		writeError(w, http.StatusConflict, ErrRuleRevisionConflict)
+		return
+	}
 	for index := range input.EventTypes {
 		input.EventTypes[index] = strings.TrimSpace(input.EventTypes[index])
 	}
 	if strings.TrimSpace(input.CountStrategy) == "" {
-		rules, err := s.service.repo.ListRules(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		for _, current := range rules {
-			if current.Code == code {
-				input.CountStrategy = current.CountStrategy
-				break
-			}
-		}
+		input.CountStrategy = current.CountStrategy
 	}
 	if err := validateRuleFields(input.Rule); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("invalid rule configuration"))
@@ -285,7 +304,8 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 	actor, _ := actorID(r)
-	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"revision": updated.Revision}})
+	before, after := eventRuleSnapshot(current), eventRuleSnapshot(updated)
+	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Reason: input.Reason, Metadata: map[string]any{"revision": updated.Revision, "before": before, "after": after, "diff": ruleFieldDiff(before, after)}})
 	writeJSON(w, http.StatusOK, map[string]any{"id": updated.ID, "revision": updated.Revision})
 }
 
@@ -300,19 +320,44 @@ func isRetiredV1IdentityRule(code string) bool {
 
 func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		EventType string `json:"event_type"`
-		Count     int    `json:"count"`
+		EventType string `json:"event_type,omitempty"`
+		Count     int    `json:"count,omitempty"`
 		Rule      Rule   `json:"rule"`
+		Sample    struct {
+			EventType     string `json:"event_type"`
+			ObservedCount int    `json:"observed_count"`
+			UserID        int64  `json:"user_id,omitempty"`
+			SubjectID     string `json:"subject_id,omitempty"`
+			IPHash        string `json:"ip_hash,omitempty"`
+			DeviceHash    string `json:"device_hash,omitempty"`
+		} `json:"sample"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	eventType := strings.TrimSpace(input.Sample.EventType)
+	if eventType == "" {
+		eventType = strings.TrimSpace(input.EventType)
+	}
+	observedCount := input.Sample.ObservedCount
+	if observedCount == 0 && input.Count != 0 {
+		observedCount = input.Count
+	}
 	input.Rule.Enabled = true
-	input.Rule.EventTypes = []string{strings.TrimSpace(input.EventType)}
-	testEvent := EventReport{EventType: input.EventType, UserID: 1, SubjectID: "rule-test-subject", IPHash: "rule-test-ip", DeviceHash: "rule-test-device"}
-	decision := evaluateRulesWithMode([]Rule{input.Rule}, testEvent, func(Rule) int { return input.Count }, "enforce")
+	testEvent := EventReport{EventType: eventType, UserID: input.Sample.UserID, SubjectID: strings.TrimSpace(input.Sample.SubjectID), IPHash: strings.TrimSpace(input.Sample.IPHash), DeviceHash: strings.TrimSpace(input.Sample.DeviceHash)}
+	exclusions := ruleTestExclusions(input.Rule, testEvent, observedCount)
+	decision := Decision{Action: "allow", RiskLevel: "none"}
+	if len(exclusions) == 0 {
+		decision = evaluateRulesWithMode([]Rule{input.Rule}, testEvent, func(Rule) int { return observedCount }, s.cfg.Mode)
+	}
 	matched := len(decision.RuleCodes) > 0
+	evaluation := []map[string]any{
+		{"step": "event_type", "passed": eventType != "" && ruleMatchesEvent(input.Rule, testEvent), "detail": eventType},
+		{"step": "evidence", "passed": len(ruleTestEvidenceExclusions(input.Rule, testEvent)) == 0, "detail": normalizeCountStrategy(input.Rule.CountStrategy)},
+		{"step": "threshold", "passed": observedCount >= input.Rule.Threshold, "detail": map[string]int{"observed": observedCount, "required": input.Rule.Threshold}},
+		{"step": "action", "passed": matched, "detail": map[string]string{"configured": input.Rule.Action, "effective": decision.Action, "mode": s.cfg.Mode}},
+	}
 	actor, _ := actorID(r)
 	reason := decision.Reason
 	if reason == "" {
@@ -320,12 +365,73 @@ func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.service.RecordAudit(r.Context(), AuditReport{
 		ActorID: actor, Action: "rule_test", TargetType: "rule", TargetID: strings.TrimSpace(input.Rule.Code), Result: "success", Reason: reason,
-		Metadata: map[string]any{"matched": matched, "score": decision.Score, "risk_level": decision.RiskLevel, "action": decision.Action, "rule_codes": decision.RuleCodes},
+		Metadata: map[string]any{"matched": matched, "score": decision.Score, "risk_level": decision.RiskLevel, "configured_action": input.Rule.Action, "effective_action": decision.Action, "rule_codes": decision.RuleCodes, "excluded_reasons": exclusions},
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"matched": matched, "score": decision.Score, "decision": decision})
+	writeJSON(w, http.StatusOK, map[string]any{"matched": matched, "score": decision.Score, "decision": decision, "configured_action": input.Rule.Action, "effective_action": decision.Action, "excluded_reasons": exclusions, "evaluation": evaluation})
+}
+
+func eventRuleSnapshot(rule Rule) map[string]any {
+	return map[string]any{"code": rule.Code, "name": rule.Name, "description": rule.Description, "event_types": rule.EventTypes, "count_strategy": rule.CountStrategy, "enabled": rule.Enabled, "window_seconds": rule.WindowSeconds, "threshold": rule.Threshold, "score": rule.Score, "risk_level": rule.RiskLevel, "action": rule.Action, "revision": rule.Revision}
+}
+
+func ruleFieldDiff(before, after map[string]any) map[string]any {
+	diff := map[string]any{}
+	for key, afterValue := range after {
+		beforeValue, exists := before[key]
+		if !exists || !reflect.DeepEqual(beforeValue, afterValue) {
+			diff[key] = map[string]any{"before": beforeValue, "after": afterValue}
+		}
+	}
+	return diff
+}
+
+func ruleTestEvidenceExclusions(rule Rule, event EventReport) []string {
+	switch normalizeCountStrategy(rule.CountStrategy) {
+	case countStrategyEmailSubjectEvents:
+		if strings.TrimSpace(event.SubjectID) == "" {
+			return []string{"missing_subject_id"}
+		}
+	case countStrategyIPDistinctSuccessUsers:
+		if strings.TrimSpace(event.IPHash) == "" {
+			return []string{"missing_ip_hash"}
+		}
+	case countStrategyBrowserDistinctSuccessUsers, countStrategyAPIClientDistinctUsers:
+		if strings.TrimSpace(event.DeviceHash) == "" {
+			return []string{"missing_device_hash"}
+		}
+	case countStrategyIPBrowserCooccurrence:
+		var result []string
+		if strings.TrimSpace(event.IPHash) == "" {
+			result = append(result, "missing_ip_hash")
+		}
+		if strings.TrimSpace(event.DeviceHash) == "" {
+			result = append(result, "missing_device_hash")
+		}
+		return result
+	default:
+		if event.UserID <= 0 {
+			return []string{"missing_user_id"}
+		}
+	}
+	return nil
+}
+
+func ruleTestExclusions(rule Rule, event EventReport, observedCount int) []string {
+	result := ruleTestEvidenceExclusions(rule, event)
+	if strings.TrimSpace(event.EventType) == "" {
+		result = append(result, "missing_event_type")
+	} else if !ruleMatchesEvent(rule, event) {
+		result = append(result, "event_type_not_configured")
+	}
+	if observedCount < 0 {
+		result = append(result, "invalid_observed_count")
+	} else if observedCount < rule.Threshold {
+		result = append(result, "threshold_not_reached")
+	}
+	return result
 }
 
 func (s *HTTPServer) handleAudit(w http.ResponseWriter, r *http.Request) {

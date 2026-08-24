@@ -224,12 +224,17 @@ func (s *HTTPServer) handleNetworkIdentityLabel(w http.ResponseWriter, r *http.R
 		return
 	}
 	actor, _ := actorID(r)
+	impact, err := s.identity.repo.NetworkLabelImpact(r.Context(), networkID, input.Label)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if err := s.identity.repo.LabelSharedNetwork(r.Context(), networkID, actor, input.Label, input.Reason); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "label_shared_network", TargetType: "network_identity", TargetID: strconv.FormatInt(networkID, 10), Result: "success", Reason: input.Reason, Metadata: map[string]any{"label": input.Label}})
-	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
+	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "label_shared_network", TargetType: "network_identity", TargetID: strconv.FormatInt(networkID, 10), Result: "success", Reason: input.Reason, Metadata: map[string]any{"before_label": impact.CurrentLabel, "label": input.Label, "affected_accounts": impact.AffectedAccountCount, "affected_signals": impact.AffectedSignalCount, "resolved_domains": impact.ResolvedDomains}})
+	writeJSON(w, http.StatusOK, map[string]any{"updated": true, "impact": impact})
 }
 
 func numericPathID(path, prefix, suffix string) (int64, bool) {

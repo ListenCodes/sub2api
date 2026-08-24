@@ -79,12 +79,13 @@ type IdentityFact struct {
 }
 
 type CompositeRegistrationEvaluation struct {
-	RuleCode      string
-	WindowSeconds int
-	Threshold     int
-	Score         int
-	Revision      int
-	AccountCount  int
+	RuleCode         string
+	WindowSeconds    int
+	Threshold        int
+	Score            int
+	Revision         int
+	AccountCount     int
+	ConfiguredAction string
 }
 
 type PersistedIdentityEvent struct {
@@ -159,6 +160,7 @@ type NetworkIdentityRow struct {
 	UnavailableImpact      string `json:"unavailable_impact,omitempty"`
 	DataSource             string `json:"data_source"`
 	NetworkLabel           string `json:"network_label,omitempty"`
+	NetworkLabelReason     string `json:"network_label_reason,omitempty"`
 	FirstSeenAt            string `json:"first_seen_at"`
 	LastSeenAt             string `json:"last_seen_at"`
 	RegistrationSuccesses  int64  `json:"registration_success_count"`
@@ -243,21 +245,69 @@ type IdentityHealth struct {
 }
 
 type IdentityRule struct {
-	Code              string `json:"code"`
-	Domain            string `json:"domain"`
-	ConfiguredEnabled bool   `json:"configured_enabled"`
-	Enabled           bool   `json:"enabled"`
-	State             string `json:"state"`
-	WindowSeconds     int    `json:"window_seconds"`
-	Threshold         int    `json:"threshold"`
-	Score             int    `json:"score"`
-	Mode              string `json:"mode"`
-	Revision          int    `json:"revision"`
-	SignalFamily      string `json:"signal_family"`
-	SubjectKind       string `json:"subject_kind"`
-	ActiveFrom        string `json:"active_from"`
-	ActiveUntil       string `json:"active_until,omitempty"`
-	UpdatedAt         string `json:"updated_at"`
+	Code                string   `json:"code"`
+	Domain              string   `json:"domain"`
+	ConfiguredEnabled   bool     `json:"configured_enabled"`
+	Enabled             bool     `json:"enabled"`
+	State               string   `json:"state"`
+	WindowSeconds       int      `json:"window_seconds"`
+	Threshold           int      `json:"threshold"`
+	Score               int      `json:"score"`
+	Mode                string   `json:"mode"`
+	DetectionState      string   `json:"detection_state"`
+	DecisionMode        string   `json:"decision_mode"`
+	ConfiguredAction    string   `json:"configured_action"`
+	EffectiveAction     string   `json:"effective_action"`
+	DataQuality         string   `json:"data_quality"`
+	EnforcementEligible bool     `json:"enforcement_eligible"`
+	ReasonCodes         []string `json:"reason_codes"`
+	ConfigSource        string   `json:"config_source"`
+	Revision            int      `json:"revision"`
+	SignalFamily        string   `json:"signal_family"`
+	SubjectKind         string   `json:"subject_kind"`
+	ActiveFrom          string   `json:"active_from"`
+	ActiveUntil         string   `json:"active_until,omitempty"`
+	UpdatedAt           string   `json:"updated_at"`
+}
+
+type IdentityRuleDraft struct {
+	RuleCode         string `json:"rule_code"`
+	BaseRevision     int    `json:"base_revision"`
+	WindowSeconds    int    `json:"window_seconds"`
+	Threshold        int    `json:"threshold"`
+	Score            int    `json:"score"`
+	ConfiguredAction string `json:"configured_action"`
+	Reason           string `json:"reason"`
+	UpdatedBy        int64  `json:"updated_by"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+type IdentityRuleSimulation struct {
+	ID                       int64             `json:"id"`
+	RuleCode                 string            `json:"rule_code"`
+	BaseRevision             int               `json:"base_revision"`
+	Draft                    IdentityRuleDraft `json:"draft"`
+	AffectedSignalCount      int64             `json:"affected_signal_count"`
+	AffectedAccountCount     int64             `json:"affected_account_count"`
+	OpenCaseCount            int64             `json:"open_case_count"`
+	ConfiguredAction         string            `json:"configured_action"`
+	ProjectedEffectiveAction string            `json:"projected_effective_action"`
+	ExistingAccountsChanged  bool              `json:"existing_accounts_changed"`
+	CandidateAccountEffect   string            `json:"candidate_account_effect"`
+	Warnings                 []string          `json:"warnings"`
+	ExpiresAt                string            `json:"expires_at"`
+	CreatedAt                string            `json:"created_at"`
+}
+
+type NetworkLabelImpact struct {
+	NetworkID             int64    `json:"network_id"`
+	CurrentLabel          string   `json:"current_label,omitempty"`
+	ProposedLabel         string   `json:"proposed_label,omitempty"`
+	AffectedSignalCount   int64    `json:"affected_signal_count"`
+	AffectedAccountCount  int64    `json:"affected_account_count"`
+	AffectedDecisionCount int64    `json:"affected_decision_count"`
+	ResolvedDomains       []string `json:"resolved_domains"`
+	RequiresRebuild       bool     `json:"requires_rebuild"`
 }
 
 type IdentityDeliveryReport struct {

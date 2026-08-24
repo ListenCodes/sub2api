@@ -139,11 +139,11 @@ type AuditFilter struct {
 var auditCategoryActions = map[string]map[string]struct{}{
 	"security": {
 		"ban": {}, "unban": {}, "auto_ban": {}, "mark_processed": {},
-		"claim_risk_review_case": {}, "review_risk_case": {}, "label_shared_network": {},
+		"claim_risk_review_case": {}, "create_risk_review_case": {}, "observe_risk_review_case": {}, "review_risk_case": {}, "label_shared_network": {}, "revoke_shared_network_label": {},
 		"identity_reject_candidate": {},
 	},
 	"rules": {
-		"create_rule": {}, "update_rule": {}, "rule_test": {}, "disable_identity_rule": {},
+		"create_rule": {}, "update_rule": {}, "rule_test": {}, "simulate_identity_rule": {}, "publish_identity_rule": {}, "enable_identity_rule": {}, "disable_identity_rule": {}, "rollback_identity_rule": {},
 		"purge_legacy_v1": {}, "identity_rebuild_dry_run": {}, "identity_rebuild": {},
 	},
 	"sensitive": {"view_identity_detail": {}},
@@ -547,6 +547,15 @@ func (r *MemoryRepository) InsertAudit(_ context.Context, audit AuditRecord) err
 	enrichAuditRecord(&audit)
 	if audit.AuditKey != "" {
 		if _, exists := r.auditKeys[audit.AuditKey]; exists {
+			for index := range r.audits {
+				if r.audits[index].AuditKey == audit.AuditKey {
+					r.audits[index].Metadata = mergeAuditMetadata(r.audits[index].Metadata, audit.Metadata)
+					if audit.Result == "failed" {
+						r.audits[index].Result = "failed"
+					}
+					break
+				}
+			}
 			return nil
 		}
 		r.auditKeys[audit.AuditKey] = struct{}{}
@@ -557,6 +566,46 @@ func (r *MemoryRepository) InsertAudit(_ context.Context, audit AuditRecord) err
 	}
 	r.audits = append(r.audits, audit)
 	return nil
+}
+
+func mergeAuditMetadata(current, incoming map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, value := range current {
+		result[key] = value
+	}
+	for key, value := range incoming {
+		result[key] = value
+	}
+	sections := map[string]struct{}{}
+	for _, source := range []map[string]any{current, incoming} {
+		if section, ok := source["section"].(string); ok && section != "" {
+			sections[section] = struct{}{}
+		}
+		if values, ok := source["sections"].([]string); ok {
+			for _, section := range values {
+				if section != "" {
+					sections[section] = struct{}{}
+				}
+			}
+		}
+		if values, ok := source["sections"].([]any); ok {
+			for _, value := range values {
+				if section, ok := value.(string); ok && section != "" {
+					sections[section] = struct{}{}
+				}
+			}
+		}
+	}
+	if len(sections) > 0 {
+		values := make([]string, 0, len(sections))
+		for section := range sections {
+			values = append(values, section)
+		}
+		sort.Strings(values)
+		result["sections"] = values
+		delete(result, "section")
+	}
+	return result
 }
 
 func (r *MemoryRepository) SetSubjectPending(_ context.Context, userID int64, pending bool) error {

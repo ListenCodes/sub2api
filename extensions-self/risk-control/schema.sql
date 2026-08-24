@@ -303,6 +303,12 @@ ALTER TABLE risk_identity_rules ADD COLUMN IF NOT EXISTS signal_family VARCHAR(8
 ALTER TABLE risk_identity_rules ADD COLUMN IF NOT EXISTS subject_kind VARCHAR(32) NOT NULL DEFAULT 'browser_instance';
 ALTER TABLE risk_identity_rules ADD COLUMN IF NOT EXISTS active_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE risk_identity_rules ADD COLUMN IF NOT EXISTS active_until TIMESTAMPTZ;
+ALTER TABLE risk_identity_rules ADD COLUMN IF NOT EXISTS configured_action VARCHAR(32) NOT NULL DEFAULT 'observe';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='risk_identity_rules'::regclass AND conname='risk_identity_rules_configured_action_check') THEN
+        ALTER TABLE risk_identity_rules ADD CONSTRAINT risk_identity_rules_configured_action_check CHECK (configured_action IN ('observe','review','reject_candidate','auto_ban'));
+    END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION risk_reject_retired_v1_rule()
 RETURNS TRIGGER AS $$
@@ -326,6 +332,38 @@ DO $$ BEGIN
         FOR EACH ROW EXECUTE FUNCTION risk_reject_retired_v1_rule();
     END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS risk_identity_rule_drafts (
+    rule_code VARCHAR(80) PRIMARY KEY REFERENCES risk_identity_rules(code) ON DELETE CASCADE,
+    base_revision INTEGER NOT NULL,
+    window_seconds INTEGER NOT NULL CHECK (window_seconds > 0),
+    threshold INTEGER NOT NULL CHECK (threshold > 0),
+    score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+    configured_action VARCHAR(32) NOT NULL CHECK (configured_action IN ('observe','review','reject_candidate','auto_ban')),
+    reason VARCHAR(500) NOT NULL,
+    updated_by BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS risk_identity_rule_simulations (
+    id BIGSERIAL PRIMARY KEY,
+    rule_code VARCHAR(80) NOT NULL REFERENCES risk_identity_rules(code) ON DELETE CASCADE,
+    base_revision INTEGER NOT NULL,
+    draft_snapshot JSONB NOT NULL,
+    result_snapshot JSONB NOT NULL,
+    requested_by BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_risk_identity_rule_simulations_expiry ON risk_identity_rule_simulations(rule_code,expires_at DESC);
+CREATE TABLE IF NOT EXISTS risk_shared_network_label_history (
+    id BIGSERIAL PRIMARY KEY,
+    network_identity_id BIGINT NOT NULL REFERENCES risk_network_identities(id),
+    action VARCHAR(16) NOT NULL CHECK (action IN ('apply','revoke')),
+    label VARCHAR(32) NOT NULL,
+    reason VARCHAR(500) NOT NULL,
+    actor_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 DO $$ BEGIN
     IF EXISTS (
         SELECT 1 FROM pg_constraint
@@ -351,6 +389,13 @@ UPDATE risk_identity_rules SET signal_family='registration_identity',subject_kin
 INSERT INTO risk_identity_rules(code,domain,enabled,window_seconds,threshold,score,mode,signal_family,subject_kind)
 VALUES ('v2_api_client_accounts','device',TRUE,86400,2,0,'shadow','api_client_observation','api_client')
 ON CONFLICT(code) DO NOTHING;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=7) THEN
+    UPDATE risk_identity_rules SET configured_action='review' WHERE code IN ('v2_registration_ip_accounts','v2_registration_device_accounts');
+    UPDATE risk_identity_rules SET configured_action='reject_candidate' WHERE code='v2_registration_composite_accounts';
+    INSERT INTO risk_schema_migrations(version) VALUES (7);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS risk_rule_versions (
     id BIGSERIAL PRIMARY KEY,
@@ -370,7 +415,7 @@ CREATE INDEX IF NOT EXISTS idx_risk_rule_versions_active ON risk_rule_versions(r
 
 INSERT INTO risk_rule_versions(rule_kind,rule_code,revision,signal_family,domain,active_from,active_until,enabled,rule_snapshot)
 SELECT 'identity',code,revision,signal_family,domain,active_from,active_until,enabled,
-       jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind)
+       jsonb_build_object('code',code,'domain',domain,'window_seconds',window_seconds,'threshold',threshold,'score',score,'mode',mode,'configured_action',configured_action,'revision',revision,'signal_family',signal_family,'subject_kind',subject_kind)
 FROM risk_identity_rules
 ON CONFLICT(rule_kind,rule_code,revision) DO NOTHING;
 
