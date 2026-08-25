@@ -77,6 +77,36 @@ func TestProxyRiskControlResolvesAuditAccountsAndEnrichesThePage(t *testing.T) {
 	}
 }
 
+func TestProxyRiskControlKeepsRuleTargetForRuleAuditCategories(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("target"); got != "v2_registration_composite_accounts" {
+			t.Errorf("target = %q", got)
+		}
+		if r.URL.Query().Has("target_user_id") {
+			t.Errorf("configuration target was rewritten as an account: %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"items":[],"total":0,"page":1,"page_size":20}`)
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "audit-rule-target-secret")
+
+	h := NewCustomUserHandler(nil, nil, serviceClientFromEnvForTest())
+	engine := gin.New()
+	engine.GET("/admin/user-risk-control/*path", func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 99})
+		h.ProxyRiskControl(c)
+	})
+	for _, category := range []string{"configuration", "testing", "rules"} {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin/user-risk-control/audit?category="+category+"&target=v2_registration_composite_accounts", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("category=%s status=%d body=%s", category, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestProxyRiskControlForwardsAuthenticatedAdminAndAllowlistedPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

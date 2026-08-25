@@ -60,7 +60,7 @@
 		  </section>
 		  <section v-else-if="activeRuleView === 'identity' && identityTool === 'versions'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-rule-versions">
 			<div class="flex flex-wrap gap-2"><button v-for="rule in identityRules" :key="rule.code" type="button" class="btn btn-sm" :class="selectedIdentityRule === rule.code ? 'btn-primary' : 'btn-secondary'" @click="selectIdentityRule(rule.code)">{{ identityRuleName(rule.code) }}</button></div>
-			<div v-if="selectedRule" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-3 dark:border-dark-700"><div><strong class="text-sm text-gray-900 dark:text-white">{{ identityRuleName(selectedRule.code) }}</strong><p class="mt-1 text-xs text-gray-500">当前第 {{ selectedRule.revision }} 版 · {{ identityRuleStatus(selectedRule) }}</p></div><button v-if="selectedRule.configured_enabled" type="button" class="btn btn-danger btn-sm" data-testid="disable-identity-rule" @click="openDisableRule(selectedRule)">停用</button></div>
+			<div v-if="selectedRule" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-3 dark:border-dark-700"><div><strong class="text-sm text-gray-900 dark:text-white">{{ identityRuleName(selectedRule.code) }}</strong><p class="mt-1 text-xs text-gray-500">当前第 {{ selectedRule.revision }} 版 · {{ identityRuleStatus(selectedRule) }}</p></div><button type="button" class="btn btn-secondary btn-sm" data-testid="edit-selected-identity-rule" @click="openIdentityEditor(selectedRule)"><Icon name="edit" size="sm" />编辑</button></div>
 			<p v-if="auxError" class="mt-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
 			<div class="mt-3 space-y-2"><div v-for="(version, index) in ruleVersions" :key="version.revision" class="border-b border-gray-100 py-2 text-sm dark:border-dark-700"><div class="flex flex-wrap items-center justify-between gap-3"><span>第 {{ version.revision }} 版 · {{ versionDomainLabel(version) }}</span><span class="flex flex-wrap items-center gap-2"><span :class="version.enabled ? 'text-amber-700' : 'text-gray-500'">{{ versionDecisionLabel(version) }} · {{ formatDate(version.active_from) }}<template v-if="version.active_until"> 至 {{ formatDate(version.active_until) }}</template></span><button v-if="selectedRule && version.revision !== selectedRule.revision" type="button" class="btn btn-secondary btn-sm" @click="openRollback(version)">回滚到此版</button></span></div><p class="mt-1 break-words text-xs text-gray-500">{{ versionDiffLabel(version, ruleVersions[index + 1]) }}</p></div></div>
 		  </section>
@@ -177,7 +177,7 @@
             <div><label class="input-label">处置动作</label><Select v-model="draft.action" data-testid="rule-action-create" :options="ruleActionOptions" /></div>
           </div>
         </section>
-		<TextArea v-model="draft.reason" data-testid="create-rule-reason" label="创建原因" />
+		<TextArea v-model="draft.reason" data-testid="create-rule-reason" label="创建备注（可选）" placeholder="留空时由系统记录创建操作" />
         <p v-if="createValidationError" class="text-sm text-red-600 dark:text-red-300" data-testid="create-rule-error">{{ createValidationError }}</p>
       </form>
       <template #footer>
@@ -207,7 +207,7 @@
           <div><label class="input-label">处置动作</label><Select v-model="editDraft.action" data-testid="rule-action" :options="ruleActionOptions" /></div>
 		  <div><label class="input-label">计数口径</label><Select v-model="editDraft.countStrategy" data-testid="rule-count-strategy-edit" :options="countStrategyOptions" /></div>
         </div>
-		<TextArea v-model="editReason" data-testid="edit-rule-reason" label="修改原因" />
+		<TextArea v-model="editReason" data-testid="edit-rule-reason" label="修改备注（可选）" placeholder="留空时由系统记录修改操作" />
         <p v-if="editValidationError" class="text-sm text-red-600 dark:text-red-300" data-testid="edit-rule-error">{{ editValidationError }}</p>
       </form>
       <template #footer>
@@ -223,19 +223,13 @@
 	<BaseDialog :show="Boolean(identityEditor)" :title="identityEditorMode === 'rollback' ? '回滚身份规则' : '编辑身份规则'" width="wide" :close-on-click-outside="true" @close="closeIdentityEditor">
 		<form v-if="identityEditor" class="space-y-5" data-testid="identity-rule-editor" @submit.prevent>
 			<div class="border-y border-gray-200 py-3 text-sm dark:border-dark-700"><p class="font-medium text-gray-900 dark:text-white">{{ identityRuleName(identityEditor.code) }}</p><p class="mt-1 text-xs text-gray-500">当前第 {{ identityEditor.revision }} 版 · {{ identityRuleStatus(identityEditor) }}<template v-if="identityRollbackRevision"> · 目标第 {{ identityRollbackRevision }} 版</template></p></div>
+			<div v-if="identityEditorMode === 'edit'" class="flex items-center justify-between border-b border-gray-200 pb-4 dark:border-dark-700"><div><p class="text-sm font-medium text-gray-900 dark:text-white">启用规则</p><p class="mt-1 text-xs text-gray-500">保存后立即按当前运行模式生效</p></div><Toggle v-model="identityEnabled" data-testid="identity-rule-enabled" /></div>
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2"><div><label class="input-label">时间窗口（秒）</label><input v-model.number="identityDraft.window_seconds" type="number" min="1" class="input w-full" data-testid="identity-rule-window" /></div><div><label class="input-label">触发阈值</label><input v-model.number="identityDraft.threshold" type="number" min="1" class="input w-full" data-testid="identity-rule-threshold" /></div><div><label class="input-label">风险分</label><input v-model.number="identityDraft.score" type="number" min="0" max="100" class="input w-full" data-testid="identity-rule-score" /></div><div><label class="input-label">配置动作</label><Select v-model="identityDraft.configured_action" data-testid="identity-rule-action" :options="identityActionOptions" /></div></div>
-			<TextArea v-model="identityDraft.reason" label="变更原因" required data-testid="identity-rule-reason" />
-			<div v-if="identitySimulation" class="border-y border-gray-200 py-3 text-sm dark:border-dark-700" data-testid="identity-rule-impact"><p class="font-medium text-gray-900 dark:text-white">影响 {{ identitySimulation.affected_account_count }} 个账号、{{ identitySimulation.affected_signal_count }} 条当前信号、{{ identitySimulation.open_case_count }} 个未闭环案件</p><p class="mt-1 text-gray-600 dark:text-gray-300">配置动作：{{ identityActionLabel(identitySimulation.configured_action) }} · 预计实际动作：{{ identityActionLabel(identitySimulation.projected_effective_action) }}</p><p class="mt-1 text-xs text-gray-500">{{ identitySimulation.candidate_account_effect || '不会自动改变已有账号状态。' }}</p><p v-for="warning in identitySimulation.warnings" :key="warning" class="mt-1 text-xs text-amber-600">{{ warning }}</p></div>
-			<div v-if="identityHighImpact" class="space-y-3 border-y border-red-200 py-3 text-sm dark:border-red-900/50"><label class="flex items-start gap-2"><input v-model="identityConfirmed" type="checkbox" class="mt-0.5" />我已核对影响预览，确认不会自动封禁已有账号</label><div><label class="input-label">输入 {{ identityConfirmationText }} 确认</label><input v-model="identityConfirmation" class="input w-full font-mono" data-testid="identity-rule-confirmation" /></div></div>
+			<TextArea v-model="identityDraft.reason" label="变更备注（可选）" placeholder="留空时由系统记录操作类型" data-testid="identity-rule-reason" />
+			<p v-if="identityHasChanges" class="text-xs text-gray-500" data-testid="identity-rule-change-summary">{{ identityChangeSummary }}</p>
 			<p v-if="identityEditorError" class="text-sm text-red-600 dark:text-red-300">{{ identityEditorError }}</p>
 		</form>
-		<template #footer><button type="button" class="btn btn-secondary" @click="closeIdentityEditor">取消</button><button v-if="identityEditorMode === 'edit'" type="button" class="btn btn-secondary" data-testid="save-identity-draft" :disabled="identityEditorSaving" @click="saveIdentityDraft">保存草稿</button><button type="button" class="btn btn-secondary" data-testid="simulate-identity-rule" :disabled="identityEditorSaving" @click="simulateIdentityDraft">模拟影响</button><button v-if="identityEditorMode === 'edit' && identityEditor && !identityEditor.configured_enabled" type="button" class="btn btn-primary" data-testid="enable-identity-rule" :disabled="identityEditorSaving" @click="runIdentityLifecycle('enable')">启用</button><button type="button" class="btn btn-primary" data-testid="publish-identity-rule" :disabled="identityEditorSaving" @click="runIdentityLifecycle(identityEditorMode === 'rollback' ? 'rollback' : 'publish')">{{ identityEditorMode === 'rollback' ? '确认回滚' : '受控发布' }}</button></template>
-	</BaseDialog>
-
-	<BaseDialog :show="Boolean(disableTarget)" title="停用身份规则" width="narrow" :close-on-click-outside="true" @close="closeDisableRule">
-		<p class="text-sm text-gray-600 dark:text-gray-300">{{ disableTarget ? identityRuleName(disableTarget.code) : '' }}</p>
-		<TextArea v-model="disableReason" class="mt-4" data-testid="disable-rule-reason" label="停用原因" required :error="disableValidationError" @update:model-value="disableValidationError = ''" />
-		<template #footer><button type="button" class="btn btn-secondary" @click="closeDisableRule">取消</button><button type="button" class="btn btn-danger" data-testid="confirm-disable-rule" :disabled="auxLoading" @click="disableSelectedRule">停用</button></template>
+		<template #footer><button type="button" class="btn btn-secondary" @click="closeIdentityEditor">取消</button><button v-if="identityEditorConflict" type="button" class="btn btn-secondary" data-testid="reload-identity-rule" :disabled="identityEditorSaving" @click="reloadIdentityRuleEditor">重新加载</button><button type="button" class="btn btn-primary" data-testid="publish-identity-rule" :disabled="identityEditorSaving || identityEditorConflict || !identityHasChanges" @click="publishIdentityRule">{{ identityEditorSaving ? '正在保存' : identitySubmitLabel }}</button></template>
 	</BaseDialog>
 	<BaseDialog :show="rebuildConfirmOpen" title="确认写入历史回放" width="narrow" :close-on-click-outside="true" :z-index="80" @close="closeRebuildConfirmation">
 		<div data-testid="rebuild-confirm-dialog"><p class="text-sm text-gray-600 dark:text-gray-300">本次写入将使用刚完成并锁定的预检范围。系统会再次校验审批时间、规则状态、证据范围和数据质量；不满足条件时不会写入。</p><label class="mt-4 flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200"><input v-model="rebuildConfirmed" type="checkbox" class="mt-0.5" data-testid="rebuild-confirm-ack" />我已核对预检范围和预计影响</label></div>
@@ -244,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import UserRiskControlTabs from '@/views/admin/extensions/UserRiskControlTabs.vue'
@@ -257,7 +251,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
-import { userRiskControlV2API, type IdentityConfiguredAction, type IdentityHealth, type IdentityRebuildResult, type IdentityRule, type IdentityRuleDraft, type IdentityRuleEffect, type IdentityRuleSimulation, type IdentityRuleVersion, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
+import { userRiskControlV2API, type IdentityConfiguredAction, type IdentityHealth, type IdentityRebuildResult, type IdentityRule, type IdentityRuleDraft, type IdentityRuleEffect, type IdentityRuleVersion, type Rule, type RuleCreateInput } from '@/api/admin/userRiskControlV2'
 import { formatRiskAction, formatRiskLevel, formatRiskType, riskActionOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
@@ -297,9 +291,6 @@ const rebuildConfirmOpen = ref(false)
 const rebuildConfirmed = ref(false)
 const auxLoading = ref(false)
 const auxError = ref('')
-const disableTarget = ref<IdentityRule | null>(null)
-const disableReason = ref('')
-const disableValidationError = ref('')
 const editReason = ref('')
 let identityVersionRequest = 0
 const testSample = reactive({ event_type: 'login_failure', observed_count: 0, user_id: 0, subject_id: '', ip_hash: '', device_hash: '' })
@@ -307,8 +298,9 @@ const identityEditor = ref<IdentityRule | null>(null)
 const identityEditorMode = ref<'edit' | 'rollback'>('edit')
 const identityRollbackRevision = ref<number | undefined>()
 const identityDraft = reactive<IdentityRuleDraft>({ rule_code: '', base_revision: 1, window_seconds: 600, threshold: 1, score: 0, configured_action: 'observe', reason: '' })
-const identitySimulation = ref<IdentityRuleSimulation | null>(null)
-const identityEditorSaving = ref(false), identityEditorError = ref(''), identityConfirmed = ref(false), identityConfirmation = ref('')
+const identityEnabled = ref(false)
+const identityEditorSaving = ref(false), identityEditorError = ref('')
+const identityEditorConflict = ref(false)
 const columns: Column[] = [
   { key: 'rule', label: '规则', sortable: true },
   { key: 'eventTypes', label: '事件类型' },
@@ -347,8 +339,23 @@ const effectiveIdentityRuleCount = computed(() => {
 const identityRulesOperating = computed(() => Boolean(identityHealth.value?.enabled && identityHealth.value?.admin_enabled && identityRulesActive.value && effectiveIdentityRuleCount.value > 0))
 const compositeEnforcementActive = computed(() => Boolean(identityHealth.value?.mode === 'enforce' && identityHealth.value?.features?.composite_enforcement))
 const selectedRule = computed(() => identityRules.value.find((rule) => rule.code === selectedIdentityRule.value) || null)
-const identityHighImpact = computed(() => identityDraft.configured_action === 'reject_candidate' || identityDraft.configured_action === 'auto_ban')
-const identityConfirmationText = computed(() => identityEditor.value ? `PUBLISH ${identityEditor.value.code}` : 'PUBLISH')
+const identityHasChanges = computed(() => {
+	const rule = identityEditor.value
+	if (!rule) return false
+	return identityDraft.window_seconds !== rule.window_seconds || identityDraft.threshold !== rule.threshold || identityDraft.score !== rule.score || identityDraft.configured_action !== identityConfiguredAction(rule) || (identityEditorMode.value === 'edit' && identityEnabled.value !== rule.configured_enabled)
+})
+const identityChangeSummary = computed(() => {
+	const rule = identityEditor.value
+	if (!rule) return ''
+	const changes: string[] = []
+	if (identityEditorMode.value === 'edit' && identityEnabled.value !== rule.configured_enabled) changes.push(identityEnabled.value ? '启用规则' : '停用规则')
+	if (identityDraft.window_seconds !== rule.window_seconds) changes.push(`窗口 ${rule.window_seconds} → ${identityDraft.window_seconds} 秒`)
+	if (identityDraft.threshold !== rule.threshold) changes.push(`阈值 ${rule.threshold} → ${identityDraft.threshold}`)
+	if (identityDraft.score !== rule.score) changes.push(`风险分 ${rule.score} → ${identityDraft.score}`)
+	if (identityDraft.configured_action !== identityConfiguredAction(rule)) changes.push(`动作 ${identityActionLabel(identityConfiguredAction(rule))} → ${identityActionLabel(identityDraft.configured_action)}`)
+	return `本次修改：${changes.join('；')}`
+})
+const identitySubmitLabel = computed(() => identityEditorMode.value === 'rollback' ? `回滚到第 ${identityRollbackRevision.value} 版` : !identityEditor.value?.configured_enabled && identityEnabled.value ? '保存并启用' : identityEditor.value?.configured_enabled && !identityEnabled.value ? '保存并停用' : '保存并生效')
 const identityRulesHeader = computed(() => compositeEnforcementActive.value ? '综合注册候选处置已开启' : identityRulesOperating.value ? '身份检测运行中' : identityRules.value.some((rule) => ['paused', 'degraded', 'not_evaluable'].includes(rule.state)) ? '数据质量保护中' : '尚未启用')
 const hasEffectiveSamples = computed(() => ruleEffects.value.some((effect) => effect.hit_events > 0 || effect.unique_subjects > 0 || effect.sample_user_ids?.length))
 const identityRulesStartedAt = computed(() => {
@@ -421,23 +428,61 @@ async function setRuleView(view: RuleView) { activeRuleView.value = view; auxErr
 async function setIdentityTool(tool: IdentityTool) { identityTool.value = tool; auxError.value = ''; if (tool === 'effects' && !ruleEffects.value.length) await loadEffects(); if (tool === 'versions' && identityRules.value.length && !selectedIdentityRule.value) await selectIdentityRule(identityRules.value[0].code) }
 async function loadEffects() { auxLoading.value = true; auxError.value = ''; try { ruleEffects.value = await userRiskControlV2API.listIdentityRuleEffects() } catch (err) { auxError.value = errorMessage(err, '运行效果暂时不可用') } finally { auxLoading.value = false } }
 async function selectIdentityRule(code: string) { const request = ++identityVersionRequest; selectedIdentityRule.value = code; ruleVersions.value = []; auxLoading.value = true; auxError.value = ''; try { const versions = await userRiskControlV2API.listIdentityRuleVersions(code); if (request === identityVersionRequest && selectedIdentityRule.value === code) ruleVersions.value = versions } catch (err) { if (request === identityVersionRequest) auxError.value = errorMessage(err, '规则版本暂时不可用') } finally { if (request === identityVersionRequest) auxLoading.value = false } }
-function assignIdentityDraft(rule: IdentityRule, values?: Partial<IdentityRuleDraft>) { Object.assign(identityDraft, { rule_code: rule.code, base_revision: rule.revision, window_seconds: rule.window_seconds, threshold: rule.threshold, score: rule.score, configured_action: identityConfiguredAction(rule), reason: '', ...values }); identitySimulation.value = null; identityConfirmed.value = false; identityConfirmation.value = ''; identityEditorError.value = '' }
-function openIdentityEditor(rule: IdentityRule) { identityEditor.value = rule; identityEditorMode.value = 'edit'; identityRollbackRevision.value = undefined; assignIdentityDraft(rule) }
+function assignIdentityDraft(rule: IdentityRule, values?: Partial<IdentityRuleDraft>) { Object.assign(identityDraft, { rule_code: rule.code, base_revision: rule.revision, window_seconds: rule.window_seconds, threshold: rule.threshold, score: rule.score, configured_action: identityConfiguredAction(rule), reason: '', ...values }); identityEnabled.value = rule.configured_enabled; identityEditorError.value = ''; identityEditorConflict.value = false }
+function openIdentityEditor(rule: IdentityRule) { identityEditor.value = rule; identityEditorMode.value = 'edit'; identityRollbackRevision.value = undefined; notice.value = ''; assignIdentityDraft(rule) }
 function closeIdentityEditor() { if (!identityEditorSaving.value) identityEditor.value = null }
 function openRollback(version: IdentityRuleVersion) { if (!selectedRule.value || !ruleVersions.value.some((item) => item.revision === version.revision)) return; const snapshot = version.rule_snapshot || {}; identityEditor.value = selectedRule.value; identityEditorMode.value = 'rollback'; identityRollbackRevision.value = version.revision; assignIdentityDraft(selectedRule.value, { window_seconds: Number(snapshot.window_seconds || selectedRule.value.window_seconds), threshold: Number(snapshot.threshold || selectedRule.value.threshold), score: Number(snapshot.score ?? selectedRule.value.score), configured_action: String(snapshot.configured_action || 'observe') as IdentityConfiguredAction }) }
-function validateIdentityEditor() { if (!identityDraft.reason.trim()) return '变更原因不能为空。'; if (identityDraft.window_seconds <= 0 || identityDraft.threshold <= 0 || identityDraft.score < 0 || identityDraft.score > 100) return '窗口、阈值或风险分无效。'; if (identityHighImpact.value && identityDraft.configured_action === 'reject_candidate' && identityEditor.value?.code !== 'v2_registration_composite_accounts') return '只有综合注册规则可配置拒绝候选。'; return '' }
-async function saveIdentityDraft() { if (!identityEditor.value) return false; const validation = validateIdentityEditor(); if (validation) { identityEditorError.value = validation; return false } identityEditorSaving.value = true; identityEditorError.value = ''; try { const payload = { base_revision: identityDraft.base_revision, window_seconds: identityDraft.window_seconds, threshold: identityDraft.threshold, score: identityDraft.score, configured_action: identityDraft.configured_action, reason: identityDraft.reason }; const saved = await userRiskControlV2API.saveIdentityRuleDraft(identityEditor.value.code, payload); Object.assign(identityDraft, saved); identitySimulation.value = null; notice.value = '身份规则草稿已保存'; return true } catch (err) { identityEditorError.value = errorMessage(err, '草稿保存失败'); return false } finally { identityEditorSaving.value = false } }
-async function simulateIdentityDraft() { if (!identityEditor.value) return; if (identityEditorMode.value === 'edit' && !(await saveIdentityDraft())) return; identityEditorSaving.value = true; identityEditorError.value = ''; try { identitySimulation.value = await userRiskControlV2API.simulateIdentityRule(identityEditor.value.code, identityEditorMode.value === 'rollback' ? identityRollbackRevision.value : undefined) } catch (err) { identityEditorError.value = errorMessage(err, '模拟失败') } finally { identityEditorSaving.value = false } }
-function identitySimulationMatchesDraft() { const simulation = identitySimulation.value; const draft = simulation?.draft; return Boolean(simulation && new Date(simulation.expires_at).getTime() > Date.now() && draft && draft.rule_code === identityDraft.rule_code && draft.base_revision === identityDraft.base_revision && draft.window_seconds === identityDraft.window_seconds && draft.threshold === identityDraft.threshold && draft.score === identityDraft.score && draft.configured_action === identityDraft.configured_action) }
-watch(() => [identityDraft.base_revision, identityDraft.window_seconds, identityDraft.threshold, identityDraft.score, identityDraft.configured_action], () => { if (identitySimulation.value && !identitySimulationMatchesDraft()) { identitySimulation.value = null; identityConfirmed.value = false; identityConfirmation.value = '' } })
-async function runIdentityLifecycle(operation: 'publish' | 'enable' | 'rollback') { if (!identityEditor.value) return; const validation = validateIdentityEditor(); if (validation) { identityEditorError.value = validation; return } if (!identitySimulation.value || !identitySimulationMatchesDraft()) { identityEditorError.value = '当前草稿必须先完成模拟；字段变化后请重新模拟。'; return } if (identityHighImpact.value && (!identityConfirmed.value || identityConfirmation.value.trim() !== identityConfirmationText.value)) { identityEditorError.value = '高影响动作必须确认影响并输入精确确认文本。'; return } identityEditorSaving.value = true; identityEditorError.value = ''; try { await userRiskControlV2API.identityRuleLifecycle(identityEditor.value.code, operation, { reason: identityDraft.reason, simulationId: identitySimulation.value.id, confirmed: identityConfirmed.value, confirmation: identityConfirmation.value.trim(), targetRevision: identityRollbackRevision.value }); notice.value = operation === 'rollback' ? '身份规则已回滚为新版本' : operation === 'enable' ? '身份规则已启用' : '身份规则已发布'; const code = identityEditor.value.code; identityEditor.value = null; await load(); if (identityTool.value === 'versions') await selectIdentityRule(code) } catch (err) { identityEditorError.value = errorMessage(err, '身份规则操作失败') } finally { identityEditorSaving.value = false } }
+function validateIdentityEditor() { if (identityDraft.window_seconds <= 0 || identityDraft.threshold <= 0 || identityDraft.score < 0 || identityDraft.score > 100) return '窗口、阈值或风险分无效。'; if (identityDraft.configured_action === 'reject_candidate' && identityEditor.value?.code !== 'v2_registration_composite_accounts') return '只有综合注册规则可配置拒绝候选。'; return '' }
+async function publishIdentityRule() {
+	if (!identityEditor.value || !identityHasChanges.value) return
+	const validation = validateIdentityEditor()
+	if (validation) { identityEditorError.value = validation; return }
+	identityEditorSaving.value = true
+	identityEditorError.value = ''
+	const operation = identityEditorMode.value === 'rollback' ? 'rollback' : 'publish'
+	try {
+		await userRiskControlV2API.identityRuleLifecycle(identityEditor.value.code, operation, operation === 'rollback'
+			? { reason: identityDraft.reason, targetRevision: identityRollbackRevision.value }
+			: { reason: identityDraft.reason, baseRevision: identityDraft.base_revision, windowSeconds: identityDraft.window_seconds, threshold: identityDraft.threshold, score: identityDraft.score, configuredAction: identityDraft.configured_action, enabled: identityEnabled.value })
+		notice.value = operation === 'rollback' ? '身份规则已回滚' : identityEnabled.value ? '身份规则已保存并生效' : '身份规则已保存并停用'
+		const code = identityEditor.value.code
+		identityEditor.value = null
+		rebuildResult.value = null
+		preflightFingerprint.value = ''
+		await load()
+		if (identityTool.value === 'versions') await selectIdentityRule(code)
+	} catch (err) {
+		const message = errorMessage(err, '身份规则保存失败')
+		if (message.includes('revision conflict')) {
+			identityEditorConflict.value = true
+			identityEditorError.value = '规则已由其他管理员更新，请重新加载后再修改。'
+		} else {
+			identityEditorError.value = message.includes('configuration is unchanged') ? '规则配置没有变化。' : message
+		}
+	} finally { identityEditorSaving.value = false }
+}
+async function reloadIdentityRuleEditor() {
+	if (!identityEditor.value) return
+	const code = identityEditor.value.code
+	identityEditorSaving.value = true
+	identityEditorError.value = ''
+	try {
+		const latestRules = await userRiskControlV2API.listIdentityRules()
+		const latest = latestRules.find((rule) => rule.code === code)
+		if (!latest) throw new Error('规则当前不可用')
+		identityRules.value = latestRules
+		identityEditor.value = latest
+		identityEditorMode.value = 'edit'
+		identityRollbackRevision.value = undefined
+		assignIdentityDraft(latest)
+	} catch (err) {
+		identityEditorError.value = errorMessage(err, '重新加载身份规则失败')
+	} finally { identityEditorSaving.value = false }
+}
 async function runPreflight() { rebuildResult.value = null; preflightFingerprint.value = ''; rebuildConfirmOpen.value = false; rebuildConfirmed.value = false; auxLoading.value = true; auxError.value = ''; try { rebuildResult.value = await userRiskControlV2API.dryRunIdentityRebuild(); preflightFingerprint.value = currentPreflightFingerprint(); preflightNow.value = Date.now(); notice.value = rebuildResult.value.status === 'completed' ? '预检已完成' : '预检尚未完成' } catch (err) { auxError.value = errorMessage(err, '预检失败') } finally { auxLoading.value = false } }
 function openRebuildConfirmation() { preflightNow.value = Date.now(); const state = preflightEvaluation(preflightNow.value); if (!state.valid) { auxError.value = state.label; return } rebuildConfirmed.value = false; rebuildConfirmOpen.value = true }
 function closeRebuildConfirmation() { if (!auxLoading.value) { rebuildConfirmOpen.value = false; rebuildConfirmed.value = false } }
 async function confirmRebuild() { preflightNow.value = Date.now(); const state = preflightEvaluation(preflightNow.value); const approvedDryRunID = rebuildResult.value?.id || 0; if (!rebuildConfirmed.value || !state.valid || auxLoading.value) { if (!state.valid) auxError.value = state.label; return } auxLoading.value = true; auxError.value = ''; try { const result = await userRiskControlV2API.applyIdentityRebuild(approvedDryRunID); if (result.status !== 'completed' || result.dry_run || result.approved_dry_run_id !== approvedDryRunID) throw new Error('写入结果与本次预检不一致，请停止后续操作并重新核验'); rebuildResult.value = result; preflightFingerprint.value = ''; rebuildConfirmOpen.value = false; rebuildConfirmed.value = false; notice.value = '历史回放已完成' } catch (err) { auxError.value = errorMessage(err, '历史回放失败') } finally { auxLoading.value = false } }
-function openDisableRule(rule: IdentityRule) { disableTarget.value = rule; disableReason.value = ''; disableValidationError.value = '' }
-function closeDisableRule() { if (!auxLoading.value) disableTarget.value = null }
-async function disableSelectedRule() { if (!disableTarget.value) return; if (!disableReason.value.trim()) { disableValidationError.value = '停用原因不能为空。'; return } auxLoading.value = true; try { const code = disableTarget.value.code; await userRiskControlV2API.disableIdentityRule(code, disableReason.value); rebuildResult.value = null; preflightFingerprint.value = ''; rebuildConfirmOpen.value = false; disableTarget.value = null; notice.value = '身份规则已停用'; await load(); await selectIdentityRule(code) } catch (err) { disableValidationError.value = errorMessage(err, '身份规则停用失败') } finally { auxLoading.value = false } }
 async function load() {
   loading.value = true
   error.value = ''
@@ -487,23 +532,21 @@ function validateDraft() {
   if (!draft.name?.trim()) return '规则名称不能为空。'
   if (!draft.eventTypes?.[0]) return '请选择事件类型。'
 	if (!draft.countStrategy) return '请选择计数口径。'
-	if (!draft.reason?.trim()) return '创建原因不能为空。'
-  return validateRuleFields(draft)
+	return validateRuleFields(draft)
 }
 async function submitCreate() {
   const validation = validateDraft()
   if (validation) { createValidationError.value = validation; return }
   creating.value = true; error.value = ''; notice.value = ''
-  try { const created = await userRiskControlV2API.createRule({ ...draft, code: draft.code.trim(), name: draft.name?.trim(), eventTypes: draft.eventTypes.filter(Boolean) }); rules.value = [created, ...rules.value]; createOpen.value = false; notice.value = '规则已创建' } catch (err) { createValidationError.value = errorMessage(err, '规则创建失败') } finally { creating.value = false }
+	try { const created = await userRiskControlV2API.createRule({ ...draft, reason: draft.reason?.trim() || '管理员直接创建规则', code: draft.code.trim(), name: draft.name?.trim(), eventTypes: draft.eventTypes.filter(Boolean) }); rules.value = [created, ...rules.value]; createOpen.value = false; notice.value = '规则已创建' } catch (err) { createValidationError.value = errorMessage(err, '规则创建失败') } finally { creating.value = false }
 }
 async function save(rule: Rule) {
 	const validation = validateRuleFields(rule)
 	if (validation) { editValidationError.value = validation; return }
 	if (!rule.countStrategy) { editValidationError.value = '请选择计数口径。'; return }
-	if (!editReason.value.trim()) { editValidationError.value = '修改原因不能为空。'; return }
-  saving.value = true; error.value = ''; notice.value = ''; conflictRuleId.value = null
-  try {
-		const result = await userRiskControlV2API.updateRule(rule.id, { ...rule, reason: editReason.value.trim() })
+	 saving.value = true; error.value = ''; notice.value = ''; conflictRuleId.value = null
+	 try {
+		const result = await userRiskControlV2API.updateRule(rule.id, { ...rule, reason: editReason.value.trim() || '管理员直接修改规则' })
     const index = rules.value.findIndex((item) => item.id === rule.id)
     const updated = { ...rule, revision: result.revision }
     if (index >= 0) rules.value[index] = updated

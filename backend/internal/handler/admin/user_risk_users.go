@@ -81,7 +81,7 @@ func (h *CustomUserHandler) ListUserRiskUsers(c *gin.Context) {
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	view := strings.TrimSpace(c.DefaultQuery("view", "unassigned"))
+	view := strings.TrimSpace(c.DefaultQuery("view", "users"))
 	if view == "users" || view == "all" {
 		h.listAllUserRiskUsers(c, page, pageSize)
 		return

@@ -202,7 +202,7 @@ function compactParams(params: Record<string, unknown>) {
 
 async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListResponse<RiskUserRow>> {
   const { data } = await mainAdminClient.get<RiskListResponse<RiskUserRow>>('/admin/user-risk/users', {
-		params: compactParams({ view: filters.view || 'unassigned', page: filters.page || 1, page_size: filters.pageSize || 20, search: filters.search, status: filters.status, risk_type: filters.riskType, risk_level: filters.riskLevel, processing_status: filters.processingStatus, risk_only: filters.riskOnly, min_score: filters.minScore, max_score: filters.maxScore, sort_by: filters.sortBy, sort_order: filters.sortOrder }),
+		params: compactParams({ view: filters.view || 'users', page: filters.page || 1, page_size: filters.pageSize || 20, search: filters.search, status: filters.status, risk_type: filters.riskType, risk_level: filters.riskLevel, processing_status: filters.processingStatus, risk_only: filters.riskOnly, min_score: filters.minScore, max_score: filters.maxScore, sort_by: filters.sortBy, sort_order: filters.sortOrder }),
 	})
 	return data
 }
@@ -316,10 +316,34 @@ async function simulateIdentityRule(code: string, targetRevision?: number): Prom
 	return data
 }
 
-type IdentityRuleApproval = { reason: string; simulationId?: number; confirmed?: boolean; confirmation?: string; targetRevision?: number }
+export type IdentityRuleApproval = {
+	reason?: string
+	baseRevision?: number
+	windowSeconds?: number
+	threshold?: number
+	score?: number
+	configuredAction?: IdentityConfiguredAction
+	enabled?: boolean
+	targetRevision?: number
+	simulationId?: number
+	confirmed?: boolean
+	confirmation?: string
+}
 
 async function identityRuleLifecycle(code: string, operation: 'publish' | 'enable' | 'rollback', approval: IdentityRuleApproval): Promise<{ code: string; revision: number; operation: string }> {
-	const { data } = await mainAdminClient.post<{ code: string; revision: number; operation: string }>(`/admin/user-risk-control/identity-rules/${encodeURIComponent(code)}/${operation}`, { reason: approval.reason.trim(), simulation_id: approval.simulationId, confirmed: Boolean(approval.confirmed), confirmation: approval.confirmation || '', target_revision: approval.targetRevision })
+	const { data } = await mainAdminClient.post<{ code: string; revision: number; operation: string }>(`/admin/user-risk-control/identity-rules/${encodeURIComponent(code)}/${operation}`, {
+		reason: approval.reason?.trim() || '',
+		base_revision: approval.baseRevision,
+		window_seconds: approval.windowSeconds,
+		threshold: approval.threshold,
+		score: approval.score,
+		configured_action: approval.configuredAction,
+		enabled: approval.enabled,
+		target_revision: approval.targetRevision,
+		simulation_id: approval.simulationId,
+		confirmed: approval.confirmed,
+		confirmation: approval.confirmation,
+	})
 	return data
 }
 

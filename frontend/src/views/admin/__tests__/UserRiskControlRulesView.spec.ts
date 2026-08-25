@@ -95,51 +95,66 @@ describe('UserRiskControlRulesView', () => {
 		expect(wrapper.get('[data-testid="identity-v2-rules"]').exists()).toBe(true)
 	})
 
-	it('publishes a high-impact identity rule only after a matching simulation and exact confirmation', async () => {
+	it('publishes an identity rule directly with one save action', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		const rule = { code: 'v2_registration_composite_accounts', domain: 'composite', configured_enabled: true, enabled: true, state: 'healthy', detection_state: 'healthy', decision_mode: 'enforce', configured_action: 'reject_candidate', effective_action: 'reject_candidate', data_quality: 'healthy', enforcement_eligible: true, reason_codes: [], config_source: 'database', window_seconds: 600, threshold: 3, score: 90, mode: 'enforce', revision: 2, updated_at: '2026-08-24T00:00:00Z' } as const
 		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([rule])
-		const draft = { rule_code: rule.code, base_revision: 2, window_seconds: 600, threshold: 3, score: 90, configured_action: 'reject_candidate' as const, reason: '阻止第三个候选账号' }
-		vi.mocked(userRiskControlV2API.saveIdentityRuleDraft).mockResolvedValue(draft)
-		vi.mocked(userRiskControlV2API.simulateIdentityRule).mockResolvedValue({ id: 19, rule_code: rule.code, base_revision: 2, draft, affected_signal_count: 4, affected_account_count: 2, open_case_count: 1, configured_action: 'reject_candidate', projected_effective_action: 'reject_candidate', existing_accounts_changed: false, candidate_account_effect: '已有 2 个成功账号时，仅拒绝第 3 个候选账号', warnings: [], expires_at: '2099-08-24T00:30:00Z', created_at: '2026-08-24T00:00:00Z' })
 		vi.mocked(userRiskControlV2API.identityRuleLifecycle).mockResolvedValue({ code: rule.code, revision: 3, operation: 'publish' })
 
 		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
 		await flushPromises()
 		await wrapper.get(`[data-testid="edit-identity-rule-${rule.code}"]`).trigger('click')
-		await setBodyValue('[data-testid="identity-rule-reason"]', draft.reason)
-		await clickBody('[data-testid="simulate-identity-rule"]')
-
-		expect(userRiskControlV2API.saveIdentityRuleDraft).toHaveBeenCalledTimes(1)
-		expect(userRiskControlV2API.simulateIdentityRule).toHaveBeenCalledWith(rule.code, undefined)
-		expect(bodyElement('[data-testid="identity-rule-impact"]').textContent).toContain('仅拒绝第 3 个候选账号')
-		bodyElement<HTMLInputElement>('[data-testid="identity-rule-editor"] input[type="checkbox"]').click()
-		await setBodyValue('[data-testid="identity-rule-confirmation"]', `PUBLISH ${rule.code}`)
+		expect(bodyElement<HTMLButtonElement>('[data-testid="publish-identity-rule"]').disabled).toBe(true)
+		await setBodyValue('[data-testid="identity-rule-threshold"]', '4')
+		expect(document.body.querySelector('[data-testid="save-identity-draft"]')).toBeNull()
+		expect(document.body.querySelector('[data-testid="simulate-identity-rule"]')).toBeNull()
+		expect(document.body.querySelector('[data-testid="identity-rule-confirmation"]')).toBeNull()
+		expect(bodyElement('[data-testid="identity-rule-change-summary"]').textContent).toContain('阈值 3 → 4')
 		await clickBody('[data-testid="publish-identity-rule"]')
 
-		expect(userRiskControlV2API.saveIdentityRuleDraft).toHaveBeenCalledTimes(1)
-		expect(userRiskControlV2API.identityRuleLifecycle).toHaveBeenCalledWith(rule.code, 'publish', expect.objectContaining({ reason: draft.reason, simulationId: 19, confirmed: true, confirmation: `PUBLISH ${rule.code}` }))
+		expect(userRiskControlV2API.saveIdentityRuleDraft).not.toHaveBeenCalled()
+		expect(userRiskControlV2API.simulateIdentityRule).not.toHaveBeenCalled()
+		expect(userRiskControlV2API.identityRuleLifecycle).toHaveBeenCalledWith(rule.code, 'publish', { reason: '', baseRevision: 2, windowSeconds: 600, threshold: 4, score: 90, configuredAction: 'reject_candidate', enabled: true })
 	})
 
-	it('invalidates an identity simulation when a decision field changes', async () => {
+	it('enables a disabled identity rule through the same direct save action', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
-		const rule = { code: 'v2_registration_device_accounts', domain: 'device', configured_enabled: true, enabled: true, state: 'healthy', detection_state: 'healthy', decision_mode: 'shadow', configured_action: 'review', effective_action: 'review', data_quality: 'healthy', enforcement_eligible: false, reason_codes: [], config_source: 'database', window_seconds: 600, threshold: 3, score: 70, mode: 'shadow', revision: 2, updated_at: '2026-08-24T00:00:00Z' } as const
+		const rule = { code: 'v2_registration_device_accounts', domain: 'device', configured_enabled: false, enabled: false, state: 'disabled', detection_state: 'disabled', decision_mode: 'shadow', configured_action: 'review', effective_action: 'none', data_quality: 'healthy', enforcement_eligible: false, reason_codes: [], config_source: 'database', window_seconds: 600, threshold: 3, score: 70, mode: 'shadow', revision: 2, updated_at: '2026-08-24T00:00:00Z' } as const
 		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([rule])
-		const draft = { rule_code: rule.code, base_revision: 2, window_seconds: 600, threshold: 3, score: 70, configured_action: 'review' as const, reason: '调整设备规则' }
-		vi.mocked(userRiskControlV2API.saveIdentityRuleDraft).mockResolvedValue(draft)
-		vi.mocked(userRiskControlV2API.simulateIdentityRule).mockResolvedValue({ id: 20, rule_code: rule.code, base_revision: 2, draft, affected_signal_count: 1, affected_account_count: 1, open_case_count: 0, configured_action: 'review', projected_effective_action: 'review', existing_accounts_changed: false, candidate_account_effect: 'none', warnings: [], expires_at: '2099-08-24T00:30:00Z', created_at: '2026-08-24T00:00:00Z' })
+		vi.mocked(userRiskControlV2API.identityRuleLifecycle).mockResolvedValue({ code: rule.code, revision: 3, operation: 'publish' })
 
 		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
 		await flushPromises()
 		await wrapper.get(`[data-testid="edit-identity-rule-${rule.code}"]`).trigger('click')
-		await setBodyValue('[data-testid="identity-rule-reason"]', draft.reason)
-		await clickBody('[data-testid="simulate-identity-rule"]')
-		await setBodyValue('[data-testid="identity-rule-threshold"]', '4')
-
-		expect(document.body.querySelector('[data-testid="identity-rule-impact"]')).toBeNull()
+		bodyElement('[data-testid="identity-rule-enabled"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+		await flushPromises()
 		await clickBody('[data-testid="publish-identity-rule"]')
-		expect(userRiskControlV2API.identityRuleLifecycle).not.toHaveBeenCalled()
-		expect(document.body.textContent).toContain('字段变化后请重新模拟')
+		expect(userRiskControlV2API.identityRuleLifecycle).toHaveBeenCalledWith(rule.code, 'publish', expect.objectContaining({ enabled: true }))
+	})
+
+	it('reloads the latest identity rule after a revision conflict', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		const rule = { code: 'v2_registration_composite_accounts', domain: 'composite', configured_enabled: true, enabled: true, state: 'healthy', configured_action: 'reject_candidate', effective_action: 'reject_candidate', window_seconds: 600, threshold: 3, score: 90, mode: 'enforce', revision: 2, updated_at: '2026-08-24T00:00:00Z' } as const
+		const latest = { ...rule, threshold: 5, revision: 3, updated_at: '2026-08-25T00:00:00Z' } as const
+		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValueOnce([rule]).mockResolvedValue([latest])
+		vi.mocked(userRiskControlV2API.identityRuleLifecycle)
+			.mockRejectedValueOnce({ status: 409, message: 'rule revision conflict' })
+			.mockResolvedValue({ code: rule.code, revision: 4, operation: 'publish' })
+
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get(`[data-testid="edit-identity-rule-${rule.code}"]`).trigger('click')
+		await setBodyValue('[data-testid="identity-rule-threshold"]', '4')
+		await clickBody('[data-testid="publish-identity-rule"]')
+
+		expect(bodyElement('[data-testid="identity-rule-editor"]').textContent).toContain('规则已由其他管理员更新，请重新加载后再修改。')
+		expect(bodyElement<HTMLButtonElement>('[data-testid="publish-identity-rule"]').disabled).toBe(true)
+		await clickBody('[data-testid="reload-identity-rule"]')
+		expect(bodyElement<HTMLInputElement>('[data-testid="identity-rule-threshold"]').value).toBe('5')
+
+		await setBodyValue('[data-testid="identity-rule-threshold"]', '6')
+		await clickBody('[data-testid="publish-identity-rule"]')
+		expect(userRiskControlV2API.identityRuleLifecycle).toHaveBeenLastCalledWith(rule.code, 'publish', expect.objectContaining({ baseRevision: 3, threshold: 6 }))
 	})
 
 	it('keeps identity, event, replay, effect, and version workflows inside one page', async () => {

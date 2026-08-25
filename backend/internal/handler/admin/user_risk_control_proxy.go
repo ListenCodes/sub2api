@@ -88,7 +88,7 @@ func (h *CustomUserHandler) resolveAuditAccountFilters(c *gin.Context, query url
 		resolved.Set("actor_id", strconv.FormatInt(id, 10))
 	}
 	category := strings.TrimSpace(query.Get("category"))
-	if target := strings.TrimSpace(query.Get("target")); target != "" && category != "rules" {
+	if target := strings.TrimSpace(query.Get("target")); target != "" && category != "configuration" && category != "testing" && category != "rules" {
 		id, found, err := h.findExactRiskAccount(c, target, "")
 		if err != nil || !found {
 			return resolved, found, err

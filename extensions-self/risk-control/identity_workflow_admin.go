@@ -77,16 +77,30 @@ func (s *HTTPServer) handleIdentityRuleSimulation(w http.ResponseWriter, r *http
 
 func decodeIdentityRuleApproval(body []byte) (identityRulePublishApproval, int, error) {
 	var input struct {
-		Reason         string `json:"reason"`
-		SimulationID   int64  `json:"simulation_id,omitempty"`
-		Confirmed      bool   `json:"confirmed"`
-		Confirmation   string `json:"confirmation"`
-		TargetRevision int    `json:"target_revision,omitempty"`
+		Reason           string `json:"reason"`
+		BaseRevision     int    `json:"base_revision,omitempty"`
+		WindowSeconds    int    `json:"window_seconds,omitempty"`
+		Threshold        int    `json:"threshold,omitempty"`
+		Score            *int   `json:"score,omitempty"`
+		ConfiguredAction string `json:"configured_action,omitempty"`
+		Enabled          *bool  `json:"enabled,omitempty"`
+		SimulationID     int64  `json:"simulation_id,omitempty"`
+		Confirmed        bool   `json:"confirmed"`
+		Confirmation     string `json:"confirmation"`
+		TargetRevision   int    `json:"target_revision,omitempty"`
 	}
 	if err := decodeStrictJSON(body, &input); err != nil {
 		return identityRulePublishApproval{}, 0, err
 	}
-	return identityRulePublishApproval{Reason: input.Reason, SimulationID: input.SimulationID, Confirmed: input.Confirmed, Confirmation: input.Confirmation}, input.TargetRevision, nil
+	approval := identityRulePublishApproval{Reason: input.Reason, Enabled: input.Enabled}
+	directChange := input.BaseRevision > 0 || input.WindowSeconds > 0 || input.Threshold > 0 || input.Score != nil || strings.TrimSpace(input.ConfiguredAction) != "" || input.Enabled != nil
+	if directChange {
+		if input.BaseRevision <= 0 || input.WindowSeconds <= 0 || input.Threshold <= 0 || input.Score == nil || strings.TrimSpace(input.ConfiguredAction) == "" || input.Enabled == nil {
+			return identityRulePublishApproval{}, 0, errors.New("invalid direct identity rule change")
+		}
+		approval.Draft = &IdentityRuleDraft{BaseRevision: input.BaseRevision, WindowSeconds: input.WindowSeconds, Threshold: input.Threshold, Score: *input.Score, ConfiguredAction: strings.TrimSpace(input.ConfiguredAction), Reason: input.Reason}
+	}
+	return approval, input.TargetRevision, nil
 }
 
 func (s *HTTPServer) handleIdentityRuleLifecycle(w http.ResponseWriter, r *http.Request, path string, body []byte, operation string) {
@@ -116,7 +130,7 @@ func (s *HTTPServer) handleIdentityRuleLifecycle(w http.ResponseWriter, r *http.
 	default:
 		err = errors.New("invalid identity rule operation")
 	}
-	if errors.Is(err, ErrRuleRevisionConflict) {
+	if errors.Is(err, ErrRuleRevisionConflict) || errors.Is(err, ErrIdentityRuleNoChanges) {
 		writeError(w, http.StatusConflict, err)
 		return
 	}

@@ -49,7 +49,7 @@ describe('user risk identity API', () => {
     const result = await userRiskControlV2API.listUsers({ page: 1, pageSize: 20 })
 
     expect(mainAdminClient.get).toHaveBeenCalledTimes(1)
-		expect(mainAdminClient.get).toHaveBeenCalledWith('/admin/user-risk/users', { params: { view: 'unassigned', page: 1, page_size: 20 } })
+		expect(mainAdminClient.get).toHaveBeenCalledWith('/admin/user-risk/users', { params: { view: 'users', page: 1, page_size: 20 } })
     expect(result.items[0].identity).toMatchObject({ latest_ip: '203.0.113.0/24', browser_instance_count: 2, api_client_count: 1 })
   })
 

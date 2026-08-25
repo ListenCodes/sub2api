@@ -163,19 +163,17 @@ func TestCompositeRegistrationEnforcementHonorsConfiguredObserveAction(t *testin
 	}
 }
 
-func TestIdentityRuleApprovalAlwaysRequiresSimulationAndConfirmsHighImpactActions(t *testing.T) {
-	if err := validateIdentityRuleApproval("v2_registration_ip_accounts", "review", identityRulePublishApproval{Reason: "reduce false positives"}); err == nil {
-		t.Fatal("ordinary publish accepted without a simulation")
+func TestIdentityRuleApprovalDoesNotRequireSimulationOrConfirmation(t *testing.T) {
+	for _, approval := range []identityRulePublishApproval{
+		{},
+		{Reason: "reduce false positives"},
+		{Reason: "block third candidate"},
+	} {
+		if err := validateIdentityRuleApproval("v2_registration_composite_accounts", "reject_candidate", approval); err != nil {
+			t.Fatalf("direct administrator publish rejected: %v", err)
+		}
 	}
-	if err := validateIdentityRuleApproval("v2_registration_ip_accounts", "review", identityRulePublishApproval{Reason: "reduce false positives", SimulationID: 9}); err != nil {
-		t.Fatalf("ordinary simulated publish rejected: %v", err)
-	}
-	approval := identityRulePublishApproval{Reason: "block third candidate", SimulationID: 10, Confirmed: true, Confirmation: "PUBLISH v2_registration_composite_accounts"}
-	if err := validateIdentityRuleApproval("v2_registration_composite_accounts", "reject_candidate", approval); err != nil {
-		t.Fatalf("confirmed high-impact publish rejected: %v", err)
-	}
-	approval.Confirmation = "PUBLISH wrong-rule"
-	if err := validateIdentityRuleApproval("v2_registration_composite_accounts", "reject_candidate", approval); err == nil {
-		t.Fatal("high-impact publish accepted with a mismatched confirmation")
+	if err := validateIdentityRuleApproval("v2_registration_ip_accounts", "review", identityRulePublishApproval{Reason: strings.Repeat("x", 501)}); err == nil {
+		t.Fatal("overlong reason was accepted")
 	}
 }

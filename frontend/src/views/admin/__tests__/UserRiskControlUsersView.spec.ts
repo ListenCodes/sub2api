@@ -38,13 +38,14 @@ afterEach(() => {
 })
 
 describe('UserRiskControlUsersView', () => {
-	it('loads the unassigned queue by default', async () => {
+	it('loads all users by default', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
 
-    mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+	 const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-		expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'unassigned', sortBy: 'risk_score', sortOrder: 'desc' }))
+		expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'users', sortBy: 'risk_score', sortOrder: 'desc' }))
+		expect(wrapper.get('[data-testid="risk-work-modes"]').findAll('[role="tab"]')[1].attributes('aria-selected')).toBe('true')
   })
 
 	it('shows four actionable queues and switches to mine', async () => {
@@ -55,11 +56,25 @@ describe('UserRiskControlUsersView', () => {
 		expect(wrapper.get('[data-testid="risk-work-overview"]').text()).toContain('待领取')
 		expect(wrapper.get('[data-testid="work-count-unassigned"]').text()).toContain('3')
 		expect(wrapper.get('[data-testid="work-count-open"]').text()).toContain('9')
-		expect(wrapper.get('[data-testid="risk-case-views"]').text()).toContain('全部未结')
 		await wrapper.get('[data-testid="work-count-mine"]').trigger('click')
-    await flushPromises()
+	 await flushPromises()
+		expect(wrapper.get('[data-testid="risk-case-views"]').text()).toContain('全部未结')
 		expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ view: 'mine' }))
-  })
+	 })
+
+	it('clears stale rows when a new view fails to load', async () => {
+		vi.mocked(userRiskControlV2API.listUsers).mockResolvedValueOnce({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 1, page: 1, page_size: 20 })
+		const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		expect(wrapper.text()).toContain('alice@example.com')
+
+		vi.mocked(userRiskControlV2API.listUsers).mockRejectedValueOnce(new Error('queue unavailable'))
+		await wrapper.get('[data-testid="risk-work-modes"]').findAll('[role="tab"]')[0].trigger('click')
+		await flushPromises()
+
+		expect(wrapper.text()).not.toContain('alice@example.com')
+		expect(wrapper.text()).toContain('queue unavailable')
+	})
 
   it('shows an unavailable work overview instead of fabricating zero counts, then retries', async () => {
     vi.mocked(userRiskControlV2API.getWorkOverview).mockRejectedValueOnce(new Error('overview unavailable'))

@@ -144,7 +144,7 @@ const pageSize = ref(responsivePageSize(getPersistedPageSize(20)))
 const total = ref(0)
 const sortBy = ref<RiskSortBy | undefined>('risk_score')
 const sortOrder = ref<'asc' | 'desc'>('desc')
-const view = ref<RiskCaseView>('unassigned')
+const view = ref<RiskCaseView>('users')
 const batchAction = ref<'disabled' | 'active' | null>(null)
 const batchReason = ref('')
 const batchValidationError = ref('')
@@ -238,7 +238,7 @@ function restoreRouteState() {
   if (!route) return
 	const legacyView = ({ pending: 'unassigned', my: 'mine', observing: 'due', all: 'users', resolved: 'users' } as Record<string, RiskCaseView>)[queryText('view')]
 	const requestedView = (legacyView || queryText('view')) as RiskCaseView
-	view.value = requestedView === 'users' || caseViews.some((option) => option.value === requestedView) ? requestedView : 'unassigned'
+	view.value = requestedView === 'users' || caseViews.some((option) => option.value === requestedView) ? requestedView : 'users'
   const nextSort = queryText('sort_by')
   const allowedSorts: RiskSortBy[] = ['risk_score', 'risk_level', 'event_count', 'last_event_at', 'created_at']
   Object.assign(draft, {
@@ -262,7 +262,7 @@ async function syncRouteState() {
   if (!route || !router) return
   const query: LocationQueryRaw = { ...route.query }
   const values: Record<string, string | undefined> = {
-		view: view.value === 'unassigned' ? undefined : view.value,
+		view: view.value === 'users' ? undefined : view.value,
     search: String(activeFilters.search || '') || undefined,
     status: String(activeFilters.status || '') || undefined,
     risk_type: String(activeFilters.riskType || '') || undefined,
@@ -294,8 +294,13 @@ async function loadUsers() {
     if (requestID !== loadRequestID) return
     users.value = response.items
     total.value = response.total
-  } catch (err) {
-    if (requestID === loadRequestID) error.value = errorMessage(err)
+	} catch (err) {
+		if (requestID === loadRequestID) {
+			users.value = []
+			total.value = 0
+			clearSelection()
+			error.value = errorMessage(err)
+		}
   } finally {
     if (requestID === loadRequestID) loading.value = false
   }

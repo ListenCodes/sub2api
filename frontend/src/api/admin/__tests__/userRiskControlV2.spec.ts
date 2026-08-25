@@ -32,6 +32,33 @@ describe('userRiskControlV2API', () => {
 		expect(post).toHaveBeenNthCalledWith(2, '/admin/risk-rebuilds', { approved_dry_run_id: 8 })
 		expect(post).toHaveBeenNthCalledWith(3, '/admin/user-risk-control/identity-rules/v2_registration_ip_accounts/disable', { reason: '数据质量复核' })
 	})
+
+	it('publishes a complete identity rule change in one request', async () => {
+		const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { code: 'v2_registration_composite_accounts', revision: 3, operation: 'publish' } } as never)
+
+		await userRiskControlV2API.identityRuleLifecycle('v2_registration_composite_accounts', 'publish', {
+			baseRevision: 2,
+			windowSeconds: 900,
+			threshold: 4,
+			score: 90,
+			configuredAction: 'reject_candidate',
+			enabled: true,
+		})
+
+		expect(post).toHaveBeenCalledWith('/admin/user-risk-control/identity-rules/v2_registration_composite_accounts/publish', {
+			reason: '',
+			base_revision: 2,
+			window_seconds: 900,
+			threshold: 4,
+			score: 90,
+			configured_action: 'reject_candidate',
+			enabled: true,
+			target_revision: undefined,
+			simulation_id: undefined,
+			confirmed: undefined,
+			confirmation: undefined,
+		})
+	})
   afterEach(() => vi.restoreAllMocks())
 
   it('requests real users with risk filters and pagination', async () => {
@@ -52,7 +79,7 @@ describe('userRiskControlV2API', () => {
 		expect(mainGet).toHaveBeenCalledTimes(1)
 		expect(mainGet).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
       params: expect.objectContaining({
-				view: 'unassigned',
+				view: 'users',
 				page: 2,
 				page_size: 20,
 				search: 'user@example.com',
@@ -72,7 +99,7 @@ describe('userRiskControlV2API', () => {
 
 		expect(mainGet).toHaveBeenCalledTimes(1)
 		expect(mainGet).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
-			params: expect.objectContaining({ view: 'unassigned', page: 1, page_size: 20 }),
+			params: expect.objectContaining({ view: 'users', page: 1, page_size: 20 }),
     }))
   })
 
