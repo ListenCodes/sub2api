@@ -24,7 +24,7 @@
             :model-value="draft.target || ''"
             class="w-full sm:w-64"
             data-testid="audit-target-filter"
-            :placeholder="t('admin.userRiskControl.targetUserPlaceholder')"
+			:placeholder="draft.category === 'disposition' ? '用户、案件或账号 ID' : draft.category === 'configuration' ? '规则或网络标识' : draft.category === 'testing' ? '规则或模拟对象' : '查询目标'"
             @update:model-value="setTextFilter('target', $event)"
             @search="runFiltersNow"
           />
@@ -54,8 +54,8 @@
               <template v-if="record.action !== 'view_identity_detail' || sensitiveExpanded(record.id)">
                 <p>{{ record.reason || formatSensitiveSection(record) || '无操作原因' }}</p>
 				<p v-if="record.metadata?.diff && record.action !== 'view_identity_detail'" class="mt-1 text-xs text-gray-500">字段变化：{{ formatRuleDiff(record.metadata.diff) }}</p>
-                <p v-if="record.failure_reason" class="mt-1 text-red-600 dark:text-red-400">失败原因：{{ record.failure_reason }}</p>
-              </template>
+			  </template>
+			  <p v-if="record.failure_reason" class="mt-1 text-red-600 dark:text-red-400">失败原因：{{ record.failure_reason }}</p>
               <button v-if="hasTechnicalDetails(record)" type="button" class="mt-1 text-xs font-medium text-gray-500 underline" :data-testid="`audit-technical-${record.id}`" @click="toggleTechnical(record.id)">技术详情</button>
               <p v-if="technicalExpanded(record.id)" class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ technicalDetails(record) }}</p>
             </div>
@@ -97,14 +97,14 @@ const loading = ref(true)
 const error = ref('')
 const sortBy = ref<AuditFilters['sortBy']>()
 const sortOrder = ref<'asc' | 'desc'>('desc')
-const draft = reactive<AuditFilters>({ category: 'security', action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' })
+const draft = reactive<AuditFilters>({ category: 'disposition', action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' })
 const activeFilters = reactive<AuditFilters>({ ...draft })
 const expandedSensitiveIDs = ref<Set<number>>(new Set())
 const expandedTechnicalIDs = ref<Set<number>>(new Set())
 const columns: Column[] = [
   { key: 'time', label: t('admin.userRiskControl.table.time'), sortable: true, class: 'w-28 min-w-24 whitespace-normal' },
   { key: 'actor', label: t('admin.userRiskControl.table.actor'), class: 'w-36 min-w-32 whitespace-normal' },
-  { key: 'action', label: t('admin.userRiskControl.table.action'), class: 'w-28 min-w-24 whitespace-normal break-all' },
+	{ key: 'action', label: '操作类型', class: 'w-28 min-w-24 whitespace-normal break-all' },
   { key: 'target', label: t('admin.userRiskControl.table.target'), sortable: true, class: 'w-40 min-w-32 whitespace-normal break-all' },
   { key: 'statusChange', label: t('admin.userRiskControl.table.statusChange'), class: 'w-24 min-w-20 whitespace-normal' },
   { key: 'result', label: t('admin.userRiskControl.table.result'), sortable: true, class: 'w-16 min-w-14' },
@@ -113,16 +113,18 @@ const columns: Column[] = [
 let loadRequestID = 0
 let writingQuery = false
 const auditCategories: Array<{ value: NonNullable<AuditFilters['category']>; label: string }> = [
-  { value: 'security', label: '安全处置' },
-  { value: 'rules', label: '规则变更' },
-  { value: 'sensitive', label: '敏感数据查看' },
+	{ value: 'disposition', label: '处置' },
+	{ value: 'configuration', label: '配置变更' },
+	{ value: 'testing', label: '测试与模拟' },
+	{ value: 'sensitive', label: '敏感查询' },
 ]
 const auditActionsByCategory: Record<NonNullable<AuditFilters['category']>, string[]> = {
-  security: ['ban', 'unban', 'auto_ban', 'identity_reject_candidate', 'mark_processed', 'create_risk_review_case', 'claim_risk_review_case', 'observe_risk_review_case', 'review_risk_case', 'label_shared_network', 'revoke_shared_network_label'],
-  rules: ['create_rule', 'update_rule', 'rule_test', 'simulate_identity_rule', 'publish_identity_rule', 'enable_identity_rule', 'disable_identity_rule', 'rollback_identity_rule', 'purge_legacy_v1', 'identity_rebuild_dry_run', 'identity_rebuild'],
+	disposition: ['ban', 'unban', 'auto_ban', 'identity_reject_candidate', 'mark_processed', 'create_risk_review_case', 'claim_risk_review_case', 'observe_risk_review_case', 'review_risk_case', 'resolve_risk_review_case'],
+	configuration: ['create_rule', 'update_rule', 'publish_identity_rule', 'enable_identity_rule', 'disable_identity_rule', 'rollback_identity_rule', 'purge_legacy_v1', 'identity_rebuild', 'label_shared_network', 'revoke_shared_network_label'],
+	testing: ['rule_test', 'simulate_identity_rule', 'identity_rebuild_dry_run'],
   sensitive: ['view_identity_detail'],
 }
-const auditActionFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allActions') }, ...riskActionOptions.filter((option) => auditActionsByCategory[draft.category || 'security'].includes(option.value))])
+const auditActionFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allActions') }, ...riskActionOptions.filter((option) => auditActionsByCategory[draft.category || 'disposition'].includes(option.value))])
 const auditResultFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allResults') }, ...auditResultOptions])
 const mobileSortOptions = [
   { value: '', label: '默认排序' },
@@ -158,7 +160,7 @@ function restoreRouteState() {
   if (!route) return
   const nextSort = queryText('sort_by')
   Object.assign(draft, {
-	category: ['security', 'rules', 'sensitive'].includes(queryText('category')) ? queryText('category') as AuditFilters['category'] : 'security',
+	category: ['disposition', 'configuration', 'testing', 'sensitive'].includes(queryText('category')) ? queryText('category') as AuditFilters['category'] : ({ security: 'disposition', rules: 'configuration' } as Record<string, AuditFilters['category']>)[queryText('category')] || 'disposition',
     actor: queryText('actor'),
     target: queryText('target'),
     action: queryText('action'),
@@ -177,7 +179,7 @@ async function syncRouteState() {
   if (!route || !router) return
   const query: LocationQueryRaw = { ...route.query }
   const values: Record<string, string | undefined> = {
-	category: activeFilters.category === 'security' ? undefined : activeFilters.category,
+	category: activeFilters.category === 'disposition' ? undefined : activeFilters.category,
     actor: String(activeFilters.actor || '').trim() || undefined,
     target: String(activeFilters.target || '').trim() || undefined,
     action: String(activeFilters.action || '') || undefined,
@@ -200,7 +202,7 @@ async function syncRouteState() {
 
 function errorMessage(err: unknown) { return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed') }
 function requestFilters(): AuditFilters {
-  const result: AuditFilters = { category: activeFilters.category || 'security', action: activeFilters.action, result: activeFilters.result, page: page.value, pageSize: pageSize.value }
+  const result: AuditFilters = { category: activeFilters.category || 'disposition', action: activeFilters.action, result: activeFilters.result, page: page.value, pageSize: pageSize.value }
   if (activeFilters.targetUserId) result.targetUserId = activeFilters.targetUserId
   if (activeFilters.target?.trim()) result.target = activeFilters.target.trim()
   if (activeFilters.actor?.trim()) result.actor = activeFilters.actor.trim()

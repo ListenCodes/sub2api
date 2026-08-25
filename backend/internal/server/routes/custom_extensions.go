@@ -33,6 +33,7 @@ func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, cust
 	admin.Group("/user-risk-control").Any("/*path", custom.AdminUser.ProxyRiskControl)
 	admin.GET("/user-risk/users", custom.AdminUser.ListUserRiskUsers)
 	admin.GET("/user-risk/work-overview", custom.AdminUser.ProxyRiskWorkOverview)
+	admin.POST("/user-risk/cases/:id/resolve", custom.AdminUser.ResolveRiskCase)
 	admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)
 	admin.POST("/users/:id/risk-status", custom.AdminUser.SetRiskStatus)
 	admin.GET("/users/:id/identity-summary", custom.AdminUser.ProxyUserRiskIdentity)

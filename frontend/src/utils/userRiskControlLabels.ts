@@ -51,6 +51,7 @@ const riskActions: Record<string, string> = {
 	observe_risk_review_case: '转入观察',
 	review_case: '人工复核案件',
 	review_risk_case: '提交复核反馈',
+	resolve_risk_review_case: '完成复核',
 	label_shared_network: '标记共享网络',
 	revoke_shared_network_label: '撤销共享网络标签',
 	disable_identity_rule: '停用身份规则',
@@ -77,7 +78,7 @@ const processingStatuses: Record<string, string> = {
   pending: '待复核',
   in_review: '复核中',
   observing: '观察中',
-  resolved: '已处理',
+  resolved: '已结案',
 }
 
 const legacyRuleReasons: Record<string, string> = {

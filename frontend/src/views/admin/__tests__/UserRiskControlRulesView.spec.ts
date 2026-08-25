@@ -101,7 +101,7 @@ describe('UserRiskControlRulesView', () => {
 		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([rule])
 		const draft = { rule_code: rule.code, base_revision: 2, window_seconds: 600, threshold: 3, score: 90, configured_action: 'reject_candidate' as const, reason: '阻止第三个候选账号' }
 		vi.mocked(userRiskControlV2API.saveIdentityRuleDraft).mockResolvedValue(draft)
-		vi.mocked(userRiskControlV2API.simulateIdentityRule).mockResolvedValue({ id: 19, rule_code: rule.code, base_revision: 2, draft, affected_signal_count: 4, affected_account_count: 2, open_case_count: 1, configured_action: 'reject_candidate', projected_effective_action: 'reject_candidate', existing_accounts_changed: false, candidate_account_effect: '已有 2 个成功账号时，仅拒绝第 3 个候选账号', warnings: [], expires_at: '2026-08-24T00:30:00Z', created_at: '2026-08-24T00:00:00Z' })
+		vi.mocked(userRiskControlV2API.simulateIdentityRule).mockResolvedValue({ id: 19, rule_code: rule.code, base_revision: 2, draft, affected_signal_count: 4, affected_account_count: 2, open_case_count: 1, configured_action: 'reject_candidate', projected_effective_action: 'reject_candidate', existing_accounts_changed: false, candidate_account_effect: '已有 2 个成功账号时，仅拒绝第 3 个候选账号', warnings: [], expires_at: '2099-08-24T00:30:00Z', created_at: '2026-08-24T00:00:00Z' })
 		vi.mocked(userRiskControlV2API.identityRuleLifecycle).mockResolvedValue({ code: rule.code, revision: 3, operation: 'publish' })
 
 		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
@@ -127,7 +127,7 @@ describe('UserRiskControlRulesView', () => {
 		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([rule])
 		const draft = { rule_code: rule.code, base_revision: 2, window_seconds: 600, threshold: 3, score: 70, configured_action: 'review' as const, reason: '调整设备规则' }
 		vi.mocked(userRiskControlV2API.saveIdentityRuleDraft).mockResolvedValue(draft)
-		vi.mocked(userRiskControlV2API.simulateIdentityRule).mockResolvedValue({ id: 20, rule_code: rule.code, base_revision: 2, draft, affected_signal_count: 1, affected_account_count: 1, open_case_count: 0, configured_action: 'review', projected_effective_action: 'review', existing_accounts_changed: false, candidate_account_effect: 'none', warnings: [], expires_at: '2026-08-24T00:30:00Z', created_at: '2026-08-24T00:00:00Z' })
+		vi.mocked(userRiskControlV2API.simulateIdentityRule).mockResolvedValue({ id: 20, rule_code: rule.code, base_revision: 2, draft, affected_signal_count: 1, affected_account_count: 1, open_case_count: 0, configured_action: 'review', projected_effective_action: 'review', existing_accounts_changed: false, candidate_account_effect: 'none', warnings: [], expires_at: '2099-08-24T00:30:00Z', created_at: '2026-08-24T00:00:00Z' })
 
 		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
 		await flushPromises()
@@ -142,7 +142,7 @@ describe('UserRiskControlRulesView', () => {
 		expect(document.body.textContent).toContain('字段变化后请重新模拟')
 	})
 
-	it('keeps identity, event, replay, Shadow effect, and version workflows inside one page', async () => {
+	it('keeps identity, event, replay, effect, and version workflows inside one page', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockResolvedValue([{ rule_code: 'v2_registration_ip_accounts', revision: 2, hit_events: 8, unique_subjects: 3, sample_user_ids: [7], confirmed_rate: 0.5, legitimate_shared_rate: 0.25, missing_signal_rate: 0 }])
 		vi.mocked(userRiskControlV2API.listIdentityRuleVersions).mockResolvedValue([{ revision: 2, signal_family: 'registration_identity', domain: 'ip', enabled: true, rule_snapshot: {}, active_from: '2026-08-17T00:00:00Z' }])
@@ -168,15 +168,15 @@ describe('UserRiskControlRulesView', () => {
 		expect(versions).not.toContain('r2')
 	})
 
-	it('explains Shadow as manual-review-only and shows the operating window and data quality', async () => {
+	it('shows detection state, effective action, operating window, and data quality', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
 		await flushPromises()
 		await wrapper.get('[data-testid="rule-view-identity"]').trigger('click')
 
 		const status = wrapper.get('[data-testid="identity-shadow-status"]').text()
-		expect(status).toContain('规则已启用并计算，只记录并进入人工复核，不会自动拒绝或封禁')
-		expect(status).toContain('有效规则 2 条')
+		expect(status).toContain('身份检测已启用；当前实际动作以规则行展示为准')
+		expect(status).toContain('生效检测 2 条')
 		expect(status).toContain('2026-09-01')
 		expect(status).toContain('数据质量正常')
 	})
@@ -196,14 +196,14 @@ describe('UserRiskControlRulesView', () => {
 		await flushPromises()
 
 		const panel = wrapper.get('[data-testid="identity-v2-rules"]')
-		expect(panel.text()).toContain('综合注册拦截已开启')
-		expect(panel.text()).toContain('10 分钟内达到第 3 个候选账号时自动拒绝')
+		expect(panel.text()).toContain('综合注册候选处置已开启')
+		expect(panel.text()).toContain('10 分钟内 3 个成功账号')
 		expect(panel.text()).toContain('不会自动封禁现有账号')
 		expect(panel.get('[data-testid="identity-rule-v2_registration_composite_accounts"]').text()).toContain('自动拒绝候选')
-		expect(panel.get('[data-testid="identity-rule-v2_registration_device_accounts"]').text()).toContain('Shadow')
+		expect(panel.get('[data-testid="identity-rule-v2_registration_device_accounts"]').text()).toContain('观察（不执行）')
 	})
 
-	it('does not claim Shadow is calculating when rollout or effective rules are disabled', async () => {
+	it('does not claim detection is running when rollout or effective rules are disabled', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({ enabled: false, admin_enabled: true, mode: 'shadow', schema: 'identity', geo_source: 'none', domains: { ip: 'disabled', device: 'disabled', composite: 'disabled' }, quality_24h: {}, effective_rule_count: 0 })
 		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([{ code: 'v2_registration_ip_accounts', domain: 'ip', configured_enabled: true, enabled: false, state: 'disabled', window_seconds: 600, threshold: 5, score: 60, mode: 'shadow', revision: 1, updated_at: '2026-08-13T04:58:00Z' }])
@@ -249,7 +249,7 @@ describe('UserRiskControlRulesView', () => {
 		expect(effects).not.toContain('v2_')
 	})
 
-	it('keeps replay writes disabled while the recorded Shadow period is still active', async () => {
+	it('keeps replay writes disabled while the recorded observation period is still active', async () => {
 		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
 		vi.mocked(userRiskControlV2API.dryRunIdentityRebuild).mockResolvedValue({ id: 9, dry_run: true, status: 'completed', current_signal_users: 1, v2_signal_users: 2, current_signals: 1, v2_signals: 2, changed_subjects: 1, rule_hits: {}, sample_user_ids: [], evidence_high_water: 42, rule_watermark: {}, started_at: new Date().toISOString(), completed_at: new Date().toISOString() })
 
@@ -260,7 +260,7 @@ describe('UserRiskControlRulesView', () => {
 		await flushPromises()
 
 		expect(wrapper.get('[data-testid="rebuild-apply"]').attributes('disabled')).toBeDefined()
-		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('Shadow 观察期尚未截止')
+		expect(wrapper.get('[data-testid="identity-rebuild"]').text()).toContain('观察期尚未截止')
 	})
 
 	it('requires a fresh completed preflight and an explicit second confirmation before replay writes', async () => {
@@ -424,7 +424,7 @@ describe('UserRiskControlRulesView', () => {
   it('loads a scenario rule, saves changes, and shows test output', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: 'Login failures', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
     vi.mocked(userRiskControlV2API.updateRule).mockResolvedValue({ id: 1, revision: 4 })
-    vi.mocked(userRiskControlV2API.testRule).mockResolvedValue({ matched: true, score: 80, riskLevel: 'high', action: 'review', conditions: ['登录失败次数达到 5 次'] })
+    vi.mocked(userRiskControlV2API.testRule).mockResolvedValue({ matched: true, score: 80, riskLevel: 'high', action: 'review', configuredAction: 'review', conditions: ['登录失败次数达到 5 次'], excludedReasons: [], evaluation: [{ step: 'count_strategy', passed: true, detail: { strategy: 'user_events', count: 5 } }] })
 
     const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
@@ -436,12 +436,16 @@ describe('UserRiskControlRulesView', () => {
     expect(userRiskControlV2API.updateRule).toHaveBeenCalledWith(1, expect.objectContaining({ threshold: 8 }))
     expect(wrapper.text()).toContain('规则已保存')
 
-    await clickBody('[data-testid="test-rule"]')
+    await clickBody('[data-testid="close-rule-editor"]')
+    await wrapper.get('[data-testid="test-rule-1"]').trigger('click')
+    await clickBody('[data-testid="run-rule-test"]')
     expect(userRiskControlV2API.testRule).toHaveBeenCalled()
     expect(document.body.textContent).toContain('80')
     expect(document.body.textContent).toContain('高风险')
     expect(document.body.textContent).toContain('人工复核')
     expect(document.body.textContent).toContain('登录失败次数达到 5 次')
+    expect(document.body.textContent).toContain('{"strategy":"user_events","count":5}')
+    expect(document.body.textContent).not.toContain('[object Object]')
   })
 
   it('offers candidate rejection as a configurable rule action', async () => {

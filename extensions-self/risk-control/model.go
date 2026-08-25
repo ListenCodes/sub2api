@@ -137,16 +137,28 @@ type AuditFilter struct {
 }
 
 var auditCategoryActions = map[string]map[string]struct{}{
-	"security": {
+	"disposition": {
 		"ban": {}, "unban": {}, "auto_ban": {}, "mark_processed": {},
-		"claim_risk_review_case": {}, "create_risk_review_case": {}, "observe_risk_review_case": {}, "review_risk_case": {}, "label_shared_network": {}, "revoke_shared_network_label": {},
+		"claim_risk_review_case": {}, "create_risk_review_case": {}, "observe_risk_review_case": {}, "review_risk_case": {}, "resolve_risk_review_case": {},
 		"identity_reject_candidate": {},
 	},
-	"rules": {
-		"create_rule": {}, "update_rule": {}, "rule_test": {}, "simulate_identity_rule": {}, "publish_identity_rule": {}, "enable_identity_rule": {}, "disable_identity_rule": {}, "rollback_identity_rule": {},
-		"purge_legacy_v1": {}, "identity_rebuild_dry_run": {}, "identity_rebuild": {},
+	"configuration": {
+		"create_rule": {}, "update_rule": {}, "publish_identity_rule": {}, "enable_identity_rule": {}, "disable_identity_rule": {}, "rollback_identity_rule": {}, "label_shared_network": {}, "revoke_shared_network_label": {}, "purge_legacy_v1": {}, "identity_rebuild": {},
 	},
+	"testing":   {"rule_test": {}, "simulate_identity_rule": {}, "identity_rebuild_dry_run": {}},
 	"sensitive": {"view_identity_detail": {}},
+}
+
+func init() {
+	auditCategoryActions["security"] = auditCategoryActions["disposition"]
+	legacyRules := map[string]struct{}{}
+	for action := range auditCategoryActions["configuration"] {
+		legacyRules[action] = struct{}{}
+	}
+	for action := range auditCategoryActions["testing"] {
+		legacyRules[action] = struct{}{}
+	}
+	auditCategoryActions["rules"] = legacyRules
 }
 
 func auditActionsForCategory(category string) ([]string, bool) {

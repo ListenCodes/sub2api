@@ -18,6 +18,7 @@ vi.mock('@/api/admin/userRiskControlV2', async (importOriginal) => {
 	  createReviewCase: vi.fn(),
 	  observeReviewCase: vi.fn(),
       submitReviewFeedback: vi.fn(),
+	  resolveReviewCase: vi.fn(),
       setUserStatus: vi.fn(),
     },
   }
@@ -63,10 +64,11 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(userRiskControlV2API.getUserDetail).mockResolvedValue({ user, events: [], audit: [] })
-    vi.mocked(userRiskControlV2API.claimReviewCase).mockResolvedValue()
-	vi.mocked(userRiskControlV2API.createReviewCase).mockResolvedValue({ id: 32, status: 'pending' })
-	vi.mocked(userRiskControlV2API.observeReviewCase).mockResolvedValue()
-    vi.mocked(userRiskControlV2API.submitReviewFeedback).mockResolvedValue()
+	vi.mocked(userRiskControlV2API.claimReviewCase).mockResolvedValue({ status: 'in_review', revision: 2 })
+	vi.mocked(userRiskControlV2API.createReviewCase).mockResolvedValue({ id: 32, status: 'pending', revision: 1 })
+	vi.mocked(userRiskControlV2API.observeReviewCase).mockResolvedValue({ status: 'observing', review_due_at: '2026-08-27T00:00:00Z', observation_goal: '等待补充证据', revision: 2 })
+	vi.mocked(userRiskControlV2API.submitReviewFeedback).mockResolvedValue()
+	vi.mocked(userRiskControlV2API.resolveReviewCase).mockResolvedValue({ result: 'success', request_id: 'request-1', retryable: false, account: { user_id: 7, action: 'none', result: 'skipped' }, case: { id: 31, result: 'resolved' } })
     vi.mocked(userRiskControlV2API.setUserStatus).mockResolvedValue({ user, result: 'success' })
   })
 
@@ -94,20 +96,19 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
 		await wrapper.get('[data-testid="manual-case-reason"] textarea').setValue('客服升级的异常注册线索')
 		await wrapper.get('[data-testid="create-review-case"]').trigger('click')
 		await flushPromises()
-		expect(userRiskControlV2API.createReviewCase).toHaveBeenCalledWith(7, '客服升级的异常注册线索', 'pending')
+		expect(userRiskControlV2API.createReviewCase).toHaveBeenCalledWith(7, '客服升级的异常注册线索', 'pending', 'manual_review', undefined)
 		expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, case_id: 32, case_status: 'pending' })
 	})
 
-	it('moves a pending case to observation without changing account status', async () => {
+	it('keeps unclaimed pending cases in the claim-only workflow', async () => {
 		const wrapper = mountDrawer()
 		await flushPromises()
-		await wrapper.get('[data-testid="manual-case-reason"] textarea').setValue('等待补充业务证据')
-		await wrapper.get('[data-testid="observe-review-case"]').trigger('click')
-		await flushPromises()
 
-		expect(userRiskControlV2API.observeReviewCase).toHaveBeenCalledWith(31, '等待补充业务证据')
+		expect(wrapper.find('[data-testid="observe-review-case"]').exists()).toBe(false)
+		expect(wrapper.find('[data-testid="observation-goal"]').exists()).toBe(false)
+		expect(wrapper.get('[data-testid="claim-review-case"]').exists()).toBe(true)
+		expect(userRiskControlV2API.observeReviewCase).not.toHaveBeenCalled()
 		expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
-		expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, status: 'active', case_status: 'observing' })
 	})
 
   it('requires claim and a reason before recording feedback without enforcing an account action', async () => {
@@ -125,7 +126,7 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
     await wrapper.get('[data-testid="submit-review-feedback"]').trigger('click')
     await flushPromises()
 
-    expect(userRiskControlV2API.submitReviewFeedback).toHaveBeenCalledWith(31, 'insufficient_evidence', 'Evidence does not establish abuse')
+		expect(userRiskControlV2API.resolveReviewCase).toHaveBeenCalledWith(31, 7, 'insufficient_evidence', 'Evidence does not establish abuse', 'none', 2, expect.any(String))
     expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
     expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, status: 'active', case_status: 'resolved', pending: false })
   })
@@ -139,6 +140,23 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
     expect(wrapper.text()).toContain('admin.userRiskControl.pendingAccountNoStatusAction')
     expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
   })
+
+	it('locks the original resolution intent after a partial completion', async () => {
+		vi.mocked(userRiskControlV2API.resolveReviewCase).mockResolvedValue({ result: 'partial', request_id: 'request-partial', retryable: true, account: { user_id: 7, action: 'none', result: 'skipped' }, case: { id: 31, result: 'failed', failure_reason: 'extension unavailable' } })
+		const wrapper = mountDrawer()
+		await flushPromises()
+		await wrapper.get('[data-testid="claim-review-case"]').trigger('click')
+		await flushPromises()
+		await wrapper.get('[data-testid="review-feedback-reason"] textarea').setValue('Evidence confirms abuse')
+		await wrapper.get('[data-testid="submit-review-feedback"]').trigger('click')
+		await flushPromises()
+
+		expect(wrapper.get('[data-testid="review-feedback-type"] button').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="review-feedback-reason"] textarea').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="review-account-action"] button').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="submit-review-feedback"]').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="retry-resolve-case"]').exists()).toBe(true)
+	})
 
   it('keeps an exact in-drawer investigation stack and returns to the source account', async () => {
     const wrapper = mountDrawer()

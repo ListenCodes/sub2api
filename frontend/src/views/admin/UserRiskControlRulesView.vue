@@ -6,8 +6,8 @@
 		  <div class="inline-flex max-w-full overflow-x-auto border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800" role="tablist" aria-label="规则视图" data-testid="rule-views">
 			<button v-for="option in ruleViews" :key="option.value" type="button" role="tab" class="min-h-9 whitespace-nowrap px-3 text-sm font-medium" :class="activeRuleView === option.value ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'" :aria-selected="activeRuleView === option.value" :data-testid="`rule-view-${option.value}`" @click="setRuleView(option.value)">{{ option.label }}</button>
 		  </div>
-		  <div v-if="activeRuleView === 'identity'" class="inline-flex max-w-full overflow-x-auto border-b border-gray-200 dark:border-dark-700" role="tablist" aria-label="身份规则工具">
-			<button v-for="option in identityTools" :key="option.value" type="button" role="tab" class="min-h-10 whitespace-nowrap border-b-2 px-3 text-sm" :class="identityTool === option.value ? 'border-primary-500 font-medium text-primary-700 dark:text-primary-300' : 'border-transparent text-gray-500'" :data-testid="identityToolTestID(option.value)" @click="setIdentityTool(option.value)">{{ option.label }}</button>
+		  <div v-if="activeRuleView === 'identity'" class="flex max-w-full items-center gap-2 overflow-x-auto" aria-label="身份规则上下文工具">
+			<span class="shrink-0 text-xs font-medium text-gray-500">上下文工具</span><button v-for="option in identityTools" :key="option.value" type="button" class="btn btn-sm whitespace-nowrap" :class="identityTool === option.value ? 'btn-primary' : 'btn-secondary'" :data-testid="identityToolTestID(option.value)" @click="setIdentityTool(option.value)">{{ option.label }}</button>
 		  </div>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0 flex-1">
@@ -29,7 +29,7 @@
             </div>
             <div v-if="identityHealth" class="mb-4 border-y border-gray-200 py-3 text-sm text-gray-600 dark:border-dark-700 dark:text-gray-300" data-testid="identity-shadow-status">
               <p class="font-medium text-gray-900 dark:text-white">{{ identityShadowMessage }}</p>
-              <p class="mt-1 text-xs">开始：{{ identityRulesOperating ? identityRulesStartedAt : '-' }} · {{ identityShadowWindow }} · 有效规则 {{ effectiveIdentityRuleCount }} 条 · {{ identityQualityLabel }}</p>
+			  <p class="mt-1 text-xs">开始：{{ identityRulesOperating ? identityRulesStartedAt : '-' }} · {{ identityShadowWindow }} · 生效检测 {{ effectiveIdentityRuleCount }} 条 · {{ identityQualityLabel }}</p>
             </div>
             <p v-if="identityRulesError" class="mb-3 text-sm text-red-600 dark:text-red-300" data-testid="identity-rules-error">{{ identityRulesError }}</p>
             <div class="overflow-x-auto">
@@ -39,9 +39,9 @@
                 </thead>
                 <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
                   <tr v-for="rule in identityRules" :key="rule.code" :data-testid="`identity-rule-${rule.code}`">
-					<td class="py-2.5 pr-4"><p class="font-medium text-gray-900 dark:text-white">{{ identityRuleName(rule.code) }}</p><p class="mt-1 text-xs text-gray-400">{{ identityDomainLabel(rule.domain) }} · {{ identityRuleCondition(rule) }} · 数据库配置</p></td>
+					<td class="py-2.5 pr-4"><p class="font-medium text-gray-900 dark:text-white">{{ identityRuleName(rule.code) }}</p><p class="mt-1 text-xs text-gray-400">{{ identityDomainLabel(rule.domain) }} · {{ identityRuleCondition(rule) }} · 风险分 {{ rule.score }}</p><p class="mt-1 text-xs text-gray-400">来源 {{ configSourceLabel(rule.config_source) }} · 第 {{ rule.revision }} 版 · {{ formatDate(rule.updated_at) }}</p></td>
 					<td class="py-2.5 pr-4">{{ detectionStateLabel(rule.detection_state || rule.state) }}<p class="mt-1 text-xs text-gray-400">{{ identityRuleStatus(rule) }}</p></td>
-					<td class="py-2.5 pr-4">{{ identityDecisionMode(rule) === 'enforce' ? '受控执行' : 'Shadow' }}</td>
+					<td class="py-2.5 pr-4">{{ identityDecisionMode(rule) === 'enforce' ? '受控执行' : '观察（不执行）' }}</td>
 					<td class="py-2.5 pr-4">{{ identityActionLabel(identityConfiguredAction(rule)) }} / {{ identityActionLabel(identityEffectiveAction(rule)) }}<p v-if="rule.reason_codes?.length" class="mt-1 text-xs text-amber-600">{{ ruleReasonLabel(rule.reason_codes[0]) }}</p></td>
 					<td class="py-2.5 pr-4">{{ detectionStateLabel(rule.data_quality || rule.state) }}</td>
 					<td class="py-2.5"><button type="button" class="btn btn-ghost btn-icon" title="编辑规则" aria-label="编辑规则" :data-testid="`edit-identity-rule-${rule.code}`" @click="openIdentityEditor(rule)"><Icon name="edit" size="sm" /></button></td>
@@ -52,7 +52,7 @@
             </div>
           </section>
 		  <section v-else-if="activeRuleView === 'identity' && identityTool === 'effects'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-rule-effects">
-			<div class="mb-3 flex items-center justify-between gap-3"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Shadow 效果</h2><button type="button" class="btn btn-secondary btn-sm" :disabled="auxLoading" @click="loadEffects"><Icon name="refresh" size="sm" />刷新</button></div>
+			<div class="mb-3 flex items-center justify-between gap-3"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">运行效果</h2><button type="button" class="btn btn-secondary btn-sm" :disabled="auxLoading" @click="loadEffects"><Icon name="refresh" size="sm" />刷新</button></div>
 			<p class="mb-3 text-xs text-gray-500">样本期：{{ identityRulesStartedAt }} 至当前；观察期截止：{{ identityHealth?.shadow_until ? formatDate(identityHealth.shadow_until) : '未配置' }}。有效命中与管理员反馈共同形成确认率和正常共享率。</p>
 			<p v-if="auxError" class="mb-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
 			<div v-if="!auxLoading && !hasEffectiveSamples" class="border-y border-gray-200 py-8 text-center dark:border-dark-700"><p class="font-medium text-gray-900 dark:text-white">尚无有效样本</p><p class="mx-auto mt-2 max-w-xl text-sm text-gray-500">样本期从规则生效后开始；产生有效命中并由管理员反馈后形成确认率和正常共享率。</p></div>
@@ -62,10 +62,10 @@
 			<div class="flex flex-wrap gap-2"><button v-for="rule in identityRules" :key="rule.code" type="button" class="btn btn-sm" :class="selectedIdentityRule === rule.code ? 'btn-primary' : 'btn-secondary'" @click="selectIdentityRule(rule.code)">{{ identityRuleName(rule.code) }}</button></div>
 			<div v-if="selectedRule" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-3 dark:border-dark-700"><div><strong class="text-sm text-gray-900 dark:text-white">{{ identityRuleName(selectedRule.code) }}</strong><p class="mt-1 text-xs text-gray-500">当前第 {{ selectedRule.revision }} 版 · {{ identityRuleStatus(selectedRule) }}</p></div><button v-if="selectedRule.configured_enabled" type="button" class="btn btn-danger btn-sm" data-testid="disable-identity-rule" @click="openDisableRule(selectedRule)">停用</button></div>
 			<p v-if="auxError" class="mt-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
-			<div class="mt-3 space-y-2"><div v-for="version in ruleVersions" :key="version.revision" class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 py-2 text-sm dark:border-dark-700"><span>第 {{ version.revision }} 版 · {{ versionDomainLabel(version) }}</span><span class="flex flex-wrap items-center gap-2"><span :class="version.enabled ? 'text-amber-700' : 'text-gray-500'">{{ versionDecisionLabel(version) }} · {{ formatDate(version.active_from) }}<template v-if="version.active_until"> 至 {{ formatDate(version.active_until) }}</template></span><button v-if="selectedRule && version.revision !== selectedRule.revision" type="button" class="btn btn-secondary btn-sm" @click="openRollback(version)">回滚到此版</button></span></div></div>
+			<div class="mt-3 space-y-2"><div v-for="(version, index) in ruleVersions" :key="version.revision" class="border-b border-gray-100 py-2 text-sm dark:border-dark-700"><div class="flex flex-wrap items-center justify-between gap-3"><span>第 {{ version.revision }} 版 · {{ versionDomainLabel(version) }}</span><span class="flex flex-wrap items-center gap-2"><span :class="version.enabled ? 'text-amber-700' : 'text-gray-500'">{{ versionDecisionLabel(version) }} · {{ formatDate(version.active_from) }}<template v-if="version.active_until"> 至 {{ formatDate(version.active_until) }}</template></span><button v-if="selectedRule && version.revision !== selectedRule.revision" type="button" class="btn btn-secondary btn-sm" @click="openRollback(version)">回滚到此版</button></span></div><p class="mt-1 break-words text-xs text-gray-500">{{ versionDiffLabel(version, ruleVersions[index + 1]) }}</p></div></div>
 		  </section>
 		  <section v-else-if="activeRuleView === 'identity' && identityTool === 'replay'" class="border-y border-gray-200 py-4 dark:border-dark-700" data-testid="identity-rebuild">
-			<div class="flex flex-wrap items-start justify-between gap-3"><div class="max-w-2xl"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">历史回放</h2><p class="mt-1 text-xs leading-5 text-gray-500">预检只读取当前有效身份规则和证据，展示影响范围及预计信号变化，不写入数据。写入仅在 Shadow 观察期已截止、同一管理员 30 分钟内完成合法预检、规则和证据范围未变化且数据质量正常时开放，并要求二次确认。</p><p v-if="rebuildResult" class="mt-2 text-xs text-gray-500" data-testid="rebuild-summary">预检范围已锁定 · 当前 {{ rebuildResult.current_signals }} 条 · 预计 {{ rebuildResult.v2_signals }} 条 · 变化主体 {{ rebuildResult.changed_subjects }} · {{ preflightStatusLabel }}</p><details v-if="rebuildResult" class="mt-2 text-xs text-gray-400" data-testid="rebuild-technical-details"><summary class="cursor-pointer">技术详情</summary><p class="mt-1">内部事件水位 {{ rebuildResult.evidence_high_water }} · 规则水位 {{ Object.keys(rebuildResult.rule_watermark || {}).length }} 项</p></details></div><div class="flex gap-2"><button type="button" class="btn btn-secondary btn-sm" data-testid="rebuild-dry-run" :disabled="auxLoading" @click="runPreflight">预检</button><button type="button" class="btn btn-primary btn-sm" data-testid="rebuild-apply" :disabled="auxLoading || !preflightValid" @click="openRebuildConfirmation">执行回放</button></div></div>
+			<div class="flex flex-wrap items-start justify-between gap-3"><div class="max-w-2xl"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">历史回放</h2><p class="mt-1 text-xs leading-5 text-gray-500">预检只读取当前有效身份规则和证据，展示影响范围及预计信号变化，不写入数据。写入仅在观察期已截止、同一管理员 30 分钟内完成合法预检、规则和证据范围未变化且数据质量正常时开放，并要求二次确认。</p><p v-if="rebuildResult" class="mt-2 text-xs text-gray-500" data-testid="rebuild-summary">预检范围已锁定 · 当前 {{ rebuildResult.current_signals }} 条 · 预计 {{ rebuildResult.v2_signals }} 条 · 变化主体 {{ rebuildResult.changed_subjects }} · {{ preflightStatusLabel }}</p><details v-if="rebuildResult" class="mt-2 text-xs text-gray-400" data-testid="rebuild-technical-details"><summary class="cursor-pointer">技术详情</summary><p class="mt-1">内部事件水位 {{ rebuildResult.evidence_high_water }} · 规则水位 {{ Object.keys(rebuildResult.rule_watermark || {}).length }} 项</p></details></div><div class="flex gap-2"><button type="button" class="btn btn-secondary btn-sm" data-testid="rebuild-dry-run" :disabled="auxLoading" @click="runPreflight">预检</button><button type="button" class="btn btn-primary btn-sm" data-testid="rebuild-apply" :disabled="auxLoading || !preflightValid" @click="openRebuildConfirmation">执行回放</button></div></div>
 			<p v-if="auxError" class="mt-3 text-sm text-red-600 dark:text-red-300">{{ auxError }}</p>
 			<div v-if="rebuildResult" class="mt-3 overflow-x-auto"><table class="w-full min-w-[560px] text-left text-sm"><thead class="text-xs text-gray-500"><tr><th class="pb-2 pr-4">规则</th><th class="pb-2">命中主体</th></tr></thead><tbody><tr v-for="(count, code) in rebuildResult.rule_hits" :key="code"><td class="py-2 pr-4">{{ identityRuleName(code) }}</td><td class="py-2">{{ count }}</td></tr></tbody></table></div>
 		  </section>
@@ -109,11 +109,12 @@
             <template #cell-enabled="{ row }">
               <span class="rounded-md px-2 py-0.5 text-xs font-medium" :class="row.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'">{{ row.enabled ? '已启用' : '已停用' }}</span>
             </template>
-            <template #cell-condition="{ row }">{{ row.threshold }} 次 / {{ row.windowSeconds }} 秒</template>
+			<template #cell-condition="{ row }"><span>{{ row.threshold }} 次 / {{ row.windowSeconds }} 秒</span><span class="mt-1 block text-xs text-gray-400">{{ countStrategyLabel(row.countStrategy) }}</span></template>
             <template #cell-risk="{ row }"><span class="font-semibold">{{ row.score }}</span><span class="ml-2">{{ formatRiskLevel(row.riskLevel) }}</span></template>
             <template #cell-action="{ row }">{{ formatRiskAction(row.action) }}</template>
             <template #cell-actions="{ row }">
-              <div class="flex justify-end">
+			  <div class="flex justify-end gap-1">
+				<button type="button" class="btn btn-ghost btn-icon" :data-testid="`test-rule-${row.id}`" title="测试规则" aria-label="测试规则" @click.stop="openRuleTest(row)"><Icon name="play" size="sm" /></button>
                 <button type="button" class="btn btn-ghost btn-icon" :data-testid="`edit-rule-${row.id}`" title="编辑规则" aria-label="编辑规则" @click.stop="toggleEditor(row.id)">
                   <Icon name="edit" size="sm" />
                 </button>
@@ -207,24 +208,17 @@
 		  <div><label class="input-label">计数口径</label><Select v-model="editDraft.countStrategy" data-testid="rule-count-strategy-edit" :options="countStrategyOptions" /></div>
         </div>
 		<TextArea v-model="editReason" data-testid="edit-rule-reason" label="修改原因" />
-		<section class="border-y border-gray-200 py-4 dark:border-dark-700">
-			<h4 class="text-sm font-semibold text-gray-900 dark:text-white">规则测试样本</h4>
-			<div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"><div><label class="input-label">事件类型</label><Select v-model="testSample.event_type" :options="ruleEventTypeOptions" /></div><div><label class="input-label">样本计数</label><input v-model.number="testSample.observed_count" type="number" min="0" class="input w-full" data-testid="test-observed-count" /></div><div><label class="input-label">用户 ID</label><input v-model.number="testSample.user_id" type="number" min="0" class="input w-full" /></div><div><label class="input-label">账号标识</label><input v-model="testSample.subject_id" class="input w-full" placeholder="可留空以验证排除原因" /></div><div><label class="input-label">IP 样本标识</label><input v-model="testSample.ip_hash" class="input w-full" /></div><div><label class="input-label">设备样本标识</label><input v-model="testSample.device_hash" class="input w-full" /></div></div>
-		</section>
-        <div v-if="testResult && testedId === editDraft.id" class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-200" data-testid="rule-test-result">
-          {{ testResult.matched ? '命中' : '未命中' }} · 风险分 {{ testResult.score }} · {{ formatRiskLevel(testResult.riskLevel) }} · 配置 {{ formatRiskAction(testResult.configuredAction) }} / 实际 {{ formatRiskAction(testResult.action) }}
-          <span v-if="testResult.conditions.length" class="mt-1 block text-xs text-gray-500">命中条件：{{ testResult.conditions.join('、') }}</span>
-		  <span v-if="testResult.excludedReasons.length" class="mt-1 block text-xs text-amber-600">排除原因：{{ testResult.excludedReasons.map(testExclusionLabel).join('、') }}</span>
-		  <ol class="mt-2 space-y-1 text-xs text-gray-500"><li v-for="step in testResult.evaluation" :key="step.step">{{ step.passed ? '通过' : '未通过' }} · {{ testStepLabel(step.step) }}</li></ol>
-        </div>
         <p v-if="editValidationError" class="text-sm text-red-600 dark:text-red-300" data-testid="edit-rule-error">{{ editValidationError }}</p>
       </form>
       <template #footer>
         <button v-if="editDraft && conflictRuleId === editDraft.id" type="button" class="btn btn-secondary" data-testid="reload-rule" @click="reloadRule(editDraft.id)">重新加载</button>
-        <button v-if="editDraft" type="button" class="btn btn-secondary" data-testid="test-rule" :disabled="testing" @click="test(editDraft)">{{ testing ? t('common.loading') : t('admin.userRiskControl.testRule') }}</button>
-        <button type="button" class="btn btn-secondary" @click="closeEditor">{{ t('common.cancel') }}</button>
+        <button type="button" class="btn btn-secondary" data-testid="close-rule-editor" @click="closeEditor">{{ t('common.cancel') }}</button>
         <button v-if="editDraft" type="button" class="btn btn-primary" data-testid="save-rule" :disabled="saving" @click="save(editDraft)">{{ saving ? t('common.saving') : t('common.save') }}</button>
       </template>
+	</BaseDialog>
+	<BaseDialog :show="Boolean(testTarget)" title="规则测试" width="wide" :close-on-click-outside="true" @close="closeRuleTest">
+		<div v-if="testTarget" class="space-y-4"><div><h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ testTarget.name || testTarget.code }}</h4><p class="mt-1 text-xs text-gray-500">{{ countStrategyLabel(testTarget.countStrategy) }} · 阈值 {{ testTarget.threshold }} · 窗口 {{ testTarget.windowSeconds }} 秒</p></div><div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"><div><label class="input-label">事件类型</label><Select v-model="testSample.event_type" :options="ruleEventTypeOptions" /></div><div><label class="input-label">包含本次事件的总计数</label><input v-model.number="testSample.observed_count" type="number" min="0" class="input w-full" data-testid="test-observed-count" /></div><div><label class="input-label">用户 ID</label><input v-model.number="testSample.user_id" type="number" min="0" class="input w-full" /></div><div><label class="input-label">账号标识</label><input v-model="testSample.subject_id" class="input w-full" placeholder="可留空以验证排除原因" /></div><div><label class="input-label">IP 样本标识</label><input v-model="testSample.ip_hash" class="input w-full" /></div><div><label class="input-label">设备样本标识</label><input v-model="testSample.device_hash" class="input w-full" /></div></div><div v-if="testResult && testedId === testTarget.id" class="border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-200" data-testid="rule-test-result">{{ testResult.matched ? '命中' : '未命中' }} · 风险分 {{ testResult.score }} · {{ formatRiskLevel(testResult.riskLevel) }} · 配置 {{ formatRiskAction(testResult.configuredAction) }} / 实际 {{ formatRiskAction(testResult.action) }}<span v-if="testResult.conditions.length" class="mt-1 block text-xs text-gray-500">命中条件：{{ testResult.conditions.join('、') }}</span><span v-if="testResult.excludedReasons.length" class="mt-1 block text-xs text-amber-600">排除原因：{{ testResult.excludedReasons.map(testExclusionLabel).join('、') }}</span><ol class="mt-2 space-y-1 text-xs text-gray-500"><li v-for="step in testResult.evaluation" :key="step.step">{{ step.passed ? '通过' : '未通过' }} · {{ testStepLabel(step.step) }} · {{ formatTestStepDetail(step.detail) }}</li></ol></div></div>
+		<template #footer><button type="button" class="btn btn-secondary" @click="closeRuleTest">关闭</button><button v-if="testTarget" type="button" class="btn btn-primary" data-testid="run-rule-test" :disabled="testing" @click="test(testTarget)">{{ testing ? t('common.loading') : t('admin.userRiskControl.testRule') }}</button></template>
 	</BaseDialog>
 	<BaseDialog :show="Boolean(identityEditor)" :title="identityEditorMode === 'rollback' ? '回滚身份规则' : '编辑身份规则'" width="wide" :close-on-click-outside="true" @close="closeIdentityEditor">
 		<form v-if="identityEditor" class="space-y-5" data-testid="identity-rule-editor" @submit.prevent>
@@ -286,6 +280,7 @@ const editValidationError = ref('')
 const conflictRuleId = ref<number | null>(null)
 const testResult = ref<{ matched: boolean; score: number; riskLevel: string; action: string; configuredAction: string; conditions: string[]; excludedReasons: string[]; evaluation: Array<{ step: string; passed: boolean; detail: unknown }> } | null>(null)
 const testedId = ref<number | null>(null)
+const testTarget = ref<Rule | null>(null)
 type RuleView = 'identity' | 'event' | 'replay' | 'shadow' | 'versions'
 const activeRuleView = ref<RuleView>('identity')
 const ruleViews: Array<{ value: RuleView; label: string }> = [{ value: 'identity', label: '身份规则' }, { value: 'event', label: '事件规则' }]
@@ -306,6 +301,7 @@ const disableTarget = ref<IdentityRule | null>(null)
 const disableReason = ref('')
 const disableValidationError = ref('')
 const editReason = ref('')
+let identityVersionRequest = 0
 const testSample = reactive({ event_type: 'login_failure', observed_count: 0, user_id: 0, subject_id: '', ip_hash: '', device_hash: '' })
 const identityEditor = ref<IdentityRule | null>(null)
 const identityEditorMode = ref<'edit' | 'rollback'>('edit')
@@ -353,7 +349,7 @@ const compositeEnforcementActive = computed(() => Boolean(identityHealth.value?.
 const selectedRule = computed(() => identityRules.value.find((rule) => rule.code === selectedIdentityRule.value) || null)
 const identityHighImpact = computed(() => identityDraft.configured_action === 'reject_candidate' || identityDraft.configured_action === 'auto_ban')
 const identityConfirmationText = computed(() => identityEditor.value ? `PUBLISH ${identityEditor.value.code}` : 'PUBLISH')
-const identityRulesHeader = computed(() => compositeEnforcementActive.value ? '综合注册拦截已开启' : identityRulesOperating.value ? 'Shadow 观察期' : identityRules.value.some((rule) => ['paused', 'degraded', 'not_evaluable'].includes(rule.state)) ? '数据质量保护中' : '尚未启用')
+const identityRulesHeader = computed(() => compositeEnforcementActive.value ? '综合注册候选处置已开启' : identityRulesOperating.value ? '身份检测运行中' : identityRules.value.some((rule) => ['paused', 'degraded', 'not_evaluable'].includes(rule.state)) ? '数据质量保护中' : '尚未启用')
 const hasEffectiveSamples = computed(() => ruleEffects.value.some((effect) => effect.hit_events > 0 || effect.unique_subjects > 0 || effect.sample_user_ids?.length))
 const identityRulesStartedAt = computed(() => {
   const values = identityRules.value.filter((rule) => rule.enabled).map((rule) => rule.active_from || rule.updated_at).filter(Boolean).sort()
@@ -362,7 +358,7 @@ const identityRulesStartedAt = computed(() => {
 const identityQualityDomains = computed(() => identityHealth.value?.quality_domains || identityHealth.value?.domains)
 const rebuildQualityReady = computed(() => { const values = Object.values(identityQualityDomains.value || {}); return values.length > 0 && values.every((state) => state === 'healthy') })
 const identityQualityLabel = computed(() => rebuildQualityReady.value ? '数据质量正常' : '数据质量需关注')
-const identityShadowMessage = computed(() => compositeEnforcementActive.value ? '综合注册拦截：同 IP + 同浏览器实例在 10 分钟内达到第 3 个候选账号时自动拒绝；不会自动封禁现有账号。其他身份规则仍为 Shadow，只记录并进入人工复核。' : identityRulesOperating.value ? 'Shadow：规则已启用并计算，只记录并进入人工复核，不会自动拒绝或封禁。' : 'Shadow：当前未启用有效计算；不会自动拒绝或封禁。')
+const identityShadowMessage = computed(() => compositeEnforcementActive.value ? '综合注册规则会在满足同现阈值时拒绝新的候选账号；其他规则仅记录或进入人工复核，不会自动封禁现有账号。' : identityRulesOperating.value ? '身份检测已启用；当前实际动作以规则行展示为准。' : '当前未启用有效检测，不会自动拒绝或封禁。')
 const identityShadowWindow = computed(() => identityRulesOperating.value ? identityHealth.value?.shadow_until ? `${compositeEnforcementActive.value ? '其他规则观察截止' : '截止'}：${formatDateOnly(identityHealth.value.shadow_until)}` : '截止：未配置' : '观察窗口：未生效')
 function currentPreflightFingerprint() {
 	const rules = identityRules.value.map((rule) => `${rule.code}:${rule.revision}:${rule.enabled}:${rule.state}`).sort().join('|')
@@ -377,7 +373,7 @@ function preflightEvaluation(now: number) {
 	if (!Number.isFinite(completed) || age < 0 || age > 30 * 60 * 1000) return { valid: false, label: '预检已过期，请重新执行' }
 	if (!identityRulesOperating.value) return { valid: false, label: '身份规则当前未启用' }
 	const deadline = new Date(identityHealth.value?.shadow_until || '').getTime()
-	if (!Number.isFinite(deadline) || now < deadline) return { valid: false, label: 'Shadow 观察期尚未截止' }
+	if (!Number.isFinite(deadline) || now < deadline) return { valid: false, label: '观察期尚未截止' }
 	if (!rebuildQualityReady.value) return { valid: false, label: '数据质量不满足写入条件' }
 	if (!preflightFingerprint.value || preflightFingerprint.value !== currentPreflightFingerprint()) return { valid: false, label: '规则或数据质量状态已变化，请重新预检' }
 	return { valid: true, label: '预检有效，可二次确认' }
@@ -409,26 +405,30 @@ function identityDecisionMode(rule: IdentityRule) { return rule.decision_mode ||
 function identityToolTestID(tool: IdentityTool) { return ({ effects: 'rule-view-shadow', replay: 'rule-view-replay', versions: 'rule-view-versions', rules: 'identity-rule-config' } as Record<IdentityTool, string>)[tool] }
 function detectionStateLabel(value: string) { return ({ healthy: '检测正常', disabled: '已停用', paused: '质量保护暂停', degraded: '数据不足', not_evaluable: '不可评估' } as Record<string, string>)[value] || value }
 function identityActionLabel(value?: string) { return ({ none: '无动作', observe: '仅观察', review: '人工复核', reject_candidate: '拒绝新候选', auto_ban: '自动封禁' } as Record<string, string>)[value || ''] || value || '-' }
+function configSourceLabel(value?: string) { return ({ database: '数据库配置', environment: '环境配置', default: '内置默认', migration: '迁移继承' } as Record<string, string>)[value || ''] || value || '未声明' }
+function countStrategyLabel(value?: Rule['countStrategy']) { return ({ user_events: '按用户事件计数', email_subject_events: '按邮箱主体事件计数', ip_distinct_success_users: 'IP 去重成功用户', browser_instance_distinct_success_users: '浏览器实例去重成功用户', api_client_distinct_users: 'API 客户端去重用户', ip_browser_cooccurrence: 'IP 与浏览器同现用户' } as Record<string, string>)[value || 'user_events'] }
 function ruleReasonLabel(value: string) { return ({ rule_disabled: '规则已停用', auto_ban_not_supported_safe_default: '安全降级为人工复核', candidate_rejection_not_eligible: '当前不具备拒绝条件', data_quality_paused: '数据质量异常', data_quality_degraded: '数据不足', data_quality_not_evaluable: '不可评估' } as Record<string, string>)[value] || value }
 function versionDecisionLabel(version: IdentityRuleVersion) { const action = String(version.rule_snapshot?.configured_action || 'observe'); return `${version.enabled ? '已启用' : '已停用'} · ${identityActionLabel(action)}` }
+function versionDiffLabel(version: IdentityRuleVersion, previous?: IdentityRuleVersion) { if (!previous) return '初始版本'; const keys = ['window_seconds', 'threshold', 'score', 'configured_action', 'enabled']; const changes = keys.filter((key) => String(version.rule_snapshot?.[key] ?? version.enabled) !== String(previous.rule_snapshot?.[key] ?? previous.enabled)).map((key) => `${({ window_seconds: '窗口', threshold: '阈值', score: '风险分', configured_action: '配置动作', enabled: '启用状态' } as Record<string, string>)[key]}：${String(previous.rule_snapshot?.[key] ?? previous.enabled)} → ${String(version.rule_snapshot?.[key] ?? version.enabled)}`); return changes.join('；') || '配置无变化' }
 function testExclusionLabel(value: string) { return ({ missing_user_id: '缺少用户 ID', missing_subject_id: '缺少账号标识', missing_ip_hash: '缺少 IP 样本标识', missing_device_hash: '缺少设备样本标识', missing_event_type: '缺少事件类型', event_type_not_configured: '事件类型不在规则范围', threshold_not_reached: '计数未达到阈值', invalid_observed_count: '样本计数无效' } as Record<string, string>)[value] || value }
 function testStepLabel(value: string) { return ({ event_type: '事件类型匹配', evidence: '计数口径所需字段', threshold: '阈值判断', action: '当前模式下实际动作' } as Record<string, string>)[value] || value }
+function formatTestStepDetail(value: unknown) { if (value == null || value === '') return '-'; if (typeof value === 'string') return value; try { return JSON.stringify(value) } catch { return String(value) } }
 function percentage(value: number) { return `${(Number(value || 0) * 100).toFixed(1)}%` }
 function formatDate(value?: string) { return value ? new Date(value).toLocaleString() : '-' }
 function formatDateOnly(value?: string) { return value ? value.slice(0, 10) : '-' }
 function versionDomainLabel(version: IdentityRuleVersion) { const domain = version.domain || selectedRule.value?.domain || 'account'; return ({ account: '邮箱', ip: 'IP', device: '设备', composite: '综合关联' } as Record<string, string>)[domain] || '身份关联' }
 async function setRuleView(view: RuleView) { activeRuleView.value = view; auxError.value = ''; notice.value = '' }
 async function setIdentityTool(tool: IdentityTool) { identityTool.value = tool; auxError.value = ''; if (tool === 'effects' && !ruleEffects.value.length) await loadEffects(); if (tool === 'versions' && identityRules.value.length && !selectedIdentityRule.value) await selectIdentityRule(identityRules.value[0].code) }
-async function loadEffects() { auxLoading.value = true; auxError.value = ''; try { ruleEffects.value = await userRiskControlV2API.listIdentityRuleEffects() } catch (err) { auxError.value = errorMessage(err, 'Shadow 效果暂时不可用') } finally { auxLoading.value = false } }
-async function selectIdentityRule(code: string) { selectedIdentityRule.value = code; auxLoading.value = true; auxError.value = ''; try { ruleVersions.value = await userRiskControlV2API.listIdentityRuleVersions(code) } catch (err) { auxError.value = errorMessage(err, '规则版本暂时不可用') } finally { auxLoading.value = false } }
+async function loadEffects() { auxLoading.value = true; auxError.value = ''; try { ruleEffects.value = await userRiskControlV2API.listIdentityRuleEffects() } catch (err) { auxError.value = errorMessage(err, '运行效果暂时不可用') } finally { auxLoading.value = false } }
+async function selectIdentityRule(code: string) { const request = ++identityVersionRequest; selectedIdentityRule.value = code; ruleVersions.value = []; auxLoading.value = true; auxError.value = ''; try { const versions = await userRiskControlV2API.listIdentityRuleVersions(code); if (request === identityVersionRequest && selectedIdentityRule.value === code) ruleVersions.value = versions } catch (err) { if (request === identityVersionRequest) auxError.value = errorMessage(err, '规则版本暂时不可用') } finally { if (request === identityVersionRequest) auxLoading.value = false } }
 function assignIdentityDraft(rule: IdentityRule, values?: Partial<IdentityRuleDraft>) { Object.assign(identityDraft, { rule_code: rule.code, base_revision: rule.revision, window_seconds: rule.window_seconds, threshold: rule.threshold, score: rule.score, configured_action: identityConfiguredAction(rule), reason: '', ...values }); identitySimulation.value = null; identityConfirmed.value = false; identityConfirmation.value = ''; identityEditorError.value = '' }
 function openIdentityEditor(rule: IdentityRule) { identityEditor.value = rule; identityEditorMode.value = 'edit'; identityRollbackRevision.value = undefined; assignIdentityDraft(rule) }
 function closeIdentityEditor() { if (!identityEditorSaving.value) identityEditor.value = null }
-function openRollback(version: IdentityRuleVersion) { if (!selectedRule.value) return; const snapshot = version.rule_snapshot || {}; identityEditor.value = selectedRule.value; identityEditorMode.value = 'rollback'; identityRollbackRevision.value = version.revision; assignIdentityDraft(selectedRule.value, { window_seconds: Number(snapshot.window_seconds || selectedRule.value.window_seconds), threshold: Number(snapshot.threshold || selectedRule.value.threshold), score: Number(snapshot.score ?? selectedRule.value.score), configured_action: String(snapshot.configured_action || 'observe') as IdentityConfiguredAction }) }
+function openRollback(version: IdentityRuleVersion) { if (!selectedRule.value || !ruleVersions.value.some((item) => item.revision === version.revision)) return; const snapshot = version.rule_snapshot || {}; identityEditor.value = selectedRule.value; identityEditorMode.value = 'rollback'; identityRollbackRevision.value = version.revision; assignIdentityDraft(selectedRule.value, { window_seconds: Number(snapshot.window_seconds || selectedRule.value.window_seconds), threshold: Number(snapshot.threshold || selectedRule.value.threshold), score: Number(snapshot.score ?? selectedRule.value.score), configured_action: String(snapshot.configured_action || 'observe') as IdentityConfiguredAction }) }
 function validateIdentityEditor() { if (!identityDraft.reason.trim()) return '变更原因不能为空。'; if (identityDraft.window_seconds <= 0 || identityDraft.threshold <= 0 || identityDraft.score < 0 || identityDraft.score > 100) return '窗口、阈值或风险分无效。'; if (identityHighImpact.value && identityDraft.configured_action === 'reject_candidate' && identityEditor.value?.code !== 'v2_registration_composite_accounts') return '只有综合注册规则可配置拒绝候选。'; return '' }
 async function saveIdentityDraft() { if (!identityEditor.value) return false; const validation = validateIdentityEditor(); if (validation) { identityEditorError.value = validation; return false } identityEditorSaving.value = true; identityEditorError.value = ''; try { const payload = { base_revision: identityDraft.base_revision, window_seconds: identityDraft.window_seconds, threshold: identityDraft.threshold, score: identityDraft.score, configured_action: identityDraft.configured_action, reason: identityDraft.reason }; const saved = await userRiskControlV2API.saveIdentityRuleDraft(identityEditor.value.code, payload); Object.assign(identityDraft, saved); identitySimulation.value = null; notice.value = '身份规则草稿已保存'; return true } catch (err) { identityEditorError.value = errorMessage(err, '草稿保存失败'); return false } finally { identityEditorSaving.value = false } }
 async function simulateIdentityDraft() { if (!identityEditor.value) return; if (identityEditorMode.value === 'edit' && !(await saveIdentityDraft())) return; identityEditorSaving.value = true; identityEditorError.value = ''; try { identitySimulation.value = await userRiskControlV2API.simulateIdentityRule(identityEditor.value.code, identityEditorMode.value === 'rollback' ? identityRollbackRevision.value : undefined) } catch (err) { identityEditorError.value = errorMessage(err, '模拟失败') } finally { identityEditorSaving.value = false } }
-function identitySimulationMatchesDraft() { const draft = identitySimulation.value?.draft; return Boolean(draft && draft.rule_code === identityDraft.rule_code && draft.base_revision === identityDraft.base_revision && draft.window_seconds === identityDraft.window_seconds && draft.threshold === identityDraft.threshold && draft.score === identityDraft.score && draft.configured_action === identityDraft.configured_action) }
+function identitySimulationMatchesDraft() { const simulation = identitySimulation.value; const draft = simulation?.draft; return Boolean(simulation && new Date(simulation.expires_at).getTime() > Date.now() && draft && draft.rule_code === identityDraft.rule_code && draft.base_revision === identityDraft.base_revision && draft.window_seconds === identityDraft.window_seconds && draft.threshold === identityDraft.threshold && draft.score === identityDraft.score && draft.configured_action === identityDraft.configured_action) }
 watch(() => [identityDraft.base_revision, identityDraft.window_seconds, identityDraft.threshold, identityDraft.score, identityDraft.configured_action], () => { if (identitySimulation.value && !identitySimulationMatchesDraft()) { identitySimulation.value = null; identityConfirmed.value = false; identityConfirmation.value = '' } })
 async function runIdentityLifecycle(operation: 'publish' | 'enable' | 'rollback') { if (!identityEditor.value) return; const validation = validateIdentityEditor(); if (validation) { identityEditorError.value = validation; return } if (!identitySimulation.value || !identitySimulationMatchesDraft()) { identityEditorError.value = '当前草稿必须先完成模拟；字段变化后请重新模拟。'; return } if (identityHighImpact.value && (!identityConfirmed.value || identityConfirmation.value.trim() !== identityConfirmationText.value)) { identityEditorError.value = '高影响动作必须确认影响并输入精确确认文本。'; return } identityEditorSaving.value = true; identityEditorError.value = ''; try { await userRiskControlV2API.identityRuleLifecycle(identityEditor.value.code, operation, { reason: identityDraft.reason, simulationId: identitySimulation.value.id, confirmed: identityConfirmed.value, confirmation: identityConfirmation.value.trim(), targetRevision: identityRollbackRevision.value }); notice.value = operation === 'rollback' ? '身份规则已回滚为新版本' : operation === 'enable' ? '身份规则已启用' : '身份规则已发布'; const code = identityEditor.value.code; identityEditor.value = null; await load(); if (identityTool.value === 'versions') await selectIdentityRule(code) } catch (err) { identityEditorError.value = errorMessage(err, '身份规则操作失败') } finally { identityEditorSaving.value = false } }
 async function runPreflight() { rebuildResult.value = null; preflightFingerprint.value = ''; rebuildConfirmOpen.value = false; rebuildConfirmed.value = false; auxLoading.value = true; auxError.value = ''; try { rebuildResult.value = await userRiskControlV2API.dryRunIdentityRebuild(); preflightFingerprint.value = currentPreflightFingerprint(); preflightNow.value = Date.now(); notice.value = rebuildResult.value.status === 'completed' ? '预检已完成' : '预检尚未完成' } catch (err) { auxError.value = errorMessage(err, '预检失败') } finally { auxLoading.value = false } }
@@ -447,7 +447,8 @@ async function load() {
   else error.value = errorMessage(genericResult.reason)
   if (identityResult.status === 'fulfilled') identityRules.value = identityResult.value
   else identityRulesError.value = errorMessage(identityResult.reason, '身份规则暂时不可用')
-  if (healthResult.status === 'fulfilled') identityHealth.value = healthResult.value
+	if (healthResult.status === 'fulfilled') identityHealth.value = healthResult.value
+	else { identityHealth.value = null; identityRulesError.value = identityRulesError.value || errorMessage(healthResult.reason, '身份健康状态暂时不可用') }
   loading.value = false
 }
 function openCreateForm() { applyTemplate(ruleTemplates[0]); createOpen.value = true; notice.value = '' }
@@ -465,12 +466,14 @@ function toggleEditor(id: number) {
   testedId.value = null
 	editReason.value = ''
 	testSample.event_type = rule.eventTypes?.[0] || ''
-	testSample.observed_count = 0
-	testSample.user_id = 0
+	testSample.observed_count = rule.threshold
+	testSample.user_id = 1
 	testSample.subject_id = ''
 	testSample.ip_hash = ''
 	testSample.device_hash = ''
 }
+function openRuleTest(rule: Rule) { testTarget.value = rule; testResult.value = null; testedId.value = null; testSample.event_type = rule.eventTypes?.[0] || ''; testSample.observed_count = rule.threshold; testSample.user_id = 1; testSample.subject_id = ''; testSample.ip_hash = ''; testSample.device_hash = '' }
+function closeRuleTest() { if (!testing.value) testTarget.value = null }
 function applyTemplate(template: RuleCreateInput) { Object.assign(draft, template, { eventTypes: [...template.eventTypes] }); selectedTemplateCode.value = template.code; createValidationError.value = '' }
 function validateRuleFields(rule: Pick<RuleCreateInput, 'windowSeconds' | 'threshold' | 'score' | 'riskLevel' | 'action'>) {
   if (!Number.isFinite(rule.windowSeconds) || rule.windowSeconds <= 0) return '时间窗口必须大于 0。'

@@ -526,7 +526,7 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 			}
 		case "composite":
 			deviceID = event.BrowserID
-			err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND ip_quality_valid AND device_quality_valid AND network_identity_id=$1 AND browser_identity_id=$2 AND user_id>0 AND occurred_at BETWEEN $3 AND $4`, event.NetworkID, deviceID, since, event.OccurredAt).Scan(&count)
+			err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM risk_identity_events WHERE event_class='registration' AND outcome='success' AND ip_quality_valid AND device_quality_valid AND network_identity_id=$1 AND browser_identity_id=$2 AND user_id>0 AND occurred_at BETWEEN $3 AND $4 AND NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$1 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))`, event.NetworkID, deviceID, since, event.OccurredAt).Scan(&count)
 		}
 		if err != nil {
 			return err
@@ -548,7 +548,7 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 		var signalID int64
 		err = r.db.QueryRowContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at)
 SELECT $1,$2,$3::varchar,$4,$5,$6,$7,$8,$9,TRUE,NULLIF($10,0),NULLIF($11,0),$12,$12,$13,$14::varchar,$15::timestamptz,$15::timestamptz+($16::integer*interval '1 second'),$15::timestamptz,$15::timestamptz,$15::timestamptz
-WHERE $3::varchar<>'ip' OR NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$10 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
+WHERE $3::varchar NOT IN ('ip','composite') OR NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$10 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
 ON CONFLICT(event_id,user_id,rule_code) DO UPDATE SET last_hit_at=GREATEST(risk_identity_signals.last_hit_at,EXCLUDED.last_hit_at) RETURNING id`, event.ID, event.UserID, rule.domain, rule.code, rule.versionID, rule.revision, rule.family, rule.score, count, event.NetworkID, deviceID, evidence, decisionID, lifecycle, event.OccurredAt, rule.window).Scan(&signalID)
 		if errors.Is(err, sql.ErrNoRows) {
 			_, _ = r.db.ExecContext(ctx, `UPDATE risk_decisions SET status='resolved',current_score=0 WHERE decision_id=$1`, decisionID)
@@ -605,15 +605,22 @@ func (r *SQLIdentityRepository) upsertIdentityReviewCase(ctx context.Context, ev
 	if strings.Contains(ruleCode, "composite") {
 		strength = "high"
 	}
-	var caseID int64
-	conflict := "ON CONFLICT(user_id,signal_family) WHERE status='observing'"
-	if status == "pending" {
-		conflict = "ON CONFLICT(user_id,signal_family) WHERE status IN ('pending','in_review')"
+	var reviewDueAt any
+	observationGoal := ""
+	if status == "observing" {
+		reviewDueAt = time.Now().UTC().Add(24 * time.Hour)
+		observationGoal = "Review whether the weak signal persists or escalates"
 	}
-	err := r.db.QueryRowContext(ctx, `INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,opened_at,last_hit_at)
-VALUES($1,$2,$3,$4,$5,$5,$6,$7,$8,$8)
-`+conflict+` DO UPDATE SET decision_id=EXCLUDED.decision_id,current_score=GREATEST(risk_review_cases.current_score,EXCLUDED.current_score),historical_max_score=GREATEST(risk_review_cases.historical_max_score,EXCLUDED.historical_max_score),primary_signal=CASE WHEN EXCLUDED.current_score>=risk_review_cases.current_score THEN EXCLUDED.primary_signal ELSE risk_review_cases.primary_signal END,evidence_strength=CASE WHEN EXCLUDED.current_score>=risk_review_cases.current_score THEN EXCLUDED.evidence_strength ELSE risk_review_cases.evidence_strength END,last_hit_at=GREATEST(risk_review_cases.last_hit_at,EXCLUDED.last_hit_at),updated_at=NOW()
-RETURNING id`, event.UserID, decisionID, family, status, score, ruleCode, strength, event.OccurredAt).Scan(&caseID)
+	var caseID int64
+	err := r.db.QueryRowContext(ctx, `INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,review_due_at,observation_goal,opened_at,last_hit_at)
+VALUES($1,$2,$3,$4,$5,$5,$6,$7,$9,$10,$8,$8)
+ON CONFLICT(user_id,signal_family) WHERE status IN ('pending','in_review','observing') DO UPDATE SET
+status=CASE WHEN risk_review_cases.status='in_review' THEN 'in_review' WHEN risk_review_cases.status='observing' AND risk_review_cases.assignee_id>0 AND EXCLUDED.status='pending' THEN 'in_review' WHEN risk_review_cases.status='pending' OR EXCLUDED.status='pending' THEN 'pending' ELSE 'observing' END,
+assignee_id=CASE WHEN risk_review_cases.status='observing' AND risk_review_cases.assignee_id>0 AND EXCLUDED.status='pending' THEN risk_review_cases.assignee_id WHEN risk_review_cases.status='in_review' THEN risk_review_cases.assignee_id ELSE 0 END,
+review_due_at=CASE WHEN risk_review_cases.status='observing' AND EXCLUDED.status='observing' THEN COALESCE(risk_review_cases.review_due_at,EXCLUDED.review_due_at) ELSE NULL END,
+observation_goal=CASE WHEN risk_review_cases.status='observing' AND EXCLUDED.status='observing' THEN COALESCE(NULLIF(risk_review_cases.observation_goal,''),EXCLUDED.observation_goal) ELSE '' END,
+decision_id=EXCLUDED.decision_id,current_score=GREATEST(risk_review_cases.current_score,EXCLUDED.current_score),historical_max_score=GREATEST(risk_review_cases.historical_max_score,EXCLUDED.historical_max_score),primary_signal=CASE WHEN EXCLUDED.current_score>=risk_review_cases.current_score THEN EXCLUDED.primary_signal ELSE risk_review_cases.primary_signal END,evidence_strength=CASE WHEN EXCLUDED.current_score>=risk_review_cases.current_score THEN EXCLUDED.evidence_strength ELSE risk_review_cases.evidence_strength END,last_hit_at=GREATEST(risk_review_cases.last_hit_at,EXCLUDED.last_hit_at),last_activity_at=NOW(),revision=risk_review_cases.revision+1,updated_at=NOW()
+RETURNING id`, event.UserID, decisionID, family, status, score, ruleCode, strength, event.OccurredAt, reviewDueAt, observationGoal).Scan(&caseID)
 	if err != nil {
 		return err
 	}
@@ -1069,6 +1076,7 @@ FROM requested LEFT JOIN latest_network USING(user_id) LEFT JOIN device_counts U
 		if err := rows.Scan(&item.UserID, &item.HasIdentity, &item.LookupKey, &item.Ciphertext, &item.Nonce, &item.KeyID, &item.CountryCode, &item.Region, &item.BrowserInstanceCount, &item.APIClientCount, &item.AssociatedAccountCount, &item.ActiveRuleCount); err != nil {
 			return nil, err
 		}
+		item.ActiveSignalCount = item.ActiveRuleCount
 		item.QualityState = qualityState
 		if item.HasIdentity {
 			plainIP, decryptErr := protector.DecryptIP(item.Ciphertext, item.Nonce, item.LookupKey, item.KeyID)

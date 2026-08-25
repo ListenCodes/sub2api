@@ -559,15 +559,37 @@ CREATE TABLE IF NOT EXISTS risk_review_cases (
     primary_signal VARCHAR(80) NOT NULL DEFAULT '',
     evidence_strength VARCHAR(24) NOT NULL DEFAULT 'weak',
     assignee_id BIGINT NOT NULL DEFAULT 0,
+    created_by BIGINT NOT NULL DEFAULT 0,
+    review_due_at TIMESTAMPTZ,
+    observation_goal VARCHAR(500) NOT NULL DEFAULT '',
+    resolution_reason VARCHAR(500) NOT NULL DEFAULT '',
+    resolution_request_id VARCHAR(160) NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 1,
     opened_at TIMESTAMPTZ NOT NULL,
     last_hit_at TIMESTAMPTZ NOT NULL,
+    last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS review_due_at TIMESTAMPTZ;
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS observation_goal VARCHAR(500) NOT NULL DEFAULT '';
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS resolution_reason VARCHAR(500) NOT NULL DEFAULT '';
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS resolution_request_id VARCHAR(160) NOT NULL DEFAULT '';
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
+UPDATE risk_review_cases SET last_activity_at=GREATEST(opened_at,last_hit_at,COALESCE(resolved_at,opened_at),updated_at) WHERE last_activity_at IS NULL;
+ALTER TABLE risk_review_cases ALTER COLUMN last_activity_at SET DEFAULT NOW();
+ALTER TABLE risk_review_cases ALTER COLUMN last_activity_at SET NOT NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=8) THEN
+    UPDATE risk_review_cases SET status='in_review' WHERE status='pending' AND assignee_id>0;
+    INSERT INTO risk_schema_migrations(version) VALUES (8);
+  END IF;
+END $$;
 ALTER TABLE risk_review_cases DROP CONSTRAINT IF EXISTS risk_review_cases_user_id_signal_family_status_key;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_review_cases_open_family ON risk_review_cases(user_id,signal_family) WHERE status IN ('pending','in_review');
-CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_review_cases_observing_family ON risk_review_cases(user_id,signal_family) WHERE status='observing';
 CREATE INDEX IF NOT EXISTS idx_risk_review_cases_queue ON risk_review_cases(status,assignee_id,current_score DESC,last_hit_at DESC);
+CREATE INDEX IF NOT EXISTS idx_risk_review_cases_due ON risk_review_cases(review_due_at,last_activity_at DESC) WHERE status='observing';
 
 CREATE TABLE IF NOT EXISTS risk_case_evidence (
     id BIGSERIAL PRIMARY KEY,
@@ -589,6 +611,60 @@ DO $$ BEGIN
     ALTER TABLE risk_case_evidence ADD CONSTRAINT risk_case_evidence_signal_id_fkey FOREIGN KEY(signal_id) REFERENCES risk_identity_signals(id) ON DELETE SET NULL;
   END IF;
 END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=9) THEN
+    UPDATE risk_review_cases
+    SET review_due_at=COALESCE(review_due_at,COALESCE(last_activity_at,NOW())+INTERVAL '24 hours'),
+        observation_goal=CASE WHEN BTRIM(observation_goal)='' THEN 'Review whether the weak signal persists or escalates' ELSE observation_goal END
+    WHERE status='observing';
+
+    WITH ranked AS (
+      SELECT id,
+             FIRST_VALUE(id) OVER (
+               PARTITION BY user_id,signal_family
+               ORDER BY CASE status WHEN 'in_review' THEN 3 WHEN 'pending' THEN 2 ELSE 1 END DESC,last_hit_at DESC,id DESC
+             ) keep_id,
+             ROW_NUMBER() OVER (
+               PARTITION BY user_id,signal_family
+               ORDER BY CASE status WHEN 'in_review' THEN 3 WHEN 'pending' THEN 2 ELSE 1 END DESC,last_hit_at DESC,id DESC
+             ) ordinal
+      FROM risk_review_cases
+      WHERE status IN ('pending','in_review','observing')
+    )
+    INSERT INTO risk_case_evidence(case_id,signal_id,evidence_snapshot,occurred_at,created_at)
+    SELECT ranked.keep_id,evidence.signal_id,evidence.evidence_snapshot,evidence.occurred_at,evidence.created_at
+    FROM ranked JOIN risk_case_evidence evidence ON evidence.case_id=ranked.id
+    WHERE ranked.ordinal>1
+    ON CONFLICT(case_id,signal_id) DO NOTHING;
+
+    WITH ranked AS (
+      SELECT id,
+             FIRST_VALUE(id) OVER (
+               PARTITION BY user_id,signal_family
+               ORDER BY CASE status WHEN 'in_review' THEN 3 WHEN 'pending' THEN 2 ELSE 1 END DESC,last_hit_at DESC,id DESC
+             ) keep_id,
+             ROW_NUMBER() OVER (
+               PARTITION BY user_id,signal_family
+               ORDER BY CASE status WHEN 'in_review' THEN 3 WHEN 'pending' THEN 2 ELSE 1 END DESC,last_hit_at DESC,id DESC
+             ) ordinal
+      FROM risk_review_cases
+      WHERE status IN ('pending','in_review','observing')
+    )
+    UPDATE risk_review_cases duplicate_case
+    SET status='resolved',
+        resolution='data_error',
+        resolution_reason='Merged into open case #'||ranked.keep_id||' while enforcing one open case per signal family',
+        resolved_at=NOW(),last_activity_at=NOW(),revision=duplicate_case.revision+1,updated_at=NOW()
+    FROM ranked
+    WHERE duplicate_case.id=ranked.id AND ranked.ordinal>1;
+
+    INSERT INTO risk_schema_migrations(version) VALUES (9);
+  END IF;
+END $$;
+DROP INDEX IF EXISTS idx_risk_review_cases_open_family;
+DROP INDEX IF EXISTS idx_risk_review_cases_observing_family;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_review_cases_unresolved_family ON risk_review_cases(user_id,signal_family) WHERE status IN ('pending','in_review','observing');
 
 CREATE TABLE IF NOT EXISTS risk_review_feedback (
     id BIGSERIAL PRIMARY KEY,

@@ -46,7 +46,7 @@ describe('UserRiskControlAuditView', () => {
     emitFilter(wrapper, 'audit-action-filter', 'ban')
     emitFilter(wrapper, 'audit-result-filter', 'failed')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: 'ban', result: 'failed', page: 1, pageSize: 20 })
+		expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'disposition', action: 'ban', result: 'failed', page: 1, pageSize: 20 })
   })
 
   it('debounces actor and target text filters for 300 ms', async () => {
@@ -83,7 +83,7 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
     emitFilter(wrapper, 'audit-action-filter', 'ban')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: 'ban', result: '', page: 1, pageSize: 20 })
+		expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'disposition', action: 'ban', result: '', page: 1, pageSize: 20 })
   })
 
   it('resets active audit filters and supports changing the page size', async () => {
@@ -95,11 +95,11 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="reset-audit-filters"]').trigger('click')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 1, pageSize: 20 })
+		expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'disposition', action: '', result: '', page: 1, pageSize: 20 })
 
     wrapper.findComponent(Pagination).vm.$emit('update:pageSize', 50)
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 1, pageSize: 50 })
+		expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'disposition', action: '', result: '', page: 1, pageSize: 50 })
   })
 
   it('moves to the next audit page using the server total', async () => {
@@ -110,7 +110,7 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
     wrapper.findComponent(Pagination).vm.$emit('update:page', 2)
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'security', action: '', result: '', page: 2, pageSize: 20 })
+		expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'disposition', action: '', result: '', page: 2, pageSize: 20 })
   })
 
   it('prioritizes administrator and target accounts while folding batch identifiers', async () => {
@@ -180,9 +180,9 @@ describe('UserRiskControlAuditView', () => {
     await wrapper.get('[data-testid="toggle-sensitive-audit-8"]').trigger('click')
     expect(wrapper.text()).toContain('关联账号')
 
-    await wrapper.get('[data-testid="audit-category-rules"]').trigger('click')
+	await wrapper.get('[data-testid="audit-category-configuration"]').trigger('click')
     await flushPromises()
-    expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'rules', action: '' }))
+	expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'configuration', action: '' }))
   })
 
   it('passes audit sorting and extended filters to the API', async () => {

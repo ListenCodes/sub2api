@@ -246,12 +246,16 @@ func (s *HTTPServer) dispatch(w http.ResponseWriter, r *http.Request, body []byt
 		s.handleWorkOverview(w, r)
 	case r.Method == http.MethodGet && path == "/api/v1/admin/review-cases":
 		s.handleReviewCases(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/admin/review-cases/"):
+		s.handleReviewCaseGet(w, r, path)
 	case r.Method == http.MethodPost && path == "/api/v1/admin/review-cases":
 		s.handleReviewCaseCreate(w, r, body)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/claim"):
 		s.handleReviewCaseClaim(w, r, path)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/feedback"):
 		s.handleReviewCaseFeedback(w, r, path, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/resolve"):
+		s.handleReviewCaseResolve(w, r, path, body)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/review-cases/") && strings.HasSuffix(path, "/observe"):
 		s.handleReviewCaseObserve(w, r, path, body)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/admin/network-identities/") && strings.HasSuffix(path, "/label-preview"):

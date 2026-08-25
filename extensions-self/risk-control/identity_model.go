@@ -217,6 +217,7 @@ type IdentityListSummary struct {
 	APIClientCount         int    `json:"api_client_count"`
 	AssociatedAccountCount int    `json:"associated_account_count"`
 	ActiveRuleCount        int    `json:"active_rule_count"`
+	ActiveSignalCount      int    `json:"active_signal_count"`
 	QualityState           string `json:"quality_state"`
 	HasIdentity            bool   `json:"-"`
 	LookupKey              string `json:"-"`
@@ -328,20 +329,27 @@ type IdentityDeliveryReport struct {
 }
 
 type RiskReviewCase struct {
-	ID                 int64  `json:"id"`
-	UserID             int64  `json:"user_id"`
-	DecisionID         string `json:"decision_id"`
-	SignalFamily       string `json:"signal_family"`
-	Status             string `json:"status"`
-	Resolution         string `json:"resolution"`
-	CurrentScore       int    `json:"current_score"`
-	HistoricalMaxScore int    `json:"historical_max_score"`
-	PrimarySignal      string `json:"primary_signal"`
-	EvidenceStrength   string `json:"evidence_strength"`
-	AssigneeID         int64  `json:"assignee_id"`
-	OpenedAt           string `json:"opened_at"`
-	LastHitAt          string `json:"last_hit_at"`
-	ResolvedAt         string `json:"resolved_at,omitempty"`
+	ID                  int64  `json:"id"`
+	UserID              int64  `json:"user_id"`
+	DecisionID          string `json:"decision_id"`
+	SignalFamily        string `json:"signal_family"`
+	Status              string `json:"status"`
+	Resolution          string `json:"resolution"`
+	CurrentScore        int    `json:"current_score"`
+	HistoricalMaxScore  int    `json:"historical_max_score"`
+	PrimarySignal       string `json:"primary_signal"`
+	EvidenceStrength    string `json:"evidence_strength"`
+	AssigneeID          int64  `json:"assignee_id"`
+	CreatedBy           int64  `json:"created_by"`
+	ReviewDueAt         string `json:"review_due_at,omitempty"`
+	ObservationGoal     string `json:"observation_goal,omitempty"`
+	ResolutionReason    string `json:"resolution_reason,omitempty"`
+	ResolutionRequestID string `json:"resolution_request_id,omitempty"`
+	Revision            int    `json:"revision"`
+	OpenedAt            string `json:"opened_at"`
+	LastHitAt           string `json:"last_hit_at"`
+	LastActivityAt      string `json:"last_activity_at"`
+	ResolvedAt          string `json:"resolved_at,omitempty"`
 }
 
 type RiskRuleEffect struct {

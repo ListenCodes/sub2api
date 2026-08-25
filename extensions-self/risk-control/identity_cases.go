@@ -22,16 +22,21 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 		where = append(where, fmt.Sprintf(condition, len(args)))
 	}
 	switch view {
-	case "my":
+	case "mine", "my":
 		add("case_row.assignee_id=$%d", actorID)
-		where = append(where, "case_row.status IN ('pending','in_review')")
+		where = append(where, "case_row.status='in_review'")
+	case "due":
+		where = append(where, "case_row.status='observing' AND case_row.review_due_at IS NOT NULL AND case_row.review_due_at<=NOW()")
 	case "observing":
 		where = append(where, "case_row.status='observing'")
 	case "resolved", "processed":
 		where = append(where, "case_row.status='resolved'")
-	case "all":
+	case "open", "all":
+		where = append(where, "case_row.status IN ('pending','in_review','observing')")
+	case "unassigned", "pending":
+		where = append(where, "case_row.status='pending' AND case_row.assignee_id=0")
 	default:
-		where = append(where, "case_row.status='pending'")
+		where = append(where, "case_row.status='pending' AND case_row.assignee_id=0")
 	}
 	if len(userIDs) > 0 {
 		add("case_row.user_id=ANY($%d::bigint[])", pqInt64Array(userIDs))
@@ -75,7 +80,7 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 		return nil, 0, err
 	}
 	args = append(args, limit, offset)
-	rows, err := r.db.QueryContext(ctx, base+`SELECT case_row.id,case_row.user_id,COALESCE(case_row.decision_id,''),case_row.signal_family,case_row.status,case_row.resolution,COALESCE(current.current_score,0),case_row.historical_max_score,case_row.primary_signal,case_row.evidence_strength,case_row.assignee_id,case_row.opened_at,case_row.last_hit_at,case_row.resolved_at FROM risk_review_cases case_row LEFT JOIN current_scores current ON current.user_id=case_row.user_id AND current.signal_family=case_row.signal_family WHERE `+condition+` ORDER BY `+orderColumn+` `+direction+`,case_row.last_hit_at DESC,case_row.id DESC LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
+	rows, err := r.db.QueryContext(ctx, base+`SELECT case_row.id,case_row.user_id,COALESCE(case_row.decision_id,''),case_row.signal_family,case_row.status,case_row.resolution,COALESCE(current.current_score,case_row.current_score,0),case_row.historical_max_score,case_row.primary_signal,case_row.evidence_strength,case_row.assignee_id,case_row.created_by,case_row.review_due_at,case_row.observation_goal,case_row.resolution_reason,case_row.revision,case_row.opened_at,case_row.last_hit_at,case_row.last_activity_at,case_row.resolved_at FROM risk_review_cases case_row LEFT JOIN current_scores current ON current.user_id=case_row.user_id AND current.signal_family=case_row.signal_family WHERE `+condition+` ORDER BY `+orderColumn+` `+direction+`,case_row.last_activity_at DESC,case_row.id DESC LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -83,12 +88,15 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 	items := make([]RiskReviewCase, 0, limit)
 	for rows.Next() {
 		var item RiskReviewCase
-		var opened, last time.Time
-		var resolved sql.NullTime
-		if err := rows.Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &opened, &last, &resolved); err != nil {
+		var opened, last, activity time.Time
+		var due, resolved sql.NullTime
+		if err := rows.Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &item.CreatedBy, &due, &item.ObservationGoal, &item.ResolutionReason, &item.Revision, &opened, &last, &activity, &resolved); err != nil {
 			return nil, 0, err
 		}
-		item.OpenedAt, item.LastHitAt = opened.UTC().Format(time.RFC3339Nano), last.UTC().Format(time.RFC3339Nano)
+		item.OpenedAt, item.LastHitAt, item.LastActivityAt = opened.UTC().Format(time.RFC3339Nano), last.UTC().Format(time.RFC3339Nano), activity.UTC().Format(time.RFC3339Nano)
+		if due.Valid {
+			item.ReviewDueAt = due.Time.UTC().Format(time.RFC3339Nano)
+		}
 		if resolved.Valid {
 			item.ResolvedAt = resolved.Time.UTC().Format(time.RFC3339Nano)
 		}
@@ -99,9 +107,10 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 
 func (r *SQLIdentityRepository) WorkOverview(ctx context.Context, actorID int64) (map[string]int, error) {
 	query := riskIndexProjectionCTE() + `, case_counts AS (
- SELECT COUNT(*) FILTER(WHERE status='pending')::int pending,
-        COUNT(*) FILTER(WHERE assignee_id=$1 AND status IN ('pending','in_review'))::int mine,
-        COUNT(*) FILTER(WHERE status='observing')::int observing
+	 SELECT COUNT(*) FILTER(WHERE status='pending' AND assignee_id=0)::int unassigned,
+	        COUNT(*) FILTER(WHERE assignee_id=$1 AND status='in_review')::int mine,
+	        COUNT(*) FILTER(WHERE status='observing' AND review_due_at IS NOT NULL AND review_due_at<=NOW())::int due,
+	        COUNT(*) FILTER(WHERE status IN ('pending','in_review','observing'))::int open
  FROM risk_review_cases
 ), quality_cases AS (
  SELECT COUNT(*)::int data_quality
@@ -109,13 +118,16 @@ func (r *SQLIdentityRepository) WorkOverview(ctx context.Context, actorID int64)
  WHERE EXISTS(SELECT 1 FROM risk_signal_processing_jobs job JOIN risk_identity_events event ON event.id=job.event_id
               WHERE event.user_id=quality_case.user_id AND job.status IN ('retry','failed'))
 )
-SELECT case_counts.pending,case_counts.mine,case_counts.observing,(SELECT COUNT(*)::int FROM risk_index),quality_cases.data_quality
-FROM case_counts CROSS JOIN quality_cases`
-	var pending, mine, observing, atRisk, dataQuality int
-	if err := r.db.QueryRowContext(ctx, query, actorID).Scan(&pending, &mine, &observing, &atRisk, &dataQuality); err != nil {
+	SELECT case_counts.unassigned,case_counts.mine,case_counts.due,case_counts.open,(SELECT COUNT(*)::int FROM risk_index),quality_cases.data_quality
+	FROM case_counts CROSS JOIN quality_cases`
+	var unassigned, mine, due, open, atRisk, dataQuality int
+	if err := r.db.QueryRowContext(ctx, query, actorID).Scan(&unassigned, &mine, &due, &open, &atRisk, &dataQuality); err != nil {
 		return nil, err
 	}
-	return map[string]int{"pending": pending, "mine": mine, "observing": observing, "at_risk": atRisk, "data_quality": dataQuality}, nil
+	return map[string]int{
+		"unassigned_pending": unassigned, "my_in_review": mine, "review_due": due, "all_open": open,
+		"pending": unassigned, "mine": mine, "observing": due, "at_risk": atRisk, "data_quality": dataQuality,
+	}, nil
 }
 
 func pqInt64Array(values []int64) string {
@@ -128,48 +140,89 @@ func pqInt64Array(values []int64) string {
 	return "{" + strings.Join(parts, ",") + "}"
 }
 
+func (r *SQLIdentityRepository) GetReviewCase(ctx context.Context, caseID int64) (RiskReviewCase, error) {
+	if caseID <= 0 {
+		return RiskReviewCase{}, errors.New("invalid review case id")
+	}
+	var item RiskReviewCase
+	var opened, last, activity time.Time
+	var due, resolved sql.NullTime
+	err := r.db.QueryRowContext(ctx, `SELECT id,user_id,COALESCE(decision_id,''),signal_family,status,resolution,current_score,historical_max_score,primary_signal,evidence_strength,assignee_id,created_by,review_due_at,observation_goal,resolution_reason,resolution_request_id,revision,opened_at,last_hit_at,last_activity_at,resolved_at FROM risk_review_cases WHERE id=$1`, caseID).Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &item.CreatedBy, &due, &item.ObservationGoal, &item.ResolutionReason, &item.ResolutionRequestID, &item.Revision, &opened, &last, &activity, &resolved)
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, errors.New("review case is unavailable")
+	}
+	if err != nil {
+		return item, err
+	}
+	item.OpenedAt, item.LastHitAt, item.LastActivityAt = opened.UTC().Format(time.RFC3339Nano), last.UTC().Format(time.RFC3339Nano), activity.UTC().Format(time.RFC3339Nano)
+	if due.Valid {
+		item.ReviewDueAt = due.Time.UTC().Format(time.RFC3339Nano)
+	}
+	if resolved.Valid {
+		item.ResolvedAt = resolved.Time.UTC().Format(time.RFC3339Nano)
+	}
+	return item, nil
+}
+
 func (r *SQLIdentityRepository) ClaimReviewCase(ctx context.Context, caseID, actorID int64) (RiskReviewCase, error) {
 	if caseID <= 0 || actorID <= 0 {
 		return RiskReviewCase{}, errors.New("invalid case claim")
 	}
 	var item RiskReviewCase
-	var opened, last time.Time
-	err := r.db.QueryRowContext(ctx, `UPDATE risk_review_cases SET assignee_id=$2,status='in_review',updated_at=NOW() WHERE id=$1 AND status IN ('pending','in_review') AND (assignee_id=0 OR assignee_id=$2) RETURNING id,user_id,COALESCE(decision_id,''),signal_family,status,resolution,current_score,historical_max_score,primary_signal,evidence_strength,assignee_id,opened_at,last_hit_at`, caseID, actorID).Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &opened, &last)
+	var opened, last, activity time.Time
+	err := r.db.QueryRowContext(ctx, `UPDATE risk_review_cases SET assignee_id=$2,status='in_review',review_due_at=NULL,observation_goal='',last_activity_at=NOW(),revision=revision+1,updated_at=NOW() WHERE id=$1 AND status IN ('pending','in_review','observing') AND (assignee_id=0 OR assignee_id=$2) RETURNING id,user_id,COALESCE(decision_id,''),signal_family,status,resolution,current_score,historical_max_score,primary_signal,evidence_strength,assignee_id,created_by,observation_goal,resolution_reason,revision,opened_at,last_hit_at,last_activity_at`, caseID, actorID).Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &item.CreatedBy, &item.ObservationGoal, &item.ResolutionReason, &item.Revision, &opened, &last, &activity)
 	if errors.Is(err, sql.ErrNoRows) {
 		return item, errors.New("case is unavailable or assigned to another administrator")
 	}
-	item.OpenedAt, item.LastHitAt = opened.UTC().Format(time.RFC3339Nano), last.UTC().Format(time.RFC3339Nano)
+	item.OpenedAt, item.LastHitAt, item.LastActivityAt = opened.UTC().Format(time.RFC3339Nano), last.UTC().Format(time.RFC3339Nano), activity.UTC().Format(time.RFC3339Nano)
 	return item, err
 }
 
 func (r *SQLIdentityRepository) AddReviewFeedback(ctx context.Context, caseID, actorID int64, feedback, reason string) error {
+	_, _, err := r.ResolveReviewCase(ctx, caseID, actorID, feedback, reason, "", 0)
+	return err
+}
+
+func (r *SQLIdentityRepository) ResolveReviewCase(ctx context.Context, caseID, actorID int64, feedback, reason, requestID string, expectedRevision int) (RiskReviewCase, bool, error) {
 	feedback, reason = strings.TrimSpace(feedback), strings.TrimSpace(reason)
-	if _, ok := validRiskFeedback[feedback]; !ok || caseID <= 0 || actorID <= 0 || reason == "" || len([]rune(reason)) > 500 {
-		return errors.New("invalid review feedback")
+	requestID = strings.TrimSpace(requestID)
+	if _, ok := validRiskFeedback[feedback]; !ok || caseID <= 0 || actorID <= 0 || reason == "" || len([]rune(reason)) > 500 || len(requestID) > 160 || expectedRevision < 0 {
+		return RiskReviewCase{}, false, errors.New("invalid review feedback")
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return RiskReviewCase{}, false, err
 	}
 	defer tx.Rollback()
-	var lockedCaseID int64
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM risk_review_cases WHERE id=$1 AND status='in_review' AND assignee_id=$2 FOR UPDATE`, caseID, actorID).Scan(&lockedCaseID); err != nil {
-		return errors.New("review case is unavailable")
+	var item RiskReviewCase
+	var storedRequest string
+	if err := tx.QueryRowContext(ctx, `SELECT id,user_id,status,resolution,resolution_reason,resolution_request_id,revision,assignee_id FROM risk_review_cases WHERE id=$1 FOR UPDATE`, caseID).Scan(&item.ID, &item.UserID, &item.Status, &item.Resolution, &item.ResolutionReason, &storedRequest, &item.Revision, &item.AssigneeID); err != nil {
+		return RiskReviewCase{}, false, errors.New("review case is unavailable")
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE risk_review_cases SET status='resolved',resolution=$3,resolved_at=NOW(),updated_at=NOW() WHERE id=$1 AND status='in_review' AND assignee_id=$2`, lockedCaseID, actorID, feedback)
+	if item.Status == "resolved" && requestID != "" && storedRequest == requestID && item.Resolution == feedback && item.ResolutionReason == reason {
+		return item, true, tx.Commit()
+	}
+	if item.Status != "in_review" || item.AssigneeID != actorID {
+		return RiskReviewCase{}, false, errors.New("review case is unavailable")
+	}
+	if expectedRevision > 0 && item.Revision != expectedRevision {
+		return RiskReviewCase{}, false, errors.New("review case revision conflict")
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE risk_review_cases SET status='resolved',resolution=$3,resolution_reason=$4,resolution_request_id=$5,resolved_at=NOW(),last_activity_at=NOW(),revision=revision+1,updated_at=NOW() WHERE id=$1 AND status='in_review' AND assignee_id=$2`, item.ID, actorID, feedback, reason, requestID)
 	if err != nil {
-		return err
+		return RiskReviewCase{}, false, err
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
-		return errors.New("review case is already resolved or unavailable")
+		return RiskReviewCase{}, false, errors.New("review case is already resolved or unavailable")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_review_feedback(case_id,actor_id,feedback,reason) VALUES($1,$2,$3,$4)`, lockedCaseID, actorID, feedback, reason); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_review_feedback(case_id,actor_id,feedback,reason) VALUES($1,$2,$3,$4)`, item.ID, actorID, feedback, reason); err != nil {
+		return RiskReviewCase{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return RiskReviewCase{}, false, err
 	}
-	return nil
+	item.Status, item.Resolution, item.ResolutionReason, item.Revision = "resolved", feedback, reason, item.Revision+1
+	return item, false, nil
 }
 
 func (r *SQLIdentityRepository) ListRuleVersions(ctx context.Context, code string) ([]map[string]any, error) {

@@ -345,6 +345,10 @@ func (s *HTTPServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 		observedCount = input.Count
 	}
 	input.Rule.Enabled = true
+	if err := validateRuleConfig(input.Rule); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	testEvent := EventReport{EventType: eventType, UserID: input.Sample.UserID, SubjectID: strings.TrimSpace(input.Sample.SubjectID), IPHash: strings.TrimSpace(input.Sample.IPHash), DeviceHash: strings.TrimSpace(input.Sample.DeviceHash)}
 	exclusions := ruleTestExclusions(input.Rule, testEvent, observedCount)
 	decision := Decision{Action: "allow", RiskLevel: "none"}
@@ -395,15 +399,28 @@ func ruleTestEvidenceExclusions(rule Rule, event EventReport) []string {
 			return []string{"missing_subject_id"}
 		}
 	case countStrategyIPDistinctSuccessUsers:
+		var result []string
+		if event.UserID <= 0 {
+			result = append(result, "missing_user_id")
+		}
 		if strings.TrimSpace(event.IPHash) == "" {
-			return []string{"missing_ip_hash"}
+			result = append(result, "missing_ip_hash")
 		}
+		return result
 	case countStrategyBrowserDistinctSuccessUsers, countStrategyAPIClientDistinctUsers:
-		if strings.TrimSpace(event.DeviceHash) == "" {
-			return []string{"missing_device_hash"}
+		var result []string
+		if event.UserID <= 0 {
+			result = append(result, "missing_user_id")
 		}
+		if strings.TrimSpace(event.DeviceHash) == "" {
+			result = append(result, "missing_device_hash")
+		}
+		return result
 	case countStrategyIPBrowserCooccurrence:
 		var result []string
+		if event.UserID <= 0 {
+			result = append(result, "missing_user_id")
+		}
 		if strings.TrimSpace(event.IPHash) == "" {
 			result = append(result, "missing_ip_hash")
 		}
