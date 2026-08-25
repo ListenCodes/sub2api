@@ -106,10 +106,11 @@ the independently gated `reject_candidate` decision when quality is healthy; it
 only rejects the threshold candidate and never changes existing account status.
 Unsupported `auto_ban` configurations fail safe to manual review.
 
-Identity rule changes use a draft -> simulation -> publish/enable/rollback
-workflow. Every operation requires an unexpired simulation owned by the current
-administrator; candidate rejection and auto-ban configurations additionally
-require the exact `PUBLISH <rule-code>` confirmation. Shared-network labels use
+Administrators edit identity rule parameters and enabled state in one dialog;
+one save publishes a new revision immediately. Notes are optional and the
+service supplies an audit reason when omitted. Draft and simulation endpoints
+remain available for compatibility and analysis, but do not gate publication;
+unchanged submissions do not create empty revisions. Shared-network labels use
 impact preview and an operator reason. Safe shared labels resolve current IP and
 composite signals without deleting identity facts; revoking a label requires a
 subsequent controlled replay before any old signal can become current again.

@@ -12,6 +12,8 @@ import (
 
 const identityRuleSimulationTTL = 30 * time.Minute
 
+var ErrIdentityRuleNoChanges = errors.New("identity rule configuration is unchanged")
+
 var validIdentityRuleActions = map[string]struct{}{
 	"observe": {}, "review": {}, "reject_candidate": {}, "auto_ban": {},
 }
@@ -156,39 +158,33 @@ func (r *SQLIdentityRepository) SimulateIdentityRule(ctx context.Context, code s
 }
 
 type identityRulePublishApproval struct {
-	Reason       string
-	SimulationID int64
-	Confirmed    bool
-	Confirmation string
+	Reason  string
+	Draft   *IdentityRuleDraft
+	Enabled *bool
 }
 
-func validateIdentityRuleApproval(code, action string, approval identityRulePublishApproval) error {
+func validateIdentityRuleApproval(_, _ string, approval identityRulePublishApproval) error {
 	approval.Reason = strings.TrimSpace(approval.Reason)
-	if approval.Reason == "" || len([]rune(approval.Reason)) > 500 {
-		return errors.New("reason is required")
-	}
-	if approval.SimulationID <= 0 {
-		return errors.New("a current simulation is required")
-	}
-	if action == "reject_candidate" || action == "auto_ban" {
-		if !approval.Confirmed || strings.TrimSpace(approval.Confirmation) != "PUBLISH "+code {
-			return errors.New("high-impact rule change requires a current simulation and exact confirmation")
-		}
+	if len([]rune(approval.Reason)) > 500 {
+		return errors.New("reason is too long")
 	}
 	return nil
 }
 
-func verifyIdentityRuleSimulation(ctx context.Context, tx *sql.Tx, draft IdentityRuleDraft, actorID, simulationID int64) error {
-	if simulationID <= 0 {
-		return errors.New("simulation is required")
+func identityRuleChangeReason(action, reason string) string {
+	if reason = strings.TrimSpace(reason); reason != "" {
+		return reason
 	}
-	draftJSON, _ := json.Marshal(identityRuleDraftConfig(draft))
-	var found int
-	err := tx.QueryRowContext(ctx, `SELECT 1 FROM risk_identity_rule_simulations WHERE id=$1 AND rule_code=$2 AND base_revision=$3 AND requested_by=$4 AND expires_at>NOW() AND draft_snapshot=$5::jsonb FOR UPDATE`, simulationID, draft.RuleCode, draft.BaseRevision, actorID, draftJSON).Scan(&found)
-	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("simulation is missing, expired, or does not match the requested rule change")
+	switch action {
+	case "enable_identity_rule":
+		return "管理员直接启用规则"
+	case "disable_identity_rule":
+		return "管理员直接停用规则"
+	case "rollback_identity_rule":
+		return "管理员直接回滚规则"
+	default:
+		return "管理员直接发布规则"
 	}
-	return err
 }
 
 func identityRuleDraftConfig(draft IdentityRuleDraft) map[string]any {
@@ -200,6 +196,9 @@ func identityRuleSnapshot(rule IdentityRuleDraft, revision int, enabled bool, do
 }
 
 func (r *SQLIdentityRepository) applyIdentityRuleRevision(ctx context.Context, code string, draft IdentityRuleDraft, enabled bool, actorID int64, action string, approval identityRulePublishApproval) (int, error) {
+	requestedReason := strings.TrimSpace(approval.Reason)
+	approval.Reason = identityRuleChangeReason(action, approval.Reason)
+	draft.Reason = approval.Reason
 	if actorID <= 0 || validateIdentityRuleDraft(draft) != nil || validateIdentityRuleApproval(code, draft.ConfiguredAction, approval) != nil {
 		return 0, errors.New("invalid identity rule change")
 	}
@@ -223,8 +222,21 @@ func (r *SQLIdentityRepository) applyIdentityRuleRevision(ctx context.Context, c
 	if revision != draft.BaseRevision {
 		return 0, ErrRuleRevisionConflict
 	}
-	if err := verifyIdentityRuleSimulation(ctx, tx, draft, actorID, approval.SimulationID); err != nil {
-		return 0, err
+	configChanged := currentWindow != draft.WindowSeconds || currentThreshold != draft.Threshold || currentScore != draft.Score || currentAction != draft.ConfiguredAction
+	enabledChanged := currentEnabled != enabled
+	if !configChanged && !enabledChanged {
+		return 0, ErrIdentityRuleNoChanges
+	}
+	if !configChanged && enabledChanged {
+		if enabled {
+			action = "enable_identity_rule"
+		} else {
+			action = "disable_identity_rule"
+		}
+		if requestedReason == "" {
+			approval.Reason = identityRuleChangeReason(action, "")
+			draft.Reason = approval.Reason
+		}
 	}
 	nextRevision := revision + 1
 	if _, err := tx.ExecContext(ctx, `UPDATE risk_rule_versions SET active_until=COALESCE(active_until,NOW()) WHERE rule_kind='identity' AND rule_code=$1 AND revision=$2`, code, revision); err != nil {
@@ -267,7 +279,7 @@ func (r *SQLIdentityRepository) applyIdentityRuleRevision(ctx context.Context, c
 	}
 	before := map[string]any{"revision": revision, "enabled": currentEnabled, "window_seconds": currentWindow, "threshold": currentThreshold, "score": currentScore, "configured_action": currentAction}
 	after := map[string]any{"revision": nextRevision, "enabled": enabled, "window_seconds": draft.WindowSeconds, "threshold": draft.Threshold, "score": draft.Score, "configured_action": draft.ConfiguredAction}
-	metadata, _ := json.Marshal(map[string]any{"before": before, "after": after, "diff": ruleFieldDiff(before, after), "simulation_id": approval.SimulationID})
+	metadata, _ := json.Marshal(map[string]any{"before": before, "after": after, "diff": ruleFieldDiff(before, after)})
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason,metadata) VALUES($1,$2,'identity_rule',$3,'success',$4,$5)`, actorID, action, code, strings.TrimSpace(approval.Reason), metadata); err != nil {
 		return 0, err
 	}
@@ -281,12 +293,21 @@ func (r *SQLIdentityRepository) applyIdentityRuleRevision(ctx context.Context, c
 }
 
 func (r *SQLIdentityRepository) PublishIdentityRule(ctx context.Context, code string, actorID int64, approval identityRulePublishApproval) (int, error) {
-	draft, err := r.GetIdentityRuleDraft(ctx, code)
-	if err != nil {
-		return 0, err
+	var draft IdentityRuleDraft
+	var err error
+	if approval.Draft != nil {
+		draft = *approval.Draft
+		draft.RuleCode = strings.TrimSpace(code)
+	} else {
+		draft, err = r.GetIdentityRuleDraft(ctx, code)
+		if err != nil {
+			return 0, err
+		}
 	}
 	var enabled bool
-	if err := r.db.QueryRowContext(ctx, `SELECT enabled FROM risk_identity_rules WHERE code=$1`, code).Scan(&enabled); err != nil {
+	if approval.Enabled != nil {
+		enabled = *approval.Enabled
+	} else if err := r.db.QueryRowContext(ctx, `SELECT enabled FROM risk_identity_rules WHERE code=$1`, code).Scan(&enabled); err != nil {
 		return 0, err
 	}
 	return r.applyIdentityRuleRevision(ctx, code, draft, enabled, actorID, "publish_identity_rule", approval)
