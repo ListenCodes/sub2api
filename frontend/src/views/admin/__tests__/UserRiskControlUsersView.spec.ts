@@ -1,6 +1,7 @@
 import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import UserRiskControlUsersView from '@/views/admin/UserRiskControlUsersView.vue'
+import UserRiskControlUserDrawer from '@/components/admin/UserRiskControlUserDrawer.vue'
 import { userRiskControlV2API } from '@/api/admin/userRiskControlV2'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -16,6 +17,7 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({
     getUserDetail: vi.fn(),
     setUserStatus: vi.fn(),
     batchSetUserStatus: vi.fn(),
+	retryBatchSessionRevocations: vi.fn(),
     markUsersProcessed: vi.fn(),
   },
 }))
@@ -34,6 +36,7 @@ afterEach(() => {
   vi.useRealTimers()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
   window.localStorage.removeItem('table-page-size')
+	window.sessionStorage.clear()
   vi.clearAllMocks()
 })
 
@@ -59,7 +62,8 @@ describe('UserRiskControlUsersView', () => {
 		await wrapper.get('[data-testid="work-count-mine"]').trigger('click')
 	 await flushPromises()
 		expect(wrapper.get('[data-testid="risk-case-views"]').text()).toContain('全部未结')
-		expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ view: 'mine' }))
+		expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ view: 'mine', processingStatus: '' }))
+		expect(wrapper.find('[data-testid="processing-status-filter"]').exists()).toBe(false)
 	 })
 
 	it('clears stale rows when a new view fails to load', async () => {
@@ -224,7 +228,8 @@ describe('UserRiskControlUsersView', () => {
     expect(wrapper.get('[data-testid="primary-risk-filters"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="account-status-filter"]').classes()).toContain('w-[calc(50%-0.375rem)]')
     expect(wrapper.get('[data-testid="risk-level-filter"]').classes()).toContain('w-[calc(50%-0.375rem)]')
-    expect(wrapper.get('[data-testid="advanced-risk-filters"]').find('[data-testid="mobile-select-current-page"]').exists()).toBe(true)
+	expect(wrapper.get('[data-testid="primary-risk-filters"]').find('[data-testid="mobile-reset-filters"]').exists()).toBe(true)
+	expect(wrapper.get('[data-testid="risk-users-table"]').find('[data-testid="mobile-select-current-page"]').exists()).toBe(false)
   })
 
   it('caps a persisted 50-row preference before the initial mobile request', async () => {
@@ -299,7 +304,7 @@ describe('UserRiskControlUsersView', () => {
     statusReason.dispatchEvent(new Event('input', { bubbles: true }))
     wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
-    expect(userRiskControlV2API.setUserStatus).toHaveBeenCalledWith(7, 'disabled', expect.any(String))
+    expect(userRiskControlV2API.setUserStatus).toHaveBeenCalledWith(7, 'disabled', expect.any(String), undefined, expect.any(String))
   })
 
   it('shows Chinese event evidence and audit outcomes in the detail drawer', async () => {
@@ -355,13 +360,47 @@ describe('UserRiskControlUsersView', () => {
     ;(document.querySelector('[data-testid="batch-confirm"]') as HTMLElement).click()
     await flushPromises()
 
-    expect(userRiskControlV2API.batchSetUserStatus).toHaveBeenCalledWith([7, 8], 'disabled', '批量处置：重复登录失败')
+		expect(userRiskControlV2API.batchSetUserStatus).toHaveBeenCalledWith([7, 8], 'disabled', '批量处置：重复登录失败', 4, expect.any(Function))
     expect(wrapper.text()).toContain('部分成功')
     expect(wrapper.text()).toContain('目标账号已被其他管理员处理')
     expect(wrapper.find('[data-testid="batch-action-bar"]').exists()).toBe(false)
   })
 
-  it('does not batch ban or unban a mixed selection containing pending accounts', async () => {
+	it('rolls back partially written batch recovery before any request is sent', async () => {
+		vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', status: 'active' }, { id: 8, username: 'Bob', status: 'active' }], total: 2, page: 1, page_size: 20 })
+		let requestSent = false
+		vi.mocked(userRiskControlV2API.batchSetUserStatus).mockImplementation(async (_ids, _status, _reason, _concurrency, onPrepared) => {
+			onPrepared?.([
+				{ id: 7, status: 'partial', operationReason: '批量处置', requestedStatus: 'disabled', requestId: 'request-7', batchId: 'batch-1', retryable: true, pendingStep: 'status_confirmation' },
+				{ id: 8, status: 'partial', operationReason: '批量处置', requestedStatus: 'disabled', requestId: 'request-8', batchId: 'batch-1', retryable: true, pendingStep: 'status_confirmation' },
+			])
+			requestSent = true
+			return []
+		})
+		const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="select-current-page"]').setValue(true)
+		await wrapper.get('[data-testid="batch-ban"]').trigger('click')
+		const originalSetItem = Storage.prototype.setItem
+		let writes = 0
+		const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+			writes++
+			if (writes === 2) throw new DOMException('quota exceeded', 'QuotaExceededError')
+			return originalSetItem.call(this, key, value)
+		})
+		const reasonInput = document.querySelector('[data-testid="batch-reason"] textarea') as HTMLTextAreaElement
+		reasonInput.value = '批量处置'
+		reasonInput.dispatchEvent(new Event('input', { bubbles: true }))
+		;(document.querySelector('[data-testid="batch-confirm"]') as HTMLElement).click()
+		await flushPromises()
+		expect(requestSent).toBe(false)
+		expect(window.sessionStorage.getItem('sub2api:risk-batch-recovery')).toBeNull()
+		expect(window.sessionStorage.getItem('sub2api:risk-account-recovery:7')).toBeNull()
+		expect(window.sessionStorage.getItem('sub2api:risk-account-recovery:8')).toBeNull()
+		storage.mockRestore()
+	})
+
+	it('processes only applicable accounts from a mixed selection', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({
       items: [
         { id: 7, username: 'Alice', email: 'alice@example.com', status: 'active', risk_score: 80 },
@@ -373,10 +412,47 @@ describe('UserRiskControlUsersView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="select-current-page"]').setValue(true)
 
-    expect(wrapper.get('[data-testid="batch-ban"]').attributes('disabled')).toBeDefined()
+	expect(wrapper.get('[data-testid="batch-ban"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.get('[data-testid="batch-unban"]').attributes('disabled')).toBeDefined()
-    expect(userRiskControlV2API.batchSetUserStatus).not.toHaveBeenCalled()
+	expect(wrapper.get('[data-testid="batch-action-bar"]').text()).toContain('暂不可操作 1')
+	await wrapper.get('[data-testid="batch-ban"]').trigger('click')
+	const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'))
+	const dialog = dialogs.at(-1) as HTMLElement
+	const reasonInput = dialog.querySelector('[data-testid="batch-reason"] textarea') as HTMLTextAreaElement
+	reasonInput.value = '仅处理可封禁账号'
+	reasonInput.dispatchEvent(new Event('input', { bubbles: true }))
+	;(dialog.querySelector('[data-testid="batch-confirm"]') as HTMLElement).click()
+	await flushPromises()
+	expect(userRiskControlV2API.batchSetUserStatus).toHaveBeenCalledWith([7], 'disabled', '仅处理可封禁账号', 4, expect.any(Function))
   })
+
+	it('excludes accounts with unresolved batch work from conflicting status actions', async () => {
+		window.sessionStorage.setItem('sub2api:risk-batch-recovery', JSON.stringify([{ id: 7, status: 'partial', operationReason: '人工处置', requestedStatus: 'disabled', requestId: 'request-7', batchId: 'batch-1', retryable: true, pendingStep: 'status_confirmation' }]))
+		vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', status: 'active' }, { id: 8, username: 'Bob', status: 'disabled' }], total: 2, page: 1, page_size: 20 })
+		const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="select-current-page"]').setValue(true)
+		expect(wrapper.get('[data-testid="batch-ban"]').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-testid="batch-unban"]').attributes('disabled')).toBeUndefined()
+		expect(wrapper.get('[data-testid="batch-action-bar"]').text()).toContain('暂不可操作 1')
+		expect(JSON.parse(window.sessionStorage.getItem('sub2api:risk-account-recovery:7') || '{}')).toMatchObject({ requestId: 'request-7', status: 'disabled', pendingStep: 'status_confirmation' })
+	})
+
+	it('removes a completed drawer recovery from the persisted batch guard', async () => {
+		window.sessionStorage.setItem('sub2api:risk-batch-recovery', JSON.stringify([{ id: 7, status: 'partial', operationReason: '人工处置', requestedStatus: 'disabled', requestId: 'request-7', batchId: 'batch-1', retryable: true, pendingStep: 'status_confirmation' }]))
+		vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', status: 'active' }], total: 1, page: 1, page_size: 20 })
+		vi.mocked(userRiskControlV2API.getUserDetail).mockResolvedValue({ user: { id: 7, username: 'Alice', status: 'active' }, events: [], audit: [] })
+		const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="user-row-7"]').trigger('click')
+		await flushPromises()
+		window.sessionStorage.removeItem('sub2api:risk-account-recovery:7')
+		wrapper.getComponent(UserRiskControlUserDrawer).vm.$emit('status-recovery', 7, false)
+		await flushPromises()
+		expect(window.sessionStorage.getItem('sub2api:risk-batch-recovery')).toBeNull()
+		await wrapper.get('[data-testid="select-current-page"]').setValue(true)
+		expect(wrapper.get('[data-testid="batch-ban"]').attributes('disabled')).toBeUndefined()
+	})
 
   it('changes the query order when risk score sort is clicked', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 1, username: 'Sort me', email: 'sort@example.com', status: 'active' }], total: 1, page: 1, page_size: 20 })

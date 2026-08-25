@@ -93,6 +93,8 @@ describe('UserRiskControlRulesView', () => {
 
 		expect(wrapper.get('[data-testid="rule-view-identity"]').attributes('aria-selected')).toBe('true')
 		expect(wrapper.get('[data-testid="identity-v2-rules"]').exists()).toBe(true)
+		expect(wrapper.get('[data-testid="edit-identity-rule-mobile-v2_registration_email_retries"]').classes()).toContain('md:hidden')
+		expect(wrapper.get('[data-testid="edit-identity-rule-v2_registration_email_retries"]').classes()).toEqual(expect.arrayContaining(['hidden', 'md:inline-flex']))
 	})
 
 	it('publishes an identity rule directly with one save action', async () => {
@@ -130,6 +132,28 @@ describe('UserRiskControlRulesView', () => {
 		await flushPromises()
 		await clickBody('[data-testid="publish-identity-rule"]')
 		expect(userRiskControlV2API.identityRuleLifecycle).toHaveBeenCalledWith(rule.code, 'publish', expect.objectContaining({ enabled: true }))
+	})
+
+	it('restores the target version enabled state through a read-only rollback preview', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		const rule = { code: 'v2_registration_device_accounts', domain: 'device', configured_enabled: true, enabled: true, state: 'healthy', detection_state: 'healthy', decision_mode: 'shadow', configured_action: 'review', effective_action: 'review', data_quality: 'healthy', enforcement_eligible: false, reason_codes: [], config_source: 'database', window_seconds: 600, threshold: 3, score: 70, mode: 'shadow', revision: 3, updated_at: '2026-08-24T00:00:00Z' } as const
+		vi.mocked(userRiskControlV2API.listIdentityRules).mockResolvedValue([rule])
+		vi.mocked(userRiskControlV2API.listIdentityRuleVersions).mockResolvedValue([
+			{ revision: 3, signal_family: 'registration_identity', domain: 'device', enabled: true, rule_snapshot: { window_seconds: 600, threshold: 3, score: 70, configured_action: 'review' }, active_from: '2026-08-24T00:00:00Z' },
+			{ revision: 1, signal_family: 'registration_identity', domain: 'device', enabled: false, rule_snapshot: { window_seconds: 900, threshold: 2, score: 60, configured_action: 'observe' }, active_from: '2026-08-20T00:00:00Z', active_until: '2026-08-21T00:00:00Z' },
+		])
+		vi.mocked(userRiskControlV2API.identityRuleLifecycle).mockResolvedValue({ code: rule.code, revision: 4, operation: 'rollback' })
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-versions"]').trigger('click')
+		await flushPromises()
+		const rollback = Array.from(wrapper.findAll('button')).find((button) => button.text().includes('回滚到此版'))
+		expect(rollback).toBeTruthy()
+		await rollback!.trigger('click')
+		expect(bodyElement<HTMLInputElement>('[data-testid="identity-rule-window"]').disabled).toBe(true)
+		expect(bodyElement('[data-testid="identity-rule-change-summary"]').textContent).toContain('停用规则')
+		await clickBody('[data-testid="publish-identity-rule"]')
+		expect(userRiskControlV2API.identityRuleLifecycle).toHaveBeenCalledWith(rule.code, 'rollback', { reason: '', targetRevision: 1 })
 	})
 
 	it('reloads the latest identity rule after a revision conflict', async () => {
@@ -485,8 +509,21 @@ describe('UserRiskControlRulesView', () => {
 	await setBodyValue('[data-testid="edit-rule-reason"]', '验证并发版本冲突')
     await clickBody('[data-testid="save-rule"]')
 
-    expect(wrapper.text()).toContain('rule revision conflict')
+		expect(bodyElement('[data-testid="edit-rule-error"]').textContent).toContain('规则已被其他管理员修改')
+		expect(bodyElement('[data-testid="rule-editor-1"]')).toBeTruthy()
   })
+
+	it('keeps rule test failures inside the open test dialog', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: 'Login failures', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])
+		vi.mocked(userRiskControlV2API.testRule).mockRejectedValue(new Error('测试服务暂时不可用'))
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await openEventRules(wrapper)
+		await wrapper.get('[data-testid="test-rule-1"]').trigger('click')
+		await clickBody('[data-testid="run-rule-test"]')
+		expect(bodyElement('[data-testid="rule-test-error"]').textContent).toContain('测试服务暂时不可用')
+		expect(document.body.querySelector('[data-testid="run-rule-test"]')).not.toBeNull()
+	})
 
   it('rejects invalid edited rule values before sending the update request', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: 'Login failures', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])

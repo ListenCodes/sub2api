@@ -35,7 +35,30 @@ describe('UserRiskControlAuditView', () => {
     const columns = wrapper.findComponent(DataTable).props('columns') as Array<{ key: string; class?: string }>
     expect(columns.find((column) => column.key === 'reason')?.class).toContain('whitespace-normal')
     expect(columns.find((column) => column.key === 'target')?.class).toContain('break-all')
+	expect(wrapper.text()).toContain('暂无处置记录')
+	expect(wrapper.text()).not.toContain('暂无匹配账号')
   })
+
+	it('clears stale audit rows when the next category fails to load', async () => {
+		vi.mocked(userRiskControlV2API.listAudit).mockResolvedValueOnce({ items: [{ id: 9, actor: '11', action: 'ban', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', reason: '旧处置记录', created_at: '2026-07-11T12:00:00Z' }], total: 1 }).mockRejectedValueOnce(new Error('审计服务暂时不可用'))
+		const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		expect(wrapper.text()).toContain('旧处置记录')
+		await wrapper.get('[data-testid="audit-category-configuration"]').trigger('click')
+		await flushPromises()
+		expect(wrapper.text()).toContain('审计服务暂时不可用')
+		expect(wrapper.text()).not.toContain('旧处置记录')
+		expect(wrapper.findComponent(Pagination).exists()).toBe(false)
+	})
+
+	it('does not render free-text identifiers from sensitive query failures', async () => {
+		vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 12, actor: '11', action: 'view_identity_detail', target_type: 'user', target_id: '7', target_user_id: 7, result: 'failed', reason: '', failure_reason: '查询 198.51.100.17 / session secret-session 失败', metadata: { sections: ['ip_identity'] }, created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+		const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		expect(wrapper.text()).toContain('敏感详情查询未完成')
+		expect(wrapper.text()).not.toContain('198.51.100.17')
+		expect(wrapper.text()).not.toContain('secret-session')
+	})
 
   it('filters audit records automatically without an apply button', async () => {
     vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 0 })
@@ -184,6 +207,28 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
 	expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'configuration', action: '' }))
   })
+
+	it('shows only allowlisted sensitive sections and never echoes free-text sensitive values', async () => {
+		vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 10, actor: '11', action: 'view_identity_detail', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', reason: '查看 198.51.100.17', metadata: { sections: ['ip-identities', 'raw-session-secret'] }, created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+		const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } } })
+		await flushPromises()
+		expect(wrapper.text()).toContain('查看身份详情 · 2 个分区')
+		expect(wrapper.text()).not.toContain('198.51.100.17')
+		expect(wrapper.text()).not.toContain('raw-session-secret')
+		await wrapper.get('[data-testid="toggle-sensitive-audit-10"]').trigger('click')
+		expect(wrapper.text()).toContain('IP 身份、其他身份分区')
+		expect(wrapper.text()).not.toContain('raw-session-secret')
+	})
+
+	it('formats rule diffs with readable values', async () => {
+		vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 11, actor: '11', action: 'update_rule', target_type: 'rule', target_id: 'login_failure', target_user_id: 0, result: 'success', reason: '调整规则', metadata: { diff: { enabled: { before: true, after: false }, action: { before: 'review', after: 'reject_candidate' }, count_strategy: { before: 'user_events', after: 'ip_distinct_success_users' } } }, created_at: '2026-07-11T12:00:00Z' }], total: 1 })
+		const wrapper = mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		expect(wrapper.text()).toContain('已启用 → 已停用')
+		expect(wrapper.text()).toContain('人工复核 → 拒绝注册')
+		expect(wrapper.text()).toContain('按用户事件计数 → IP 去重成功用户')
+		expect(wrapper.text()).not.toContain('reject_candidate')
+	})
 
   it('passes audit sorting and extended filters to the API', async () => {
     vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [{ id: 3, actor: '11', action: 'ban', target_type: 'user', target_id: '7', target_user_id: 7, result: 'success', created_at: '2026-07-11T12:00:00Z' }], total: 1 })

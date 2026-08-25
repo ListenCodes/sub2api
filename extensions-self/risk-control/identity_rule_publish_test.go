@@ -9,6 +9,11 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+type testSQLStateError string
+
+func (e testSQLStateError) Error() string    { return string(e) }
+func (e testSQLStateError) SQLState() string { return string(e) }
+
 func TestDecodeIdentityRuleApprovalAcceptsOneStepPublish(t *testing.T) {
 	body := []byte(`{"base_revision":2,"window_seconds":900,"threshold":4,"score":90,"configured_action":"reject_candidate","enabled":true,"simulation_id":10,"confirmed":true,"confirmation":"PUBLISH v2_registration_composite_accounts"}`)
 	approval, targetRevision, err := decodeIdentityRuleApproval(body)
@@ -32,6 +37,7 @@ func TestApplyIdentityRuleRevisionPublishesAndAuditsInOneTransaction(t *testing.
 
 	code := "v2_registration_composite_accounts"
 	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT revision,enabled,domain,signal_family,subject_kind,window_seconds,threshold,score,configured_action FROM risk_identity_rules WHERE code=$1 FOR UPDATE`)).
 		WithArgs(code).
 		WillReturnRows(sqlmock.NewRows([]string{"revision", "enabled", "domain", "signal_family", "subject_kind", "window_seconds", "threshold", "score", "configured_action"}).
@@ -73,6 +79,7 @@ func TestApplyIdentityRuleRevisionRejectsStaleRevision(t *testing.T) {
 
 	code := "v2_registration_composite_accounts"
 	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT revision,enabled,domain,signal_family,subject_kind,window_seconds,threshold,score,configured_action FROM risk_identity_rules WHERE code=$1 FOR UPDATE`)).
 		WithArgs(code).
 		WillReturnRows(sqlmock.NewRows([]string{"revision", "enabled", "domain", "signal_family", "subject_kind", "window_seconds", "threshold", "score", "configured_action"}).
@@ -103,6 +110,7 @@ func TestApplyIdentityRuleRevisionRejectsNoOpBeforeClearingSignals(t *testing.T)
 	defer db.Close()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs("v2_registration_composite_accounts").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT revision,enabled,domain,signal_family,subject_kind,window_seconds,threshold,score,configured_action FROM risk_identity_rules WHERE code=\$1 FOR UPDATE`).
 		WithArgs("v2_registration_composite_accounts").
 		WillReturnRows(sqlmock.NewRows([]string{"revision", "enabled", "domain", "signal_family", "subject_kind", "window_seconds", "threshold", "score", "configured_action"}).
@@ -113,6 +121,73 @@ func TestApplyIdentityRuleRevisionRejectsNoOpBeforeClearingSignals(t *testing.T)
 	_, err = NewSQLIdentityRepository(db).applyIdentityRuleRevision(context.Background(), draft.RuleCode, draft, true, 7, "publish_identity_rule", identityRulePublishApproval{})
 	if !errors.Is(err, ErrIdentityRuleNoChanges) {
 		t.Fatalf("error = %v, want ErrIdentityRuleNoChanges", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRollbackIdentityRuleRestoresTargetEnabledState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	code := "v2_registration_composite_accounts"
+	mock.ExpectQuery(`SELECT revision FROM risk_identity_rules`).WithArgs(code).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(5))
+	mock.ExpectQuery(`SELECT rule_snapshot FROM risk_rule_versions`).WithArgs(code, 2).
+		WillReturnRows(sqlmock.NewRows([]string{"rule_snapshot"}).AddRow([]byte(`{"window_seconds":600,"threshold":3,"score":90,"configured_action":"reject_candidate"}`)))
+	mock.ExpectQuery(`SELECT enabled FROM risk_rule_versions`).WithArgs(code, 2).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(false))
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT revision,enabled,domain,signal_family,subject_kind,window_seconds,threshold,score,configured_action FROM risk_identity_rules`).WithArgs(code).
+		WillReturnRows(sqlmock.NewRows([]string{"revision", "enabled", "domain", "signal_family", "subject_kind", "window_seconds", "threshold", "score", "configured_action"}).
+			AddRow(5, true, "composite", "registration_identity", "user", 600, 3, 90, "reject_candidate"))
+	mock.ExpectExec(`UPDATE risk_rule_versions SET active_until`).WithArgs(code, 5).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE risk_identity_rules SET enabled=\$2`).WithArgs(code, false, 600, 3, 90, "reject_candidate", 6).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO risk_rule_versions`).WithArgs(code, 6, "registration_identity", "composite", false, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT DISTINCT user_id FROM risk_identity_signals`).WithArgs(code).WillReturnRows(sqlmock.NewRows([]string{"user_id"}))
+	mock.ExpectExec(`UPDATE risk_identity_signals SET status='superseded'`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE risk_decisions decision SET status='superseded'`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO risk_audit_logs`).WithArgs(int64(7), "rollback_identity_rule", code, "管理员直接回滚规则", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`DELETE FROM risk_identity_rule_drafts`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	revision, err := NewSQLIdentityRepository(db).RollbackIdentityRule(context.Background(), code, 2, 7, identityRulePublishApproval{})
+	if err != nil || revision != 6 {
+		t.Fatalf("revision = %d, error = %v", revision, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdentityRuleSerializationErrorsAreRevisionConflicts(t *testing.T) {
+	for _, state := range []testSQLStateError{"40001", "40P01"} {
+		if !isIdentityRuleRevisionConflict(state) {
+			t.Fatalf("SQLSTATE %s must be treated as a revision conflict", state)
+		}
+	}
+	if isIdentityRuleRevisionConflict(testSQLStateError("23505")) {
+		t.Fatal("unrelated SQLSTATE was treated as a revision conflict")
+	}
+}
+
+func TestRefreshIdentityReviewCasesKeepsMissingDecisionNullable(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`SELECT case_row.id,COALESCE\(best.score,0\) current_score,COALESCE\(best.rule_code,''\) primary_signal,best.decision_id`).
+		WithArgs(sqlmock.AnyArg(), "registration_identity").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := refreshIdentityReviewCases(context.Background(), db, []int64{42}, "registration_identity"); err != nil {
+		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

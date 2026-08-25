@@ -89,6 +89,9 @@ func (h *CustomUserHandler) resolveAuditAccountFilters(c *gin.Context, query url
 	}
 	category := strings.TrimSpace(query.Get("category"))
 	if target := strings.TrimSpace(query.Get("target")); target != "" && category != "configuration" && category != "testing" && category != "rules" {
+		if (category == "" || category == "disposition" || category == "security") && isPositiveNumericID(target) {
+			return resolved, true, nil
+		}
 		id, found, err := h.findExactRiskAccount(c, target, "")
 		if err != nil || !found {
 			return resolved, found, err
@@ -292,6 +295,8 @@ func allowedRiskControlPath(method, path string) bool {
 	switch {
 	case method == http.MethodGet && (path == "/overview" || path == "/users" || strings.HasPrefix(path, "/users/") || path == "/rules" || path == "/identity-rules" || strings.HasPrefix(path, "/identity-rules/") || path == "/identity-rule-effects" || path == "/review-cases" || path == "/audit"):
 		return true
+	case method == http.MethodGet && isReviewCaseDetailPath(path):
+		return true
 	case method == http.MethodPut && strings.HasPrefix(path, "/rules/"):
 		return true
 	case method == http.MethodPost && (path == "/rules" || path == "/rules/test" || path == "/review-cases" || isProcessedUserPath(path) || isReviewCaseActionPath(path) || isNetworkLabelActionPath(path) || isIdentityRuleActionPath(path)):
@@ -299,6 +304,19 @@ func allowedRiskControlPath(method, path string) bool {
 	default:
 		return false
 	}
+}
+
+func isReviewCaseDetailPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[0] != "review-cases" {
+		return false
+	}
+	return isPositiveNumericID(parts[1])
+}
+
+func isPositiveNumericID(value string) bool {
+	id, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	return err == nil && id > 0
 }
 
 func isIdentityRuleActionPath(path string) bool {

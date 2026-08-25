@@ -11,19 +11,21 @@
               {{ t('admin.userRiskControl.refresh') }}
             </button>
           </div>
-          <div v-if="batchResults.length" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800/50" data-testid="batch-result-summary">
+          <div v-if="batchResults.length && batchResultsVisible" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800/50" data-testid="batch-result-summary">
             <div class="flex flex-wrap items-center justify-between gap-3">
-              <strong class="text-sm text-gray-900 dark:text-white">{{ formatAuditResult(batchSummary) }}：{{ batchSuccessCount }}/{{ batchResults.length }}</strong>
-              <button type="button" class="btn btn-ghost btn-icon" :aria-label="t('common.close')" @click="batchResults = []"><Icon name="x" size="sm" /></button>
+			  <div><strong class="text-sm text-gray-900 dark:text-white">{{ formatAuditResult(batchSummary) }}</strong><p class="mt-1 text-xs text-gray-500">成功 {{ batchSuccessCount }} · 部分完成 {{ batchPartialCount }} · 失败 {{ batchFailedCount }}（共 {{ batchResults.length }}）</p></div>
+			  <button v-if="batchRetryableCount" type="button" class="btn btn-secondary btn-sm" :disabled="batchSaving" data-testid="retry-batch-session-revocations" @click="retryBatchCleanup">重试 {{ batchRetryableCount }} 个未完成步骤</button>
+              <button type="button" class="btn btn-ghost btn-icon" :aria-label="t('common.close')" @click="closeBatchResults"><Icon name="x" size="sm" /></button>
             </div>
             <ul class="mt-3 space-y-2 text-sm">
               <li v-for="result in batchResults" :key="result.id" class="flex flex-wrap gap-x-2 gap-y-1">
-                <span class="font-medium text-gray-900 dark:text-white">#{{ result.id }}</span>
+				<span class="max-w-72 break-all font-medium text-gray-900 dark:text-white">{{ result.user?.email || result.user?.username || `账号 #${result.id}` }}</span>
 				<span :class="result.status === 'success' ? 'text-emerald-600' : result.status === 'partial' ? 'text-amber-600' : 'text-red-600'">{{ formatAuditResult(result.status) }}</span>
                 <span v-if="result.reason" class="text-gray-600 dark:text-gray-300">{{ result.reason }}</span>
               </li>
             </ul>
           </div>
+		  <div v-else-if="batchRetryableCount" class="flex flex-wrap items-center justify-between gap-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300" data-testid="batch-recovery-reminder"><span>{{ batchRetryableCount }} 个账号仍有步骤未完成</span><div class="flex gap-2"><button type="button" class="btn btn-secondary btn-sm" @click="batchResultsVisible = true">查看</button><button type="button" class="btn btn-secondary btn-sm" :disabled="batchSaving" @click="retryBatchCleanup">立即重试</button></div></div>
         </div>
       </template>
 
@@ -58,26 +60,26 @@
           <button type="button" class="btn btn-ghost btn-icon hidden sm:inline-flex" :disabled="!hasFilters || loading" title="重置筛选" aria-label="重置筛选" data-testid="reset-filters" @click="resetFilters">
             <Icon name="x" size="md" />
           </button>
+		  <button type="button" class="btn btn-ghost btn-sm sm:hidden" :disabled="!hasFilters || loading" data-testid="mobile-reset-filters" @click="resetFilters"><Icon name="x" size="sm" />重置</button>
           </section>
 			<details class="mt-3 border-t border-gray-200 pt-3 dark:border-dark-700" data-testid="advanced-risk-filters">
 				<summary class="cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-300">高级筛选</summary>
 				<div class="mt-3 flex flex-wrap items-center gap-3">
 					<Select :model-value="draft.riskType || ''" class="w-full sm:w-52" data-testid="risk-type-filter" :options="riskTypeFilterOptions" @update:model-value="setFilter('riskType', $event)" />
-					<Select :model-value="draft.processingStatus || ''" class="w-full sm:w-44" data-testid="processing-status-filter" :options="processingStatusFilterOptions" @update:model-value="setFilter('processingStatus', $event)" />
+					<Select v-if="mode === 'users'" :model-value="draft.processingStatus || ''" class="w-full sm:w-44" data-testid="processing-status-filter" :options="processingStatusFilterOptions" @update:model-value="setFilter('processingStatus', $event)" />
 					<div class="flex w-full items-center gap-2 sm:w-auto" aria-label="风险分范围"><input v-model.number="draft.minScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-24 sm:flex-none" placeholder="最低分" data-testid="min-score-filter" @input="scheduleFilters" /><span class="text-sm text-gray-400">至</span><input v-model.number="draft.maxScore" type="number" min="0" max="100" class="input min-w-0 flex-1 sm:w-24 sm:flex-none" placeholder="最高分" data-testid="max-score-filter" @input="scheduleFilters" /></div>
-					<label class="flex h-10 w-full items-center gap-2 text-sm text-gray-600 dark:text-gray-300 md:hidden" data-testid="mobile-select-current-page"><input v-model="allSelected" type="checkbox" class="rounded border-gray-300 text-primary-600" aria-label="选择当前页" />选择当前页</label>
-					<button type="button" class="btn btn-ghost btn-sm w-full sm:hidden" :disabled="!hasFilters || loading" data-testid="mobile-reset-filters" @click="resetFilters">重置筛选</button>
 				</div>
 			</details>
       </template>
 
       <template #table>
         <div class="flex min-h-0 w-full flex-1 flex-col gap-3" data-testid="risk-users-table">
+		  <label v-if="users.length" class="flex min-h-10 items-center gap-2 border-b border-gray-200 px-1 text-sm text-gray-600 dark:border-dark-700 dark:text-gray-300 md:hidden" data-testid="mobile-select-current-page"><input v-model="allSelected" type="checkbox" class="rounded border-gray-300 text-primary-600" aria-label="选择当前页" />选择当前页</label>
           <section v-if="selectedIds.size" class="flex flex-col gap-3 rounded-lg border border-primary-200 bg-primary-50 p-3 dark:border-primary-700/40 dark:bg-primary-900/20 sm:flex-row sm:items-center sm:justify-between" data-testid="batch-action-bar">
-            <span class="text-sm font-medium text-primary-800 dark:text-primary-200" data-testid="selected-count">已选择 {{ selectedIds.size }} 个账号</span>
+			<div><span class="text-sm font-medium text-primary-800 dark:text-primary-200" data-testid="selected-count">已选择 {{ selectedIds.size }} 个账号</span><p class="mt-1 text-xs text-primary-700 dark:text-primary-300">可封禁 {{ batchBanUsers.length }} · 可解封 {{ batchUnbanUsers.length }}<span v-if="batchIneligibleCount"> · 暂不可操作 {{ batchIneligibleCount }}</span></p></div>
             <div class="flex flex-wrap gap-2">
-              <button type="button" class="btn btn-danger btn-sm" data-testid="batch-ban" :disabled="!canBatchBan" @click="openBatchAction('disabled')">{{ formatRiskAction('ban') }}</button>
-              <button type="button" class="btn btn-primary btn-sm" data-testid="batch-unban" :disabled="!canBatchUnban" @click="openBatchAction('active')">{{ formatRiskAction('unban') }}</button>
+			  <button type="button" class="btn btn-danger btn-sm" data-testid="batch-ban" :disabled="!canBatchBan" @click="openBatchAction('disabled')">{{ formatRiskAction('ban') }} {{ batchBanUsers.length }}</button>
+			  <button type="button" class="btn btn-primary btn-sm" data-testid="batch-unban" :disabled="!canBatchUnban" @click="openBatchAction('active')">{{ formatRiskAction('unban') }} {{ batchUnbanUsers.length }}</button>
               <button type="button" class="btn btn-ghost btn-sm" data-testid="clear-selection" @click="clearSelection">取消选择</button>
             </div>
           </section>
@@ -99,9 +101,9 @@
       <template #pagination><Pagination v-if="total" :page="page" :total="total" :page-size="pageSize" @update:page="changePage" @update:pageSize="changePageSize" /></template>
     </TablePageLayout>
 
-    <UserRiskControlUserDrawer v-if="selectedUser" :user="selectedUser" @close="selectedUser = null" @case-claimed="handleCaseClaimed" @status-partial="handlePartialStatus" @updated="handleUpdated" />
+    <UserRiskControlUserDrawer v-if="selectedUser" :user="selectedUser" @close="selectedUser = null" @case-claimed="handleCaseClaimed" @status-partial="handlePartialStatus" @status-recovery="handleStatusRecovery" @updated="handleUpdated" />
     <BaseDialog :show="Boolean(batchAction)" :title="batchDialogTitle" width="narrow" :close-on-click-outside="true" :z-index="80" @close="closeBatchAction">
-      <p class="text-sm text-gray-500 dark:text-gray-400">将处理 {{ selectedIds.size }} 个账号；每个账号都会单独记录结果。</p>
+	  <p class="text-sm text-gray-500 dark:text-gray-400">将处理 {{ batchTargetIds.length }} 个适用账号；跳过 {{ selectedIds.size - batchTargetIds.length }} 个其他状态账号。每个账号都会单独记录结果。</p>
       <TextArea v-model="batchReason" class="mt-4" data-testid="batch-reason" label="操作原因" required placeholder="填写操作原因（必填）" :error="batchValidationError" @update:model-value="batchValidationError = ''" />
       <template #footer><button type="button" class="btn btn-secondary" @click="closeBatchAction">{{ t('common.cancel') }}</button><button type="button" class="btn" :class="batchAction === 'disabled' ? 'btn-danger' : 'btn-primary'" data-testid="batch-confirm" :disabled="batchSaving" @click="confirmBatchAction">{{ batchSaving ? t('common.saving') : t('common.confirm') }}</button></template>
     </BaseDialog>
@@ -127,7 +129,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import type { Column } from '@/components/common/types'
 import { useDebouncedAction } from '@/composables/useDebouncedAction'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
-import { userRiskControlV2API, type RiskCaseView, type RiskSortBy, type RiskUserRow, type UserRiskFilters } from '@/api/admin/userRiskControlV2'
+import { userRiskControlV2API, type BatchStatusResult, type RiskCaseView, type RiskSortBy, type RiskUserRow, type UserRiskFilters } from '@/api/admin/userRiskControlV2'
 import { accountStatusOptions, formatAccountStatus, formatAuditResult, formatIdentitySignal, formatRiskAction, formatRiskReason, identitySignalOptions, processingStatusOptions, riskLevelOptions, riskTypeOptions } from '@/utils/userRiskControlLabels'
 
 const { t } = useI18n()
@@ -148,7 +150,9 @@ const view = ref<RiskCaseView>('users')
 const batchAction = ref<'disabled' | 'active' | null>(null)
 const batchReason = ref('')
 const batchValidationError = ref('')
-const batchResults = ref<Array<{ id: number; status: 'success' | 'partial' | 'failed'; reason?: string }>>([])
+const batchResults = ref<BatchStatusResult[]>([])
+const batchResultsVisible = ref(true)
+const batchTargetIds = ref<number[]>([])
 const workOverview = ref({ unassignedPending: 0, myInReview: 0, reviewDue: 0, allOpen: 0 })
 const workOverviewLoaded = ref(false)
 const workOverviewLoading = ref(true)
@@ -214,10 +218,72 @@ const allSelected = computed({
   },
 })
 const selectedUsers = computed(() => users.value.filter((user) => selectedIds.value.has(user.id)))
-const canBatchBan = computed(() => selectedUsers.value.length > 0 && selectedUsers.value.every((user) => user.status === 'active'))
-const canBatchUnban = computed(() => selectedUsers.value.length > 0 && selectedUsers.value.every((user) => user.status === 'disabled'))
+const accountRecoveryUserIds = ref(new Set<number>())
+const unresolvedBatchUserIds = computed(() => new Set([...accountRecoveryUserIds.value, ...batchResults.value.filter((result) => result.status === 'partial' && result.retryable && Boolean(result.pendingStep)).map((result) => result.id)]))
+const batchBanUsers = computed(() => selectedUsers.value.filter((user) => user.status === 'active' && !unresolvedBatchUserIds.value.has(user.id)))
+const batchUnbanUsers = computed(() => selectedUsers.value.filter((user) => user.status === 'disabled' && !unresolvedBatchUserIds.value.has(user.id)))
+const batchIneligibleCount = computed(() => selectedUsers.value.filter((user) => unresolvedBatchUserIds.value.has(user.id) || (user.status !== 'active' && user.status !== 'disabled')).length)
+const canBatchBan = computed(() => batchBanUsers.value.length > 0)
+const canBatchUnban = computed(() => batchUnbanUsers.value.length > 0)
 const batchSuccessCount = computed(() => batchResults.value.filter((result) => result.status === 'success').length)
+const batchPartialCount = computed(() => batchResults.value.filter((result) => result.status === 'partial').length)
+const batchFailedCount = computed(() => batchResults.value.filter((result) => result.status === 'failed').length)
+const batchRetryableCount = computed(() => batchResults.value.filter((result) => result.status === 'partial' && result.retryable && Boolean(result.pendingStep)).length)
 const batchSummary = computed(() => batchSuccessCount.value === batchResults.value.length ? 'success' : batchResults.value.some((result) => result.status === 'partial' || result.status === 'success') ? 'partial' : 'failed')
+const batchRecoveryStorageKey = 'sub2api:risk-batch-recovery'
+function accountRecoveryStorageKey(id: number) { return `sub2api:risk-account-recovery:${id}` }
+function isPendingBatchResult(item: BatchStatusResult) { return item.status === 'partial' && item.retryable && Boolean(item.pendingStep) }
+function mergeBatchResults(items: BatchStatusResult[]) {
+	const incoming = new Set(items.map((item) => item.id))
+	return [...batchResults.value.filter((item) => isPendingBatchResult(item) && !incoming.has(item.id)), ...items]
+}
+function persistBatchRecovery(): boolean {
+	const keys = [...new Set([batchRecoveryStorageKey, ...batchResults.value.map((item) => accountRecoveryStorageKey(item.id))])]
+	const previous = new Map<string, string | null>()
+	try {
+		keys.forEach((key) => previous.set(key, sessionStorage.getItem(key)))
+		const pending = batchResults.value.filter(isPendingBatchResult)
+		if (pending.length) sessionStorage.setItem(batchRecoveryStorageKey, JSON.stringify(pending))
+		else sessionStorage.removeItem(batchRecoveryStorageKey)
+		const nextRecoveryIDs = new Set(accountRecoveryUserIds.value)
+		batchResults.value.forEach((item) => {
+			const key = accountRecoveryStorageKey(item.id)
+			if (item.status === 'partial' && item.retryable && item.pendingStep && item.operationReason && item.requestId && item.requestedStatus) {
+				sessionStorage.setItem(key, JSON.stringify({ reason: item.operationReason, requestId: item.requestId, status: item.requestedStatus, pendingStep: item.pendingStep, batchId: item.batchId }))
+				nextRecoveryIDs.add(item.id)
+			} else { sessionStorage.removeItem(key); nextRecoveryIDs.delete(item.id) }
+		})
+		accountRecoveryUserIds.value = nextRecoveryIDs
+		return true
+	} catch {
+		try {
+			keys.forEach((key) => sessionStorage.removeItem(key))
+			previous.forEach((value, key) => { if (value !== null) sessionStorage.setItem(key, value) })
+		} catch (rollbackError) { void rollbackError }
+		return false
+	}
+}
+function restoreAccountRecoveryUserIds() {
+	const restored = new Set<number>()
+	try {
+		for (let index = 0; index < sessionStorage.length; index++) {
+			const key = sessionStorage.key(index) || ''
+			const match = key.match(/^sub2api:risk-account-recovery:(\d+)$/)
+			if (!match) continue
+			const value = JSON.parse(sessionStorage.getItem(key) || '{}') as { reason?: string; requestId?: string; status?: string; pendingStep?: string }
+			if (value.reason && value.requestId && (value.status === 'active' || value.status === 'disabled') && value.pendingStep) restored.add(Number(match[1]))
+		}
+	} catch (error) { void error }
+	accountRecoveryUserIds.value = restored
+}
+function restoreBatchRecovery() {
+	try {
+		const raw = sessionStorage.getItem(batchRecoveryStorageKey)
+		const items = raw ? JSON.parse(raw) as BatchStatusResult[] : []
+		if (Array.isArray(items) && items.length) { batchResults.value = items; persistBatchRecovery() }
+	} catch (error) { void error }
+}
+function closeBatchResults() { batchResultsVisible.value = false; if (!batchRetryableCount.value) batchResults.value = [] }
 const batchDialogTitle = computed(() => batchAction.value === 'disabled' ? '确认批量封禁' : '确认批量解封')
 
 function errorMessage(err: unknown) {
@@ -246,7 +312,7 @@ function restoreRouteState() {
     status: queryText('status'),
     riskType: queryText('risk_type'),
     riskLevel: queryText('risk_level'),
-    processingStatus: queryText('processing_status'),
+	processingStatus: view.value === 'users' ? queryText('processing_status') : '',
     riskOnly: queryText('risk_only') === 'true',
     minScore: normalizeScore(queryText('min_score')),
     maxScore: normalizeScore(queryText('max_score')),
@@ -267,7 +333,7 @@ async function syncRouteState() {
     status: String(activeFilters.status || '') || undefined,
     risk_type: String(activeFilters.riskType || '') || undefined,
     risk_level: String(activeFilters.riskLevel || '') || undefined,
-    processing_status: String(activeFilters.processingStatus || '') || undefined,
+	processing_status: view.value === 'users' ? String(activeFilters.processingStatus || '') || undefined : undefined,
     risk_only: activeFilters.riskOnly ? 'true' : undefined,
     min_score: normalizeScore(activeFilters.minScore)?.toString(),
     max_score: normalizeScore(activeFilters.maxScore)?.toString(),
@@ -358,6 +424,7 @@ function setRiskOnly(value: boolean) {
 async function setView(next: RiskCaseView) {
 	if (view.value === next || loading.value) return
 	view.value = next
+	clearProcessingFilterForQueue()
 	page.value = 1
 	clearSelection()
 	await syncRouteState()
@@ -367,6 +434,7 @@ async function setView(next: RiskCaseView) {
 async function setMode(next: 'queue' | 'users') {
 	if (mode.value === next || loading.value) return
 	view.value = next === 'users' ? 'users' : 'unassigned'
+	if (next === 'queue') clearProcessingFilterForQueue()
 	page.value = 1
 	clearSelection()
 	await syncRouteState()
@@ -376,6 +444,7 @@ async function setMode(next: 'queue' | 'users') {
 async function openWorkView(key: string) {
 	if (!caseViews.some((option) => option.value === key)) return
 	view.value = key as RiskCaseView
+	clearProcessingFilterForQueue()
   page.value = 1
   clearSelection()
   await syncRouteState()
@@ -436,6 +505,7 @@ function toggleSelection(id: number) {
   selectedIds.value = next
 }
 function clearSelection() { selectedIds.value = new Set() }
+function clearProcessingFilterForQueue() { draft.processingStatus = ''; activeFilters.processingStatus = '' }
 function displayReason(user: RiskUserRow) { return user.risk_type?.startsWith('v2_') ? formatIdentitySignal(user.risk_type) : formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
 function evidenceStrengthLabel(value?: string) { return ({ observation: '仅观察', weak: '弱', medium_high: '中高', high: '高' } as Record<string, string>)[value || ''] || '未评估' }
 function evaluationCoverageLabel(user: RiskUserRow) { const state = user.identity?.quality_state; return ({ healthy: '评估完整', degraded: '部分覆盖', not_evaluable: '不可评估', paused: '质量保护暂停', disabled: '评估关闭' } as Record<string, string>)[state || ''] || '尚无身份数据' }
@@ -455,13 +525,24 @@ function handlePartialStatus(updated: RiskUserRow) {
 	const index = users.value.findIndex((user) => user.id === updated.id)
 	if (index >= 0) users.value[index] = { ...users.value[index], ...updated }
 }
+function handleStatusRecovery(userID: number, pending: boolean) {
+	const next = new Set(accountRecoveryUserIds.value)
+	if (pending) next.add(userID)
+	else {
+		next.delete(userID)
+		batchResults.value = batchResults.value.filter((item) => item.id !== userID || !isPendingBatchResult(item))
+		persistBatchRecovery()
+	}
+	accountRecoveryUserIds.value = next
+}
 function openBatchAction(action: 'disabled' | 'active') {
   if ((action === 'disabled' && !canBatchBan.value) || (action === 'active' && !canBatchUnban.value)) return
   batchAction.value = action
+	batchTargetIds.value = (action === 'disabled' ? batchBanUsers.value : batchUnbanUsers.value).map((user) => user.id)
   batchReason.value = ''
   batchValidationError.value = ''
 }
-function closeBatchAction() { if (!batchSaving.value) batchAction.value = null }
+function closeBatchAction() { if (!batchSaving.value) { batchAction.value = null; batchTargetIds.value = [] } }
 async function confirmBatchAction() {
   const reason = batchReason.value.trim()
   if (!reason) {
@@ -471,12 +552,24 @@ async function confirmBatchAction() {
   if (!batchAction.value) return
   batchSaving.value = true
   batchValidationError.value = ''
-  const ids = Array.from(selectedIds.value)
+	const ids = [...batchTargetIds.value]
   try {
-		const results = await userRiskControlV2API.batchSetUserStatus(ids, batchAction.value, reason)
-    batchResults.value = results
+		const results = await userRiskControlV2API.batchSetUserStatus(ids, batchAction.value, reason, 4, (prepared) => {
+			const previous = batchResults.value
+			batchResults.value = mergeBatchResults(prepared)
+			batchResultsVisible.value = true
+			if (!persistBatchRecovery()) {
+				batchResults.value = previous
+				batchResultsVisible.value = previous.length > 0
+				throw new Error('无法保存批量恢复信息，请检查浏览器会话存储后重试')
+			}
+		})
+		batchResults.value = mergeBatchResults(results)
+		batchResultsVisible.value = true
+		if (!persistBatchRecovery()) batchValidationError.value = '操作已完成，但浏览器无法更新恢复信息；请保持当前页面并核对结果。'
     clearSelection()
     batchAction.value = null
+		batchTargetIds.value = []
     await loadUsers()
   } catch (err) {
     batchValidationError.value = errorMessage(err)
@@ -484,8 +577,21 @@ async function confirmBatchAction() {
     batchSaving.value = false
   }
 }
+async function retryBatchCleanup() {
+	if (!batchRetryableCount.value || batchSaving.value) return
+	batchSaving.value = true
+	try {
+		batchResults.value = await userRiskControlV2API.retryBatchSessionRevocations(batchResults.value)
+		persistBatchRecovery()
+		await loadUsers()
+	} catch (err) {
+		error.value = errorMessage(err)
+	} finally { batchSaving.value = false }
+}
 
 restoreRouteState()
+restoreAccountRecoveryUserIds()
+restoreBatchRecovery()
 watch(() => route?.fullPath, () => {
   if (writingQuery) return
   restoreRouteState()

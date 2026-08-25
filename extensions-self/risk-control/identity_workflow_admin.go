@@ -103,6 +103,17 @@ func decodeIdentityRuleApproval(body []byte) (identityRulePublishApproval, int, 
 	return approval, input.TargetRevision, nil
 }
 
+func isIdentityRuleRevisionConflict(err error) bool {
+	if errors.Is(err, ErrRuleRevisionConflict) {
+		return true
+	}
+	var stateErr interface{ SQLState() string }
+	if !errors.As(err, &stateErr) {
+		return false
+	}
+	return stateErr.SQLState() == "40001" || stateErr.SQLState() == "40P01"
+}
+
 func (s *HTTPServer) handleIdentityRuleLifecycle(w http.ResponseWriter, r *http.Request, path string, body []byte, operation string) {
 	if s.identity == nil || !s.cfg.Identity.AdminEnabled || !s.cfg.Identity.ExplainEnabled {
 		writeError(w, http.StatusServiceUnavailable, errors.New("identity rule administration is disabled"))
@@ -130,7 +141,7 @@ func (s *HTTPServer) handleIdentityRuleLifecycle(w http.ResponseWriter, r *http.
 	default:
 		err = errors.New("invalid identity rule operation")
 	}
-	if errors.Is(err, ErrRuleRevisionConflict) || errors.Is(err, ErrIdentityRuleNoChanges) {
+	if isIdentityRuleRevisionConflict(err) || errors.Is(err, ErrIdentityRuleNoChanges) {
 		writeError(w, http.StatusConflict, err)
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 
@@ -179,6 +180,35 @@ func TestProxyRiskControlAllowlistsRuleCreation(t *testing.T) {
 	}
 	if allowedRiskControlPath(http.MethodPost, "/users/not-an-id/processed") {
 		t.Fatal("processed path must require a numeric user id")
+	}
+	if !allowedRiskControlPath(http.MethodGet, "/review-cases/31") {
+		t.Fatal("GET /review-cases/:id must be allowlisted")
+	}
+	for _, path := range []string{"/review-cases/not-an-id", "/review-cases/31/secret"} {
+		if allowedRiskControlPath(http.MethodGet, path) {
+			t.Fatalf("review case detail path must require one numeric id: %s", path)
+		}
+	}
+}
+
+func TestResolveAuditAccountFiltersPreservesNumericDispositionTarget(t *testing.T) {
+	h := NewCustomUserHandler(nil, nil, nil)
+	engine := gin.New()
+	engine.GET("/", func(c *gin.Context) {
+		query := url.Values{"category": {"disposition"}, "target": {"31"}}
+		resolved, found, err := h.resolveAuditAccountFilters(c, query)
+		if err != nil || !found {
+			t.Fatalf("found=%v err=%v", found, err)
+		}
+		if resolved.Get("target") != "31" || resolved.Has("target_user_id") {
+			t.Fatalf("resolved query = %s", resolved.Encode())
+		}
+		c.Status(http.StatusNoContent)
+	})
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

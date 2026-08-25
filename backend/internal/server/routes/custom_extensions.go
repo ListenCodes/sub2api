@@ -36,6 +36,7 @@ func registerCustomAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, cust
 	admin.POST("/user-risk/cases/:id/resolve", custom.AdminUser.ResolveRiskCase)
 	admin.Group("/extensions-self/account-monitor").Any("/*path", custom.AdminUser.ProxyAccountMonitor)
 	admin.POST("/users/:id/risk-status", custom.AdminUser.SetRiskStatus)
+	admin.POST("/users/:id/risk-status/revoke-sessions", custom.AdminUser.RetryRiskSessionRevocation)
 	admin.GET("/users/:id/identity-summary", custom.AdminUser.ProxyUserRiskIdentity)
 	admin.GET("/users/:id/ip-identities", custom.AdminUser.ProxyUserRiskIdentity)
 	admin.POST("/users/:id/ip-identities/search", custom.AdminUser.ProxyUserRiskIdentity)

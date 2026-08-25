@@ -258,14 +258,18 @@ func (r *SQLIdentityRepository) DisableIdentityRule(ctx context.Context, code, r
 	if code == "" || strings.Contains(code, "/") || reason == "" || len([]rune(reason)) > 500 || actorID <= 0 {
 		return 0, errors.New("invalid identity rule disable request")
 	}
-	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('risk_identity_rule_lifecycle:' || signal_family,0)) FROM risk_identity_rules WHERE code=$1`, code); err != nil {
+		return 0, err
+	}
 	var revision int
 	var enabled bool
-	if err := tx.QueryRowContext(ctx, `SELECT revision,enabled FROM risk_identity_rules WHERE code=$1 FOR UPDATE`, code).Scan(&revision, &enabled); err != nil {
+	var family string
+	if err := tx.QueryRowContext(ctx, `SELECT revision,enabled,signal_family FROM risk_identity_rules WHERE code=$1 FOR UPDATE`, code).Scan(&revision, &enabled, &family); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, errors.New("identity rule is unavailable")
 		}
@@ -274,7 +278,7 @@ func (r *SQLIdentityRepository) DisableIdentityRule(ctx context.Context, code, r
 	if !enabled {
 		return revision, tx.Commit()
 	}
-	userRows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM risk_identity_signals WHERE rule_code=$1 AND status='active' AND user_id>0`, code)
+	userRows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM risk_identity_signals WHERE rule_code=$1 AND status='active' AND user_id>0 ORDER BY user_id`, code)
 	if err != nil {
 		return 0, err
 	}
@@ -286,6 +290,10 @@ func (r *SQLIdentityRepository) DisableIdentityRule(ctx context.Context, code, r
 			return 0, err
 		}
 		userIDs = append(userIDs, userID)
+	}
+	if err := userRows.Err(); err != nil {
+		userRows.Close()
+		return 0, err
 	}
 	if err := userRows.Close(); err != nil {
 		return 0, err
@@ -307,6 +315,9 @@ FROM risk_identity_rules WHERE code=$1 ON CONFLICT(rule_kind,rule_code,revision)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='superseded',current_score=0
 	WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.rule_code=$1)`, code); err != nil {
+		return 0, err
+	}
+	if err := refreshIdentityReviewCases(ctx, tx, userIDs, family); err != nil {
 		return 0, err
 	}
 	for _, userID := range userIDs {
