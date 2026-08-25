@@ -41,7 +41,7 @@
                   <tr v-for="rule in identityRules" :key="rule.code" :data-testid="`identity-rule-${rule.code}`">
 					<td class="py-2.5 pr-4"><p class="font-medium text-gray-900 dark:text-white">{{ identityRuleName(rule.code) }}</p><p class="mt-1 text-xs text-gray-400">{{ identityDomainLabel(rule.domain) }} · {{ identityRuleCondition(rule) }} · 风险分 {{ rule.score }}</p><p class="mt-1 text-xs text-gray-400">来源 {{ configSourceLabel(rule.config_source) }} · 第 {{ rule.revision }} 版 · {{ formatDate(rule.updated_at) }}</p></td>
 					<td class="py-2.5 pr-4">{{ detectionStateLabel(rule.detection_state || rule.state) }}<p class="mt-1 text-xs text-gray-400">{{ identityRuleStatus(rule) }}</p></td>
-					<td class="py-2.5 pr-4">{{ identityDecisionMode(rule) === 'enforce' ? '受控执行' : '观察（不执行）' }}</td>
+					<td class="py-2.5 pr-4">{{ identityDecisionMode(rule) === 'enforce' ? '自动处置' : '观察（不执行）' }}</td>
 					<td class="py-2.5 pr-4">{{ identityActionLabel(identityConfiguredAction(rule)) }} / {{ identityActionLabel(identityEffectiveAction(rule)) }}<p v-if="rule.reason_codes?.length" class="mt-1 text-xs text-amber-600">{{ ruleReasonLabel(rule.reason_codes[0]) }}</p></td>
 					<td class="py-2.5 pr-4">{{ detectionStateLabel(rule.data_quality || rule.state) }}</td>
 					<td class="py-2.5"><button type="button" class="btn btn-ghost btn-icon" title="编辑规则" aria-label="编辑规则" :data-testid="`edit-identity-rule-${rule.code}`" @click="openIdentityEditor(rule)"><Icon name="edit" size="sm" /></button></td>

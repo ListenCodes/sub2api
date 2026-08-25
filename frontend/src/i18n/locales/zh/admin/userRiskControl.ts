@@ -25,7 +25,7 @@ export default {
     mode: '运行模式',
     failureMode: '故障策略',
     scenarioRevision: '场景版本',
-    shadowNotice: '观察模式只记录和评估，不会自动封禁用户；受控执行规则会明确展示实际动作。',
+    shadowNotice: '观察模式只记录和评估，不会自动封禁用户；自动处置规则会明确展示实际动作。',
     recentEvents: '最近风险事件',
     recentEventsHint: '事件包含命中的场景、证据族和决定原因。',
     eventsTitle: '风险事件',
