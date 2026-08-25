@@ -2,7 +2,7 @@
   <div>
     <div v-if="health" class="flex flex-wrap items-center gap-2 border-b border-gray-200 pb-3 text-xs dark:border-dark-700">
       <span class="font-medium text-gray-700 dark:text-gray-200">身份关联</span>
-	  <span :class="health.mode === 'enforce' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'" class="rounded px-2 py-1 font-medium">{{ health.mode === 'enforce' ? '综合候选受控执行' : '观察模式' }}</span>
+	  <span :class="health.mode === 'enforce' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'" class="rounded px-2 py-1 font-medium">{{ health.mode === 'enforce' ? '综合候选自动处置' : '观察模式' }}</span>
       <span v-for="domain in domainOrder" :key="domain" :class="healthClass(health.domains[domain])">{{ domainLabel(domain) }} · {{ stateLabel(health.domains[domain]) }}</span>
     </div>
 
