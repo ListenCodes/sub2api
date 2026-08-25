@@ -173,8 +173,18 @@ export interface ResolveRiskCaseResult {
 	result: 'success' | 'partial'
 	request_id: string
 	retryable: boolean
-	account: { user_id: number; action?: string; result: string; before_status?: string; after_status?: string; failure_reason?: string }
+	account: { user_id: number; action?: string; result: string; retryable?: boolean; pending_step?: string; before_status?: string; after_status?: string; failure_reason?: string }
 	case: { id?: number; result?: string; failure_reason?: string; case?: Record<string, unknown>; idempotent_replay?: boolean }
+}
+
+export interface RiskReviewCaseDetail {
+	id: number
+	user_id: number
+	status: RiskCaseStatus
+	revision: number
+	review_due_at?: string
+	observation_goal?: string
+	resolution_reason?: string
 }
 
 export interface Rule {
@@ -202,7 +212,7 @@ function compactParams(params: Record<string, unknown>) {
 
 async function listUsers(filters: UserRiskFilters = {}): Promise<RiskListResponse<RiskUserRow>> {
   const { data } = await mainAdminClient.get<RiskListResponse<RiskUserRow>>('/admin/user-risk/users', {
-		params: compactParams({ view: filters.view || 'users', page: filters.page || 1, page_size: filters.pageSize || 20, search: filters.search, status: filters.status, risk_type: filters.riskType, risk_level: filters.riskLevel, processing_status: filters.processingStatus, risk_only: filters.riskOnly, min_score: filters.minScore, max_score: filters.maxScore, sort_by: filters.sortBy, sort_order: filters.sortOrder }),
+		params: compactParams({ view: filters.view || 'users', page: filters.page || 1, page_size: filters.pageSize || 20, search: filters.search, status: filters.status, risk_type: filters.riskType, risk_level: filters.riskLevel, processing_status: (filters.view || 'users') === 'users' ? filters.processingStatus : undefined, risk_only: filters.riskOnly, min_score: filters.minScore, max_score: filters.maxScore, sort_by: filters.sortBy, sort_order: filters.sortOrder }),
 	})
 	return data
 }
@@ -372,22 +382,29 @@ async function applyIdentityRebuild(approvedDryRunID: number): Promise<IdentityR
 	return data
 }
 
-export type RiskStatusResult = { user: RiskUserRow; result: 'success' | 'partial'; failureReason?: string }
+function riskRequestID(prefix: string): string {
+	return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
 
-async function setUserStatusResult(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskStatusResult> {
+export type RiskStatusResult = { user: RiskUserRow; result: 'success' | 'partial'; failureReason?: string; requestId: string; batchId?: string; retryable: boolean; pendingStep?: string }
+
+async function setUserStatusResult(id: number, status: AccountStatus, reason: string, batchId?: string, requestId?: string): Promise<RiskStatusResult> {
   // Account status is authoritative in the main Sub2API users table.
-	const { data } = await mainAdminClient.post<{ user: RiskUserRow; result?: 'success' | 'partial'; failure_reason?: string }>(`/admin/users/${id}/risk-status`, { status, reason: reason.trim(), batch_id: batchId })
-	return { user: data.user, result: data.result === 'partial' ? 'partial' : 'success', failureReason: data.failure_reason }
+	const operationID = requestId || riskRequestID(`risk-status-${id}`)
+	const { data } = await mainAdminClient.post<{ user: RiskUserRow; result?: 'success' | 'partial'; failure_reason?: string; request_id?: string; batch_id?: string; retryable?: boolean; pending_step?: string }>(`/admin/users/${id}/risk-status`, compactParams({ status, reason: reason.trim(), batch_id: batchId, request_id: operationID }), { headers: { 'Idempotency-Key': operationID } })
+	return { user: data.user, result: data.result === 'partial' ? 'partial' : 'success', failureReason: data.failure_reason, requestId: data.request_id || operationID, batchId: data.batch_id || batchId, retryable: data.retryable === true, pendingStep: data.pending_step }
 }
 
-async function setUserStatus(id: number, status: AccountStatus, reason: string, batchId?: string): Promise<RiskStatusResult> {
-	return setUserStatusResult(id, status, reason, batchId)
+async function setUserStatus(id: number, status: AccountStatus, reason: string, batchId?: string, requestId?: string): Promise<RiskStatusResult> {
+	return setUserStatusResult(id, status, reason, batchId, requestId)
 }
 
-type BatchStatusResult = { id: number; status: 'success' | 'partial' | 'failed'; user?: RiskUserRow; reason?: string }
+export type BatchStatusResult = { id: number; status: 'success' | 'partial' | 'failed'; user?: RiskUserRow; reason?: string; operationReason?: string; requestedStatus?: AccountStatus; requestId?: string; batchId?: string; retryable?: boolean; pendingStep?: string }
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim()) return message
     const response = (error as { response?: { data?: { error?: string } } }).response
     if (response?.data?.error) return response.data.error
   }
@@ -395,26 +412,72 @@ function errorMessage(error: unknown): string {
   return '操作失败，未返回具体原因'
 }
 
-async function batchSetUserStatus(ids: number[], status: AccountStatus, reason: string, concurrency = 4): Promise<BatchStatusResult[]> {
+function statusFromError(error: unknown): number {
+	if (typeof error !== 'object' || error === null) return 0
+	const direct = Number((error as { status?: unknown }).status)
+	if (Number.isFinite(direct) && direct > 0) return direct
+	const nested = Number((error as { response?: { status?: unknown } }).response?.status)
+	return Number.isFinite(nested) && nested > 0 ? nested : 0
+}
+
+function isDefinitiveStatusFailure(error: unknown): boolean {
+	const status = statusFromError(error)
+	return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
+}
+
+async function batchSetUserStatus(ids: number[], status: AccountStatus, reason: string, concurrency = 4, onPrepared?: (items: BatchStatusResult[]) => void): Promise<BatchStatusResult[]> {
   const trimmedReason = reason.trim()
   if (!trimmedReason) throw new Error('操作原因不能为空')
   const batchId = `risk-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const results: BatchStatusResult[] = new Array(ids.length)
+	const results: BatchStatusResult[] = ids.map((id) => ({ id, status: 'partial', operationReason: trimmedReason, requestedStatus: status, requestId: `${batchId}:${id}`, batchId, retryable: true, pendingStep: 'status_confirmation', reason: '请求已发送，等待确认结果' }))
+	onPrepared?.(results.map((item) => ({ ...item })))
   let cursor = 0
   async function worker() {
     while (cursor < ids.length) {
-      const index = cursor++
-      const id = ids[index]
-      try {
-		const outcome = await setUserStatusResult(id, status, trimmedReason, batchId)
-		results[index] = { id, status: outcome.result, user: outcome.user, reason: outcome.failureReason }
+		const index = cursor++
+		const id = ids[index]
+		const requestId = results[index].requestId!
+		try {
+		const outcome = await setUserStatusResult(id, status, trimmedReason, batchId, requestId)
+		results[index] = { id, status: outcome.result, user: outcome.user, reason: outcome.failureReason, operationReason: trimmedReason, requestedStatus: status, requestId: outcome.requestId, batchId: outcome.batchId || batchId, retryable: outcome.retryable, pendingStep: outcome.pendingStep }
       } catch (error) {
-        results[index] = { id, status: 'failed', reason: errorMessage(error) }
+		results[index] = isDefinitiveStatusFailure(error)
+			? { id, status: 'failed', reason: errorMessage(error), operationReason: trimmedReason, requestedStatus: status, requestId, batchId, retryable: false }
+			: { id, status: 'partial', reason: `请求结果未知：${errorMessage(error)}`, operationReason: trimmedReason, requestedStatus: status, requestId, batchId, retryable: true, pendingStep: 'status_confirmation' }
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(Math.max(concurrency, 1), 4, ids.length) }, () => worker()))
   return results
+}
+
+async function retryUserSessionRevocation(id: number, reason: string, requestId: string, batchId?: string): Promise<RiskStatusResult> {
+	const retryKey = riskRequestID(`risk-session-${id}`)
+	const { data } = await mainAdminClient.post<{ user?: RiskUserRow; result: 'success' | 'partial'; failure_reason?: string; request_id?: string; batch_id?: string; retryable?: boolean; pending_step?: string }>(`/admin/users/${id}/risk-status/revoke-sessions`, { reason: reason.trim(), request_id: requestId, batch_id: batchId }, { headers: { 'Idempotency-Key': retryKey } })
+	return { user: data.user || ({ id, email: '', status: 'disabled' } as RiskUserRow), result: data.result, failureReason: data.failure_reason, requestId: data.request_id || requestId, batchId: data.batch_id || batchId, retryable: data.retryable === true, pendingStep: data.pending_step }
+}
+
+async function retryBatchSessionRevocations(items: BatchStatusResult[], concurrency = 4): Promise<BatchStatusResult[]> {
+	const results = [...items]
+	const indexes = items.map((item, index) => ({ item, index })).filter(({ item }) => item.status === 'partial' && item.retryable && item.pendingStep && item.requestId && item.operationReason)
+	let cursor = 0
+	async function worker() {
+		while (cursor < indexes.length) {
+			const { item, index } = indexes[cursor++]
+			try {
+				const outcome = item.pendingStep === 'session_revocation'
+					? await retryUserSessionRevocation(item.id, item.operationReason!, item.requestId!, item.batchId)
+					: await setUserStatusResult(item.id, item.requestedStatus || item.user?.status || 'disabled', item.operationReason!, item.batchId, item.requestId!)
+				results[index] = { ...item, status: outcome.result, user: outcome.user, reason: outcome.failureReason, retryable: outcome.retryable, pendingStep: outcome.pendingStep }
+			} catch (error) {
+				results[index] = isDefinitiveStatusFailure(error)
+					? { ...item, status: 'failed', reason: errorMessage(error), retryable: false, pendingStep: undefined }
+					: { ...item, reason: errorMessage(error) }
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(Math.max(concurrency, 1), 4, indexes.length) }, () => worker()))
+	return results
 }
 
 async function markUserProcessed(id: number, reason: string, batchId: string): Promise<void> {
@@ -509,6 +572,11 @@ async function claimReviewCase(id: number): Promise<{ status: RiskCaseStatus; re
 	return data
 }
 
+async function getReviewCase(id: number): Promise<RiskReviewCaseDetail> {
+	const { data } = await mainAdminClient.get<RiskReviewCaseDetail>(`/admin/user-risk-control/review-cases/${id}`)
+	return data
+}
+
 async function submitReviewFeedback(id: number, feedback: RiskFeedback, reason: string): Promise<void> {
 	await mainAdminClient.post(`/admin/user-risk-control/review-cases/${id}/feedback`, { feedback, reason: reason.trim() })
 }
@@ -529,5 +597,5 @@ async function resolveReviewCase(id: number, userId: number, resolution: RiskFee
 	return data
 }
 
-export const userRiskControlV2API = { listUsers, getWorkOverview, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, listIdentityRules, listIdentityRuleEffects, listIdentityRuleVersions, saveIdentityRuleDraft, simulateIdentityRule, identityRuleLifecycle, disableIdentityRule, dryRunIdentityRebuild, applyIdentityRebuild, previewNetworkLabel, applyNetworkLabel, revokeNetworkLabel, claimReviewCase, createReviewCase, observeReviewCase, submitReviewFeedback, resolveReviewCase, setUserStatus, batchSetUserStatus, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
+export const userRiskControlV2API = { listUsers, getWorkOverview, getUserDetail, getUserIdentitySummary, listUserIPIdentities, listUserDeviceIdentities, listAssociatedUsers, getIdentityHealth, listIdentityRules, listIdentityRuleEffects, listIdentityRuleVersions, saveIdentityRuleDraft, simulateIdentityRule, identityRuleLifecycle, disableIdentityRule, dryRunIdentityRebuild, applyIdentityRebuild, previewNetworkLabel, applyNetworkLabel, revokeNetworkLabel, claimReviewCase, getReviewCase, createReviewCase, observeReviewCase, submitReviewFeedback, resolveReviewCase, setUserStatus, retryUserSessionRevocation, batchSetUserStatus, retryBatchSessionRevocations, markUsersProcessed, listRules, updateRule, createRule, testRule, listAudit }
 export default userRiskControlV2API

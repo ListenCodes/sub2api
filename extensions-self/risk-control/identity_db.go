@@ -417,10 +417,6 @@ func (r *SQLIdentityRepository) EvaluateAndStoreSignals(ctx context.Context, eve
 	if !cfg.RulesEnabled || event.ID <= 0 || (event.EventClass != "registration" && event.EventClass != identityEventAPI) {
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, `UPDATE risk_identity_signals signal SET status=CASE WHEN signal.active_until IS NOT NULL AND signal.active_until<=$1 THEN 'expired' ELSE 'superseded' END
-FROM risk_identity_rules rule WHERE signal.rule_code=rule.code AND signal.status='active' AND (signal.rule_revision<>rule.revision OR NOT rule.enabled OR (signal.active_until IS NOT NULL AND signal.active_until<=$1))`, event.OccurredAt); err != nil {
-		return err
-	}
 	_, qualityCounts, err := r.qualityStates(ctx, cfg)
 	if err != nil {
 		return err
@@ -458,6 +454,9 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 		}
 		rules = append(rules, item)
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	notEvaluable := false
 	for _, rule := range rules {
 		if rule.subjectKind != "api_client" && event.EventClass != "registration" {
@@ -481,10 +480,22 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 				if !event.OccurredAt.Add(time.Duration(rule.window) * time.Second).After(time.Now().UTC()) {
 					lifecycle = "expired"
 				}
-				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,0,$2,$3,0,0,'none',$4,$5) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.ID, lifecycle, evidence, event.OccurredAt); err != nil {
+				tx, err := r.beginCurrentIdentityRuleWrite(ctx, rule.code, rule.family, rule.revision, rule.versionID)
+				if err != nil {
 					return err
 				}
-				if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at) VALUES ($1,0,'account',$2,$3,$4,$5,0,$6,TRUE,$7,$7,$8,$9::varchar,$10::timestamptz,$10::timestamptz+($11::integer*interval '1 second'),$10::timestamptz,$10::timestamptz,$10::timestamptz) ON CONFLICT(event_id,user_id,rule_code) DO NOTHING`, event.ID, rule.code, rule.versionID, rule.revision, rule.family, count, evidence, decisionID, lifecycle, event.OccurredAt, rule.window); err != nil {
+				if tx == nil {
+					continue
+				}
+				if _, err = tx.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,0,$2,$3,0,0,'none',$4,$5) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.ID, lifecycle, evidence, event.OccurredAt); err != nil {
+					tx.Rollback()
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at) VALUES ($1,0,'account',$2,$3,$4,$5,0,$6,TRUE,$7,$7,$8,$9::varchar,$10::timestamptz,$10::timestamptz+($11::integer*interval '1 second'),$10::timestamptz,$10::timestamptz,$10::timestamptz) ON CONFLICT(event_id,user_id,rule_code) DO UPDATE SET last_hit_at=GREATEST(risk_identity_signals.last_hit_at,EXCLUDED.last_hit_at)`, event.ID, rule.code, rule.versionID, rule.revision, rule.family, count, evidence, decisionID, lifecycle, event.OccurredAt, rule.window); err != nil {
+					tx.Rollback()
+					return err
+				}
+				if err := tx.Commit(); err != nil {
 					return err
 				}
 			}
@@ -542,25 +553,38 @@ WHERE rule.enabled=TRUE AND rule.mode='shadow' AND rule.active_from<=$1 AND (rul
 		if !event.OccurredAt.Add(time.Duration(rule.window) * time.Second).After(time.Now().UTC()) {
 			lifecycle = "expired"
 		}
-		if _, err = r.db.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,$2,$3,$4::varchar,CASE WHEN $4::varchar='active' THEN $5 ELSE 0 END,$5,$6,$7,$8) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.UserID, event.ID, lifecycle, rule.score, riskLevel, evidence, event.OccurredAt); err != nil {
+		tx, err := r.beginCurrentIdentityRuleWrite(ctx, rule.code, rule.family, rule.revision, rule.versionID)
+		if err != nil {
+			return err
+		}
+		if tx == nil {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO risk_decisions(decision_id,user_id,event_id,status,current_score,historical_max_score,risk_level,evidence_snapshot,decided_at) VALUES($1,$2,$3,$4::varchar,CASE WHEN $4::varchar='active' THEN $5 ELSE 0 END,$5,$6,$7,$8) ON CONFLICT(decision_id) DO NOTHING`, decisionID, event.UserID, event.ID, lifecycle, rule.score, riskLevel, evidence, event.OccurredAt); err != nil {
+			tx.Rollback()
 			return err
 		}
 		var signalID int64
-		err = r.db.QueryRowContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at)
+		err = tx.QueryRowContext(ctx, `INSERT INTO risk_identity_signals(event_id,user_id,domain,rule_code,rule_version_id,rule_revision,signal_family,score,evidence_count,observing,network_identity_id,device_identity_id,evidence,evidence_snapshot,decision_id,status,active_from,active_until,first_hit_at,last_hit_at,occurred_at)
 SELECT $1,$2,$3::varchar,$4,$5,$6,$7,$8,$9,TRUE,NULLIF($10,0),NULLIF($11,0),$12,$12,$13,$14::varchar,$15::timestamptz,$15::timestamptz+($16::integer*interval '1 second'),$15::timestamptz,$15::timestamptz,$15::timestamptz
 WHERE $3::varchar NOT IN ('ip','composite') OR NOT EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=$10 AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'))
 ON CONFLICT(event_id,user_id,rule_code) DO UPDATE SET last_hit_at=GREATEST(risk_identity_signals.last_hit_at,EXCLUDED.last_hit_at) RETURNING id`, event.ID, event.UserID, rule.domain, rule.code, rule.versionID, rule.revision, rule.family, rule.score, count, event.NetworkID, deviceID, evidence, decisionID, lifecycle, event.OccurredAt, rule.window).Scan(&signalID)
 		if errors.Is(err, sql.ErrNoRows) {
-			_, _ = r.db.ExecContext(ctx, `UPDATE risk_decisions SET status='resolved',current_score=0 WHERE decision_id=$1`, decisionID)
+			tx.Rollback()
 			continue
 		}
 		if err != nil {
+			tx.Rollback()
 			return err
 		}
 		if cfg.CasesEnabled && rule.score > 0 && lifecycle == "active" {
-			if err := r.upsertIdentityReviewCase(ctx, event, signalID, decisionID, rule.family, rule.code, rule.score, evidence); err != nil {
+			if err := upsertIdentityReviewCase(ctx, tx, event, signalID, decisionID, rule.family, rule.code, rule.score, evidence); err != nil {
+				tx.Rollback()
 				return err
 			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
 		}
 	}
 	if event.UserID > 0 {
@@ -597,7 +621,42 @@ func identityRiskLevel(score int) string {
 	}
 }
 
+func (r *SQLIdentityRepository) beginCurrentIdentityRuleWrite(ctx context.Context, code, signalFamily string, revision int, versionID int64) (*sql.Tx, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('risk_identity_rule_lifecycle:' || $1,0))`, signalFamily); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	var current int
+	err = tx.QueryRowContext(ctx, `SELECT 1
+FROM risk_identity_rules rule
+JOIN risk_rule_versions version ON version.id=$3 AND version.rule_kind='identity' AND version.rule_code=rule.code AND version.revision=rule.revision
+WHERE rule.code=$1 AND rule.revision=$2 AND rule.enabled AND rule.mode='shadow' AND version.enabled
+FOR SHARE OF rule,version`, code, revision, versionID).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return nil, nil
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
 func (r *SQLIdentityRepository) upsertIdentityReviewCase(ctx context.Context, event PersistedIdentityEvent, signalID int64, decisionID, family, ruleCode string, score int, evidence []byte) error {
+	return upsertIdentityReviewCase(ctx, r.db, event, signalID, decisionID, family, ruleCode, score, evidence)
+}
+
+type identityQueryExecer interface {
+	identityExecer
+	identityQueryer
+}
+
+func upsertIdentityReviewCase(ctx context.Context, executor identityQueryExecer, event PersistedIdentityEvent, signalID int64, decisionID, family, ruleCode string, score int, evidence []byte) error {
 	status, strength := "observing", "weak"
 	if score >= 60 {
 		status, strength = "pending", "medium_high"
@@ -612,7 +671,7 @@ func (r *SQLIdentityRepository) upsertIdentityReviewCase(ctx context.Context, ev
 		observationGoal = "Review whether the weak signal persists or escalates"
 	}
 	var caseID int64
-	err := r.db.QueryRowContext(ctx, `INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,review_due_at,observation_goal,opened_at,last_hit_at)
+	err := executor.QueryRowContext(ctx, `INSERT INTO risk_review_cases(user_id,decision_id,signal_family,status,current_score,historical_max_score,primary_signal,evidence_strength,review_due_at,observation_goal,opened_at,last_hit_at)
 VALUES($1,$2,$3,$4,$5,$5,$6,$7,$9,$10,$8,$8)
 ON CONFLICT(user_id,signal_family) WHERE status IN ('pending','in_review','observing') DO UPDATE SET
 status=CASE WHEN risk_review_cases.status='in_review' THEN 'in_review' WHEN risk_review_cases.status='observing' AND risk_review_cases.assignee_id>0 AND EXCLUDED.status='pending' THEN 'in_review' WHEN risk_review_cases.status='pending' OR EXCLUDED.status='pending' THEN 'pending' ELSE 'observing' END,
@@ -624,7 +683,7 @@ RETURNING id`, event.UserID, decisionID, family, status, score, ruleCode, streng
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO risk_case_evidence(case_id,signal_id,evidence_snapshot,occurred_at) VALUES($1,$2,$3,$4) ON CONFLICT(case_id,signal_id) DO NOTHING`, caseID, signalID, evidence, event.OccurredAt)
+	_, err = executor.ExecContext(ctx, `INSERT INTO risk_case_evidence(case_id,signal_id,evidence_snapshot,occurred_at) VALUES($1,$2,$3,$4) ON CONFLICT(case_id,signal_id) DO NOTHING`, caseID, signalID, evidence, event.OccurredAt)
 	return err
 }
 
@@ -647,6 +706,32 @@ WITH eligible AS (
 SELECT $1,COALESCE((SELECT MAX(score) FROM family_scores),0),COALESCE(MAX(score) FILTER (WHERE domain='ip'),0),COALESCE(MAX(score) FILTER (WHERE domain='device'),0),COALESCE(MAX(score) FILTER (WHERE domain='composite'),0),COUNT(DISTINCT rule_code) FILTER (WHERE domain='ip'),COUNT(DISTINCT rule_code) FILTER (WHERE domain='device'),COUNT(DISTINCT rule_code) FILTER (WHERE domain='composite'),NOW()
 FROM eligible
 ON CONFLICT(user_id) DO UPDATE SET overall_score=EXCLUDED.overall_score,ip_score=EXCLUDED.ip_score,device_score=EXCLUDED.device_score,composite_score=EXCLUDED.composite_score,ip_signal_count=EXCLUDED.ip_signal_count,device_signal_count=EXCLUDED.device_signal_count,composite_signal_count=EXCLUDED.composite_signal_count,updated_at=NOW()`, userID)
+	return err
+}
+
+func refreshIdentityReviewCases(ctx context.Context, executor identityExecer, userIDs []int64, signalFamily string) error {
+	if len(userIDs) == 0 || strings.TrimSpace(signalFamily) == "" {
+		return nil
+	}
+	_, err := executor.ExecContext(ctx, `WITH case_state AS (
+ SELECT case_row.id,COALESCE(best.score,0) current_score,COALESCE(best.rule_code,'') primary_signal,best.decision_id,
+  CASE WHEN best.rule_code LIKE '%composite%' THEN 'high' WHEN COALESCE(best.score,0)>=60 THEN 'medium_high' ELSE 'weak' END evidence_strength
+ FROM risk_review_cases case_row
+ LEFT JOIN LATERAL (
+  SELECT signal.score,signal.rule_code,signal.decision_id
+  FROM risk_identity_signals signal
+  JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision
+  JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+  WHERE signal.user_id=case_row.user_id AND signal.signal_family=case_row.signal_family AND signal.score>0 AND signal.status='active'
+   AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW())
+   AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW())
+   AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+  ORDER BY signal.score DESC,signal.last_hit_at DESC,signal.id DESC LIMIT 1
+ ) best ON TRUE
+ WHERE case_row.user_id=ANY($1) AND case_row.signal_family=$2 AND case_row.status IN ('pending','in_review','observing')
+)
+UPDATE risk_review_cases case_row SET current_score=case_state.current_score,primary_signal=case_state.primary_signal,decision_id=case_state.decision_id,evidence_strength=case_state.evidence_strength,revision=case_row.revision+1,updated_at=NOW()
+FROM case_state WHERE case_row.id=case_state.id AND (case_row.current_score IS DISTINCT FROM case_state.current_score OR case_row.primary_signal IS DISTINCT FROM case_state.primary_signal OR case_row.decision_id IS DISTINCT FROM case_state.decision_id OR case_row.evidence_strength IS DISTINCT FROM case_state.evidence_strength)`, pq.Array(userIDs), signalFamily)
 	return err
 }
 

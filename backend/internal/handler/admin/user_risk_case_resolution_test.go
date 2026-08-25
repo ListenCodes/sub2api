@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -102,8 +103,16 @@ func TestResolveRiskCaseReturnsStructuredSuccess(t *testing.T) {
 }
 
 func TestResolveRiskCaseReportsExtensionPartialFailure(t *testing.T) {
+	var auditReport service.RiskAuditReport
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/api/v1/internal/audit" {
+			if err := json.NewDecoder(request.Body).Decode(&auditReport); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = writer.Write([]byte(`{"ok":true}`))
+			return
+		}
 		if request.Method == http.MethodGet {
 			_, _ = writer.Write([]byte(`{"id":9,"user_id":42,"status":"in_review","revision":3}`))
 			return
@@ -117,12 +126,37 @@ func TestResolveRiskCaseReportsExtensionPartialFailure(t *testing.T) {
 	response := resolveRiskCaseRequest(t, handler, `{"user_id":42,"resolution":"confirmed_abuse","reason":"多证据确认滥用","account_action":"none","expected_case_revision":3}`, "resolve-9-partial")
 	data := decodeResolveRiskCaseData(t, response)
 	caseStep, _ := data["case"].(map[string]any)
-	if response.Code != http.StatusOK || data["result"] != "partial" || data["retryable"] != true || caseStep["result"] != "failed" {
+	if response.Code != http.StatusOK || data["result"] != "partial" || data["retryable"] != true || caseStep["result"] != "partial" {
 		t.Fatalf("status=%d data=%+v", response.Code, data)
+	}
+	if auditReport.Result != "partial" || auditReport.Metadata["outcome_unknown"] != true {
+		t.Fatalf("audit=%+v", auditReport)
 	}
 }
 
-func TestResolveRiskCaseStopsWhenAccountActionFails(t *testing.T) {
+func TestResolveRiskCaseDoesNotMutateAccountWhenCaseResolveFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			_, _ = writer.Write([]byte(`{"id":9,"user_id":42,"status":"in_review","revision":3}`))
+			return
+		}
+		writer.WriteHeader(http.StatusConflict)
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "resolve-conflict-secret")
+	adminStub := &riskCaseResolutionAdminStub{user: service.User{ID: 42, Status: service.StatusActive}}
+	handler := &CustomUserHandler{adminService: adminStub, riskControlClient: service.NewRiskControlClientFromEnv()}
+	response := resolveRiskCaseRequest(t, handler, `{"user_id":42,"resolution":"confirmed_abuse","reason":"确认账号存在滥用行为","account_action":"disable","expected_case_revision":3}`, "resolve-9-conflict")
+	data := decodeResolveRiskCaseData(t, response)
+	accountStep, _ := data["account"].(map[string]any)
+	if response.Code != http.StatusOK || data["result"] != "partial" || accountStep["result"] != "not_executed" || adminStub.updateCalls != 0 {
+		t.Fatalf("status=%d data=%+v updates=%d", response.Code, data, adminStub.updateCalls)
+	}
+}
+
+func TestResolveRiskCaseReportsAccountFailureAfterResolvingCase(t *testing.T) {
 	resolveCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -130,8 +164,12 @@ func TestResolveRiskCaseStopsWhenAccountActionFails(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"id":9,"user_id":42,"status":"in_review","revision":3}`))
 			return
 		}
-		resolveCalls++
-		_, _ = writer.Write([]byte(`{"id":9,"status":"resolved"}`))
+		if request.URL.Path == "/api/v1/admin/review-cases/9/resolve" {
+			resolveCalls++
+			_, _ = writer.Write([]byte(`{"id":9,"status":"resolved"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}))
 	defer upstream.Close()
 	t.Setenv("RISK_CONTROL_URL", upstream.URL)
@@ -142,7 +180,7 @@ func TestResolveRiskCaseStopsWhenAccountActionFails(t *testing.T) {
 	data := decodeResolveRiskCaseData(t, response)
 	accountStep, _ := data["account"].(map[string]any)
 	caseStep, _ := data["case"].(map[string]any)
-	if response.Code != http.StatusOK || data["result"] != "partial" || accountStep["result"] != "failed" || caseStep["result"] != "not_executed" || resolveCalls != 0 || adminStub.updateCalls != 1 {
+	if response.Code != http.StatusOK || data["result"] != "partial" || accountStep["result"] != "failed" || accountStep["pending_step"] != "status_confirmation" || caseStep["result"] != "resolved" || resolveCalls != 1 || adminStub.updateCalls != 1 {
 		t.Fatalf("status=%d data=%+v resolve=%d updates=%d", response.Code, data, resolveCalls, adminStub.updateCalls)
 	}
 }
@@ -155,11 +193,40 @@ func TestResolveRiskCaseRejectsMissingIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestResolveRiskCaseUsesTheSharedIdempotencyKeyContract(t *testing.T) {
+	previous := service.DefaultIdempotencyCoordinator()
+	service.SetDefaultIdempotencyCoordinator(nil)
+	t.Cleanup(func() { service.SetDefaultIdempotencyCoordinator(previous) })
+	handler := &CustomUserHandler{}
+	payload := `{"user_id":42,"resolution":"confirmed_abuse","reason":"确认账号存在滥用行为","account_action":"none","expected_case_revision":3}`
+	if response := resolveRiskCaseRequest(t, handler, payload, strings.Repeat("a", 128)); response.Code != http.StatusOK {
+		t.Fatalf("128-byte key status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := resolveRiskCaseRequest(t, handler, payload, strings.Repeat("b", 129)); response.Code != http.StatusBadRequest {
+		t.Fatalf("129-byte key status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := resolveRiskCaseRequest(t, handler, payload, "contains space"); response.Code != http.StatusBadRequest {
+		t.Fatalf("non-ASCII contract key status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestResolveRiskCaseKeepsMissingCaseServiceRetryable(t *testing.T) {
+	previous := service.DefaultIdempotencyCoordinator()
+	service.SetDefaultIdempotencyCoordinator(nil)
+	t.Cleanup(func() { service.SetDefaultIdempotencyCoordinator(previous) })
+	handler := &CustomUserHandler{}
+	response := resolveRiskCaseRequest(t, handler, `{"user_id":42,"resolution":"confirmed_abuse","reason":"确认账号存在滥用行为","account_action":"none","expected_case_revision":3}`, "resolve-9-unavailable")
+	data := decodeResolveRiskCaseData(t, response)
+	if response.Code != http.StatusOK || data["result"] != "partial" || data["retryable"] != true {
+		t.Fatalf("status=%d data=%+v", response.Code, data)
+	}
+}
+
 func TestResolveRiskCaseRejectsMismatchedCaseWithoutMutation(t *testing.T) {
 	resolveCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		if request.Method == http.MethodPost {
+		if request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/review-cases/9/resolve" {
 			resolveCalls++
 		}
 		_, _ = writer.Write([]byte(`{"id":9,"user_id":99,"status":"in_review","revision":3}`))

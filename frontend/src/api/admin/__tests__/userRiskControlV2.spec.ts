@@ -126,27 +126,32 @@ describe('userRiskControlV2API', () => {
     const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValue({
       data: { user: { id: 7, status: 'disabled' } },
     } as never)
-    await expect(userRiskControlV2API.setUserStatus(7, 'disabled', 'Repeated login failures')).resolves.toEqual({
+    await expect(userRiskControlV2API.setUserStatus(7, 'disabled', 'Repeated login failures')).resolves.toMatchObject({
       user: { id: 7, status: 'disabled' },
       result: 'success',
-      failureReason: undefined,
+	  retryable: false,
+	  requestId: expect.any(String),
     })
 
     expect(post).toHaveBeenCalledWith('/admin/users/7/risk-status', {
       status: 'disabled',
-      reason: 'Repeated login failures',
-    })
+	  reason: 'Repeated login failures',
+	  request_id: expect.any(String),
+	}, { headers: { 'Idempotency-Key': expect.any(String) } })
   })
 
   it('preserves partial status results for a single account action', async () => {
     vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({
-      data: { user: { id: 7, status: 'disabled' }, result: 'partial', failure_reason: 'Active sessions could not be revoked' },
+      data: { user: { id: 7, status: 'disabled' }, result: 'partial', failure_reason: 'Active sessions could not be revoked', request_id: 'risk-request-7', retryable: true, pending_step: 'session_revocation' },
     } as never)
 
-    await expect(userRiskControlV2API.setUserStatus(7, 'disabled', 'Manual review')).resolves.toEqual({
+    await expect(userRiskControlV2API.setUserStatus(7, 'disabled', 'Manual review')).resolves.toMatchObject({
       user: { id: 7, status: 'disabled' },
       result: 'partial',
       failureReason: 'Active sessions could not be revoked',
+	  requestId: 'risk-request-7',
+	  retryable: true,
+	  pendingStep: 'session_revocation',
     })
   })
 
@@ -304,26 +309,71 @@ describe('userRiskControlV2API', () => {
   it('keeps one result per target for a partial batch status action', async () => {
     const post = vi.spyOn(mainAdminClient, 'post').mockImplementation(async (url, payload) => {
       const id = Number(String(url).match(/users\/(\d+)/)?.[1])
-      if (id === 8) throw Object.assign(new Error('目标账号已被其他管理员处理'), { response: { data: { error: '目标账号已被其他管理员处理' } } })
+		if (id === 8) throw { status: 409, message: '目标账号已被其他管理员处理' }
       return { data: { user: { id, status: 'disabled' }, batch_id: (payload as { batch_id: string }).batch_id } } as never
     })
 
     const results = await userRiskControlV2API.batchSetUserStatus([7, 8], 'disabled', '批量处置：重复登录失败')
 
     expect(results).toEqual([
-      expect.objectContaining({ id: 7, status: 'success' }),
-      expect.objectContaining({ id: 8, status: 'failed', reason: '目标账号已被其他管理员处理' }),
+		expect.objectContaining({ id: 7, status: 'success', requestedStatus: 'disabled' }),
+		expect.objectContaining({ id: 8, status: 'failed', reason: '目标账号已被其他管理员处理', requestedStatus: 'disabled', retryable: false }),
     ])
     expect(post).toHaveBeenCalledWith('/admin/users/7/risk-status', expect.objectContaining({
       status: 'disabled', reason: '批量处置：重复登录失败', batch_id: expect.any(String),
-    }))
+	}), { headers: { 'Idempotency-Key': expect.any(String) } })
   })
 
 	it('reports token-revocation failures as partial after the account state changed', async () => {
-		vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { user: { id: 7, status: 'disabled' }, result: 'partial', failure_reason: 'Account status changed, but active sessions could not be revoked' } } as never)
+		vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { user: { id: 7, status: 'disabled' }, result: 'partial', failure_reason: 'Account status changed, but active sessions could not be revoked', request_id: 'batch-request-7', retryable: true, pending_step: 'session_revocation' } } as never)
 		await expect(userRiskControlV2API.batchSetUserStatus([7], 'disabled', '人工处置', 1)).resolves.toEqual([
-			expect.objectContaining({ id: 7, status: 'partial', reason: 'Account status changed, but active sessions could not be revoked' }),
+			expect.objectContaining({ id: 7, status: 'partial', reason: 'Account status changed, but active sessions could not be revoked', operationReason: '人工处置', requestId: 'batch-request-7', retryable: true, pendingStep: 'session_revocation' }),
 		])
+	})
+
+	it('persists prepared batch request IDs before waiting for responses and keeps gateway failures retryable', async () => {
+		vi.spyOn(mainAdminClient, 'post').mockRejectedValue({ status: 504, message: 'gateway timeout' })
+		let prepared: Parameters<NonNullable<Parameters<typeof userRiskControlV2API.batchSetUserStatus>[4]>>[0] = []
+		const pending = userRiskControlV2API.batchSetUserStatus([7], 'disabled', '人工处置', 1, (items) => { prepared = items })
+		expect(prepared).toEqual([expect.objectContaining({ id: 7, status: 'partial', requestedStatus: 'disabled', requestId: expect.any(String), retryable: true, pendingStep: 'status_confirmation' })])
+		await expect(pending).resolves.toEqual([expect.objectContaining({ id: 7, status: 'partial', reason: '请求结果未知：gateway timeout', requestId: prepared[0].requestId, retryable: true, pendingStep: 'status_confirmation' })])
+	})
+
+	it('does not send a batch mutation when the caller cannot persist prepared recovery IDs', async () => {
+		const post = vi.spyOn(mainAdminClient, 'post')
+		await expect(userRiskControlV2API.batchSetUserStatus([7], 'disabled', '人工处置', 1, () => {
+			throw new Error('session storage unavailable')
+		})).rejects.toThrow('session storage unavailable')
+		expect(post).not.toHaveBeenCalled()
+	})
+
+	it('retries only retryable session-revocation results with their original request IDs', async () => {
+		const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { user: { id: 7, status: 'disabled' }, result: 'success', request_id: 'request-7', retryable: false } } as never)
+		const results = await userRiskControlV2API.retryBatchSessionRevocations([
+			{ id: 7, status: 'partial', operationReason: '人工处置', requestId: 'request-7', batchId: 'batch-1', retryable: true, pendingStep: 'session_revocation' },
+			{ id: 8, status: 'failed', reason: '账号已变化' },
+		])
+		expect(results).toEqual([expect.objectContaining({ id: 7, status: 'success', requestId: 'request-7' }), expect.objectContaining({ id: 8, status: 'failed' })])
+		expect(post).toHaveBeenCalledTimes(1)
+		expect(post).toHaveBeenCalledWith('/admin/users/7/risk-status/revoke-sessions', { reason: '人工处置', request_id: 'request-7', batch_id: 'batch-1' }, { headers: { 'Idempotency-Key': expect.stringMatching(/^risk-session-7-/) } })
+	})
+
+	it('retries an unknown batch status result with the original target and request ID', async () => {
+		const post = vi.spyOn(mainAdminClient, 'post').mockResolvedValueOnce({ data: { user: { id: 7, status: 'active' }, result: 'success', request_id: 'request-7', retryable: false } } as never)
+		const results = await userRiskControlV2API.retryBatchSessionRevocations([
+			{ id: 7, status: 'partial', operationReason: '人工恢复', requestedStatus: 'active', requestId: 'request-7', batchId: 'batch-1', retryable: true, pendingStep: 'status_confirmation' },
+		])
+		expect(results[0]).toMatchObject({ id: 7, status: 'success', requestedStatus: 'active', requestId: 'request-7' })
+		expect(post).toHaveBeenCalledWith('/admin/users/7/risk-status', expect.objectContaining({ status: 'active', reason: '人工恢复', batch_id: 'batch-1', request_id: 'request-7' }), { headers: { 'Idempotency-Key': 'request-7' } })
+	})
+
+	it('terminates a recovery when the normalized client returns a definitive 4xx', async () => {
+		vi.spyOn(mainAdminClient, 'post').mockRejectedValue({ status: 422, message: '账号状态不允许该操作' })
+		const results = await userRiskControlV2API.retryBatchSessionRevocations([
+			{ id: 7, status: 'partial', operationReason: '人工恢复', requestedStatus: 'active', requestId: 'request-7', batchId: 'batch-1', retryable: true, pendingStep: 'status_confirmation' },
+		])
+		expect(results[0]).toMatchObject({ id: 7, status: 'failed', reason: '账号状态不允许该操作', retryable: false })
+		expect(results[0].pendingStep).toBeUndefined()
 	})
 
   it('marks each processed risk subject through the risk-control proxy', async () => {

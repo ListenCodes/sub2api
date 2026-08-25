@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type ResolveRiskCaseRequest struct {
@@ -53,8 +54,8 @@ func (h *CustomUserHandler) ResolveRiskCase(c *gin.Context) {
 		response.BadRequest(c, "Invalid review case ID")
 		return
 	}
-	requestID := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
-	if requestID == "" || len(requestID) > 160 {
+	requestID, err := service.NormalizeIdempotencyKey(c.GetHeader("Idempotency-Key"))
+	if err != nil || requestID == "" {
 		response.BadRequest(c, "A valid Idempotency-Key is required")
 		return
 	}
@@ -101,24 +102,34 @@ func (h *CustomUserHandler) ResolveRiskCase(c *gin.Context) {
 
 func (h *CustomUserHandler) executeRiskCaseResolution(c *gin.Context, caseID int64, requestID string, req ResolveRiskCaseRequest) (gin.H, bool) {
 	actorID := getAdminIDFromContext(c)
+	caseAuditAttemptID := "risk-case-resolution-attempt-" + uuid.NewString()
+	reportCaseAttempt := func(result, failure string) {
+		_ = h.reportRiskAudit(c.Request.Context(), service.RiskAuditReport{
+			AuditKey: "risk-case-resolution:" + caseAuditAttemptID, ActorID: actorID, Action: "resolve_risk_review_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: result, Reason: req.Reason,
+			Metadata: map[string]any{"user_id": req.UserID, "resolution": req.Resolution, "request_id": requestID, "audit_attempt_id": caseAuditAttemptID, "failure_reason": failure, "outcome_unknown": result == "partial"},
+		})
+	}
+	if h == nil || h.riskControlClient == nil {
+		return resolveRiskCasePartial(caseID, req.UserID, requestID, "not_executed", "failed", "Review case service is unavailable", true), true
+	}
 	caseBody, status, err := h.riskControlClient.ProxyAdmin(c.Request.Context(), http.MethodGet, fmt.Sprintf("/api/v1/admin/review-cases/%d", caseID), actorID, nil)
 	if err != nil || status < 200 || status >= 300 {
+		reportCaseAttempt("failed", "Review case preflight failed")
 		return resolveRiskCasePartial(caseID, req.UserID, requestID, "not_executed", "failed", "Review case preflight failed", true), true
 	}
 	var current riskCasePreflight
 	if err := json.Unmarshal(caseBody, &current); err != nil || current.ID != caseID || current.UserID != req.UserID {
+		reportCaseAttempt("failed", "Review case does not match the selected account")
 		return resolveRiskCasePartial(caseID, req.UserID, requestID, "not_executed", "failed", "Review case does not match the selected account", false), false
 	}
 	if current.Status == "resolved" {
 		if current.ResolutionRequestID != requestID || current.Resolution != req.Resolution || strings.TrimSpace(current.ResolutionReason) != req.Reason {
+			reportCaseAttempt("failed", "Review case is already resolved by a different request")
 			return resolveRiskCasePartial(caseID, req.UserID, requestID, "not_executed", "failed", "Review case is already resolved by a different request", false), false
 		}
 	} else if current.Status != "in_review" || current.Revision != req.ExpectedRevision {
+		reportCaseAttempt("failed", "Review case changed; reload before completing review")
 		return resolveRiskCasePartial(caseID, req.UserID, requestID, "not_executed", "failed", "Review case changed; reload before completing review", false), false
-	}
-	accountStep, ok := h.applyRiskCaseAccountAction(c, req, requestID)
-	if !ok {
-		return gin.H{"result": "partial", "request_id": requestID, "retryable": true, "account": accountStep, "case": gin.H{"id": caseID, "result": "not_executed"}}, true
 	}
 	extensionRequest := gin.H{
 		"user_id": req.UserID, "resolution": req.Resolution, "reason": strings.TrimSpace(req.Reason),
@@ -127,11 +138,30 @@ func (h *CustomUserHandler) executeRiskCaseResolution(c *gin.Context, caseID int
 	body, _ := json.Marshal(extensionRequest)
 	resolvedBody, status, err := h.riskControlClient.ProxyAdmin(c.Request.Context(), http.MethodPost, fmt.Sprintf("/api/v1/admin/review-cases/%d/resolve", caseID), actorID, body)
 	if err != nil || status < 200 || status >= 300 {
-		return gin.H{"result": "partial", "request_id": requestID, "retryable": true, "account": accountStep, "case": gin.H{"id": caseID, "result": "failed", "failure_reason": "Account action succeeded, but the review case was not resolved"}}, true
+		result := "failed"
+		caseResult := "failed"
+		failure := "Review case could not be resolved"
+		if err != nil || status == 0 || status >= 500 {
+			result = "partial"
+			caseResult = "partial"
+			failure = "Review case outcome is unknown; retry with the same request ID"
+		}
+		reportCaseAttempt(result, failure)
+		return resolveRiskCasePartial(caseID, req.UserID, requestID, "not_executed", caseResult, failure, true), true
 	}
 	var caseStep map[string]any
 	if err := json.Unmarshal(resolvedBody, &caseStep); err != nil {
 		caseStep = map[string]any{"id": caseID, "result": "resolved"}
+	}
+	if _, ok := caseStep["id"]; !ok {
+		caseStep["id"] = caseID
+	}
+	if _, ok := caseStep["result"]; !ok {
+		caseStep["result"] = "resolved"
+	}
+	accountStep, ok := h.applyRiskCaseAccountAction(c, req, requestID)
+	if !ok {
+		return gin.H{"result": "partial", "request_id": requestID, "retryable": true, "account": accountStep, "case": caseStep}, true
 	}
 	return gin.H{"result": "success", "request_id": requestID, "retryable": false, "account": accountStep, "case": caseStep}, false
 }
@@ -140,29 +170,44 @@ func (h *CustomUserHandler) applyRiskCaseAccountAction(c *gin.Context, req Resol
 	if req.AccountAction == "none" {
 		return gin.H{"user_id": req.UserID, "action": "none", "result": "skipped"}, true
 	}
+	auditAttemptID := "risk-case-account-attempt-" + uuid.NewString()
 	requestedStatus := service.StatusDisabled
 	if req.AccountAction == "restore" {
 		requestedStatus = service.StatusActive
 	}
+	if h == nil || h.adminService == nil {
+		failureReason := "Admin user service is unavailable"
+		_ = h.reportRiskStatusAudit(c.Request.Context(), getAdminIDFromContext(c), req.UserID, requestedStatus, "", "", "failed", req.Reason, failureReason, "", requestID, auditAttemptID)
+		return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "failed", "retryable": true, "pending_step": "status_confirmation", "failure_reason": failureReason}, false
+	}
 	before, err := h.adminService.GetUser(c.Request.Context(), req.UserID)
 	if err != nil {
-		return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "failed", "failure_reason": err.Error()}, false
+		_ = h.reportRiskStatusAudit(c.Request.Context(), getAdminIDFromContext(c), req.UserID, requestedStatus, "", "", "failed", req.Reason, err.Error(), "", requestID, auditAttemptID)
+		return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "failed", "retryable": true, "pending_step": "status_confirmation", "failure_reason": err.Error()}, false
 	}
 	afterStatus := before.Status
 	if before.Status != requestedStatus {
 		updated, err := h.adminService.UpdateUser(c.Request.Context(), req.UserID, &service.UpdateUserInput{Status: requestedStatus, ActorAdminID: getAdminIDFromContext(c)})
 		if err != nil {
-			return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "failed", "before_status": before.Status, "failure_reason": err.Error()}, false
+			_ = h.reportRiskStatusAudit(c.Request.Context(), getAdminIDFromContext(c), req.UserID, requestedStatus, before.Status, before.Status, "failed", req.Reason, err.Error(), "", requestID, auditAttemptID)
+			return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "failed", "retryable": true, "pending_step": "status_confirmation", "before_status": before.Status, "failure_reason": err.Error()}, false
 		}
 		afterStatus = updated.Status
 	}
-	if req.AccountAction == "disable" && h.authService != nil {
+	if req.AccountAction == "disable" && h.authService == nil {
+		failureReason := "Account status changed, but the session revocation service is unavailable"
+		_ = h.reportRiskStatusAudit(c.Request.Context(), getAdminIDFromContext(c), req.UserID, requestedStatus, before.Status, afterStatus, "partial", req.Reason, failureReason, "", requestID, auditAttemptID)
+		return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "partial", "retryable": true, "pending_step": "session_revocation", "before_status": before.Status, "after_status": afterStatus, "failure_reason": failureReason}, false
+	}
+	if req.AccountAction == "disable" {
 		if err := h.authService.RevokeAllUserSessions(c.Request.Context(), req.UserID); err != nil {
-			h.reportRiskStatusAudit(getAdminIDFromContext(c), req.UserID, requestedStatus, before.Status, afterStatus, "partial", req.Reason, err.Error(), "", requestID)
-			return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "partial", "before_status": before.Status, "after_status": afterStatus, "failure_reason": "Account status changed, but active sessions could not be revoked"}, false
+			_ = h.reportRiskStatusAudit(c.Request.Context(), getAdminIDFromContext(c), req.UserID, requestedStatus, before.Status, afterStatus, "partial", req.Reason, err.Error(), "", requestID, auditAttemptID)
+			return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "partial", "retryable": true, "pending_step": "session_revocation", "before_status": before.Status, "after_status": afterStatus, "failure_reason": "Account status changed, but active sessions could not be revoked"}, false
 		}
 	}
-	h.reportRiskStatusAudit(getAdminIDFromContext(c), req.UserID, requestedStatus, before.Status, afterStatus, "success", req.Reason, "", "", requestID)
+	if err := h.reportRiskStatusAudit(c.Request.Context(), getAdminIDFromContext(c), req.UserID, requestedStatus, before.Status, afterStatus, "success", req.Reason, "", "", requestID, auditAttemptID); err != nil {
+		return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "partial", "retryable": true, "pending_step": "audit_reporting", "before_status": before.Status, "after_status": afterStatus, "failure_reason": "Account action completed, but its audit record could not be confirmed"}, false
+	}
 	return gin.H{"user_id": req.UserID, "action": req.AccountAction, "result": "success", "before_status": before.Status, "after_status": afterStatus}, true
 }
 
