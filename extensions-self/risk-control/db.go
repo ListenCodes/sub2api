@@ -418,6 +418,10 @@ func (r *SQLRepository) ListEvents(ctx context.Context, limit, offset int, userI
 }
 
 func (r *SQLRepository) InsertAudit(ctx context.Context, audit AuditRecord) error {
+	if section, ok := audit.Metadata["section"].(string); ok && strings.TrimSpace(section) != "" {
+		audit.Metadata["sections"] = []string{strings.TrimSpace(section)}
+		delete(audit.Metadata, "section")
+	}
 	metadata, _ := json.Marshal(audit.Metadata)
 	_, err := r.db.ExecContext(ctx, `INSERT INTO risk_audit_logs(audit_key,actor_id,action,target_type,target_id,result,reason,metadata,created_at)
 VALUES(NULLIF($1,''),$2,$3,$4,$5,$6,$7,$8,COALESCE(NULLIF($9,'')::timestamptz,NOW()))
@@ -505,7 +509,7 @@ func (r *SQLRepository) ListAuditFiltered(ctx context.Context, limit, offset int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_audit_logs WHERE `+strings.Join(where, " AND "), args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,actor_id,action,target_type,target_id,result,reason,metadata,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM risk_audit_logs WHERE `+strings.Join(where, " AND ")+fmt.Sprintf(" ORDER BY %s %s LIMIT $%d OFFSET $%d", sortColumn, sortDirection, index, index+1), append(args, limit, offset)...)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,COALESCE(audit_key,''),actor_id,action,target_type,target_id,result,reason,metadata,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM risk_audit_logs WHERE `+strings.Join(where, " AND ")+fmt.Sprintf(" ORDER BY %s %s LIMIT $%d OFFSET $%d", sortColumn, sortDirection, index, index+1), append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -514,7 +518,7 @@ func (r *SQLRepository) ListAuditFiltered(ctx context.Context, limit, offset int
 	for rows.Next() {
 		var item AuditRecord
 		var metadata []byte
-		if err := rows.Scan(&item.ID, &item.ActorID, &item.Action, &item.TargetType, &item.TargetID, &item.Result, &item.Reason, &metadata, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.AuditKey, &item.ActorID, &item.Action, &item.TargetType, &item.TargetID, &item.Result, &item.Reason, &metadata, &item.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		_ = json.Unmarshal(metadata, &item.Metadata)

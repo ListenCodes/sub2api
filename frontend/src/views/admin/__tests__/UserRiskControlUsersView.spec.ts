@@ -27,7 +27,7 @@ vi.mock('vue-i18n', async (importOriginal) => ({
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
 beforeEach(() => {
-  vi.mocked(userRiskControlV2API.getWorkOverview).mockResolvedValue({ pending: 3, mine: 2, observing: 4, atRisk: 7, dataQuality: 1 })
+	vi.mocked(userRiskControlV2API.getWorkOverview).mockResolvedValue({ unassignedPending: 3, myInReview: 2, reviewDue: 4, allOpen: 9 })
 })
 afterAll(() => { delete config.global.stubs.RouterLink })
 afterEach(() => {
@@ -38,27 +38,27 @@ afterEach(() => {
 })
 
 describe('UserRiskControlUsersView', () => {
-  it('loads all users by default', async () => {
+	it('loads the unassigned queue by default', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
 
     mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-    expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'all', sortBy: 'risk_score', sortOrder: 'desc' }))
+		expect(userRiskControlV2API.listUsers).toHaveBeenCalledWith(expect.objectContaining({ view: 'unassigned', sortBy: 'risk_score', sortOrder: 'desc' }))
   })
 
-  it('shows actionable work counts while keeping all users as the active default', async () => {
+	it('shows four actionable queues and switches to mine', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
     const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="risk-work-overview"]').text()).toContain('待复核')
-    expect(wrapper.get('[data-testid="work-count-pending"]').text()).toContain('3')
-    expect(wrapper.get('[data-testid="work-count-at-risk"]').text()).toContain('7')
-    expect(wrapper.get('[data-testid="risk-case-views"]').text()).toContain('全部用户')
-    await wrapper.get('[data-testid="work-count-my"]').trigger('click')
+		expect(wrapper.get('[data-testid="risk-work-overview"]').text()).toContain('待领取')
+		expect(wrapper.get('[data-testid="work-count-unassigned"]').text()).toContain('3')
+		expect(wrapper.get('[data-testid="work-count-open"]').text()).toContain('9')
+		expect(wrapper.get('[data-testid="risk-case-views"]').text()).toContain('全部未结')
+		await wrapper.get('[data-testid="work-count-mine"]').trigger('click')
     await flushPromises()
-    expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ view: 'my' }))
+		expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ view: 'mine' }))
   })
 
   it('shows an unavailable work overview instead of fabricating zero counts, then retries', async () => {
@@ -68,15 +68,15 @@ describe('UserRiskControlUsersView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="work-overview-error"]').text()).toContain('overview unavailable')
-    expect(wrapper.get('[data-testid="work-count-pending"]').text()).toContain('—')
-    expect(wrapper.get('[data-testid="work-count-pending"]').text()).not.toContain('0')
+		expect(wrapper.get('[data-testid="work-count-unassigned"]').text()).toContain('—')
+		expect(wrapper.get('[data-testid="work-count-unassigned"]').text()).not.toContain('0')
 
-    vi.mocked(userRiskControlV2API.getWorkOverview).mockResolvedValueOnce({ pending: 5, mine: 1, observing: 2, atRisk: 6, dataQuality: 3 })
+		vi.mocked(userRiskControlV2API.getWorkOverview).mockResolvedValueOnce({ unassignedPending: 5, myInReview: 1, reviewDue: 2, allOpen: 8 })
     await wrapper.get('[data-testid="retry-work-overview"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="work-overview-error"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="work-count-pending"]').text()).toContain('5')
+		expect(wrapper.get('[data-testid="work-count-unassigned"]').text()).toContain('5')
   })
 
   it('keeps low-frequency conditions behind advanced filters', async () => {
@@ -109,11 +109,11 @@ describe('UserRiskControlUsersView', () => {
     expect(wrapper.findComponent(Toggle).exists()).toBe(true)
 
     await wrapper.get('[data-testid="user-select-7"]').setValue(true)
-    await wrapper.get('[data-testid="batch-mark-processed"]').trigger('click')
+		await wrapper.get('[data-testid="batch-ban"]').trigger('click')
     const dialog = wrapper.findComponent(BaseDialog)
     expect(dialog.props('show')).toBe(true)
     expect(dialog.props('closeOnClickOutside')).toBe(true)
-    expect(document.querySelector('[data-testid="batch-confirm"]')?.classList.contains('btn-primary')).toBe(true)
+		expect(document.querySelector('[data-testid="batch-confirm"]')?.classList.contains('btn-danger')).toBe(true)
   })
 
   it('debounces text and score filters for 300 ms', async () => {

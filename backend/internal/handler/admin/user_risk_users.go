@@ -26,6 +26,12 @@ type riskCaseListItem struct {
 	PrimarySignal      string `json:"primary_signal"`
 	EvidenceStrength   string `json:"evidence_strength"`
 	AssigneeID         int64  `json:"assignee_id"`
+	CreatedBy          int64  `json:"created_by"`
+	ReviewDueAt        string `json:"review_due_at"`
+	ObservationGoal    string `json:"observation_goal"`
+	ResolutionReason   string `json:"resolution_reason"`
+	Revision           int    `json:"revision"`
+	LastActivityAt     string `json:"last_activity_at"`
 	LastHitAt          string `json:"last_hit_at"`
 }
 
@@ -75,8 +81,8 @@ func (h *CustomUserHandler) ListUserRiskUsers(c *gin.Context) {
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	view := strings.TrimSpace(c.DefaultQuery("view", "pending"))
-	if view == "all" && strings.TrimSpace(c.Query("processing_status")) != "data_quality" {
+	view := strings.TrimSpace(c.DefaultQuery("view", "unassigned"))
+	if view == "users" || view == "all" {
 		h.listAllUserRiskUsers(c, page, pageSize)
 		return
 	}
@@ -123,6 +129,12 @@ func (h *CustomUserHandler) ListUserRiskUsers(c *gin.Context) {
 		row["case_id"] = reviewCase.ID
 		row["case_status"] = reviewCase.Status
 		row["assignee_id"] = reviewCase.AssigneeID
+		row["created_by"] = reviewCase.CreatedBy
+		row["review_due_at"] = reviewCase.ReviewDueAt
+		row["observation_goal"] = reviewCase.ObservationGoal
+		row["resolution_reason"] = reviewCase.ResolutionReason
+		row["case_revision"] = reviewCase.Revision
+		row["last_activity_at"] = reviewCase.LastActivityAt
 		row["evidence_strength"] = reviewCase.EvidenceStrength
 		row["decision_id"] = reviewCase.DecisionID
 		row["historical_max_score"] = reviewCase.HistoricalMaxScore

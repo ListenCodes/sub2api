@@ -79,7 +79,7 @@ func TestAdminRuleUpdateRejectsAmbiguousStrategySemantics(t *testing.T) {
 
 func TestAdminRuleTestTreatsSubmittedRuleAsEnabled(t *testing.T) {
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(nil))
-	body := []byte(`{"sample":{"event_type":"login_failure","observed_count":5,"user_id":42},"rule":{"code":"login_failure","event_types":["login_failure"],"count_strategy":"user_events","threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
+	body := []byte(`{"sample":{"event_type":"login_failure","observed_count":5,"user_id":42},"rule":{"code":"login_failure","name":"Login failures","event_types":["login_failure"],"count_strategy":"user_events","window_seconds":300,"threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
 	request := signedRequest(http.MethodPost, "/api/v1/admin/rules/test", body, testSecret, "nonce-rule-test", time.Now())
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	response := serveJSON(server, request)
@@ -92,6 +92,70 @@ func TestAdminRuleTestTreatsSubmittedRuleAsEnabled(t *testing.T) {
 	decodeBody(t, response, &payload)
 	if !payload.Matched {
 		t.Fatalf("rule test payload = %s, want matched", response.Body.String())
+	}
+}
+
+func TestAdminRuleTestEnforcesCountStrategyEvidenceContract(t *testing.T) {
+	tests := []struct {
+		name     string
+		strategy string
+		event    string
+		score    int
+		action   string
+		sample   map[string]any
+	}{
+		{name: "user events", strategy: countStrategyUserEvents, event: "login_failure", score: 80, action: "review", sample: map[string]any{"user_id": 42}},
+		{name: "email subject events", strategy: countStrategyEmailSubjectEvents, event: "registration_attempt", score: 0, action: "observe", sample: map[string]any{"subject_id": "email-subject"}},
+		{name: "ip distinct users", strategy: countStrategyIPDistinctSuccessUsers, event: "registration_success", score: 60, action: "review", sample: map[string]any{"user_id": 42, "ip_hash": "ip-hash"}},
+		{name: "browser distinct users", strategy: countStrategyBrowserDistinctSuccessUsers, event: "registration_success", score: 70, action: "review", sample: map[string]any{"user_id": 42, "device_hash": "browser-hash"}},
+		{name: "api client distinct users", strategy: countStrategyAPIClientDistinctUsers, event: "api_error", score: 0, action: "observe", sample: map[string]any{"user_id": 42, "device_hash": "client-hash"}},
+		{name: "ip browser cooccurrence", strategy: countStrategyIPBrowserCooccurrence, event: "registration_success", score: 90, action: "review", sample: map[string]any{"user_id": 42, "ip_hash": "ip-hash", "device_hash": "browser-hash"}},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.sample["event_type"] = test.event
+			test.sample["observed_count"] = 5
+			body, err := json.Marshal(map[string]any{
+				"sample": test.sample,
+				"rule":   Rule{Code: "contract_" + strconv.Itoa(index), Name: test.name, EventTypes: []string{test.event}, CountStrategy: test.strategy, WindowSeconds: 600, Threshold: 5, Score: test.score, RiskLevel: "high", Action: test.action},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(nil))
+			request := signedRequest(http.MethodPost, "/api/v1/admin/rules/test", body, testSecret, "nonce-count-strategy-"+strconv.Itoa(index), time.Now())
+			request.Header.Set("X-Risk-Actor-ID", "7")
+			response := serveJSON(server, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var payload struct {
+				ExcludedReasons []string `json:"excluded_reasons"`
+			}
+			decodeBody(t, response, &payload)
+			if len(payload.ExcludedReasons) != 0 {
+				t.Fatalf("excluded reasons = %v", payload.ExcludedReasons)
+			}
+		})
+	}
+}
+
+func TestAdminRuleTestReportsMissingCountStrategyEvidence(t *testing.T) {
+	body := []byte(`{"sample":{"event_type":"registration_success","observed_count":5},"rule":{"code":"missing_ip_identity","name":"Missing identity","event_types":["registration_success"],"count_strategy":"ip_distinct_success_users","window_seconds":600,"threshold":5,"score":60,"risk_level":"high","action":"review"}}`)
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, NewMemoryRepository(nil))
+	request := signedRequest(http.MethodPost, "/api/v1/admin/rules/test", body, testSecret, "nonce-missing-count-strategy-evidence", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Matched         bool     `json:"matched"`
+		ExcludedReasons []string `json:"excluded_reasons"`
+	}
+	decodeBody(t, response, &payload)
+	if payload.Matched || len(payload.ExcludedReasons) != 2 || payload.ExcludedReasons[0] != "missing_user_id" || payload.ExcludedReasons[1] != "missing_ip_hash" {
+		t.Fatalf("payload = %+v", payload)
 	}
 }
 

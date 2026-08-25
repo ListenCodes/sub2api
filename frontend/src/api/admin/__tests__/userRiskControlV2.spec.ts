@@ -52,7 +52,7 @@ describe('userRiskControlV2API', () => {
 		expect(mainGet).toHaveBeenCalledTimes(1)
 		expect(mainGet).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
       params: expect.objectContaining({
-				view: 'pending',
+				view: 'unassigned',
 				page: 2,
 				page_size: 20,
 				search: 'user@example.com',
@@ -72,7 +72,7 @@ describe('userRiskControlV2API', () => {
 
 		expect(mainGet).toHaveBeenCalledTimes(1)
 		expect(mainGet).toHaveBeenCalledWith('/admin/user-risk/users', expect.objectContaining({
-			params: expect.objectContaining({ view: 'pending', page: 1, page_size: 20 }),
+			params: expect.objectContaining({ view: 'unassigned', page: 1, page_size: 20 }),
     }))
   })
 
@@ -81,7 +81,7 @@ describe('userRiskControlV2API', () => {
       data: { pending: 3, mine: 2, observing: 4, at_risk: 7, data_quality: 1 },
     } as never)
 
-    await expect(userRiskControlV2API.getWorkOverview()).resolves.toEqual({ pending: 3, mine: 2, observing: 4, atRisk: 7, dataQuality: 1 })
+		await expect(userRiskControlV2API.getWorkOverview()).resolves.toEqual({ unassignedPending: 3, myInReview: 2, reviewDue: 4, allOpen: 9 })
     expect(get).toHaveBeenCalledWith('/admin/user-risk/work-overview')
   })
 
@@ -151,7 +151,7 @@ describe('userRiskControlV2API', () => {
 
 		expect(get).toHaveBeenCalledTimes(1)
     expect(get).toHaveBeenCalledWith('/admin/user-risk-control/audit', {
-      params: { category: 'security', action: 'ban', target_user_id: 7, actor_id: 11, result: 'success', page: 2, limit: 20 },
+		params: { category: 'disposition', action: 'ban', target_user_id: 7, actor_id: 11, result: 'success', page: 2, limit: 20 },
     })
   })
 

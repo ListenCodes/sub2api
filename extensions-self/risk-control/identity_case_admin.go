@@ -70,6 +70,25 @@ func (s *HTTPServer) handleWorkOverview(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *HTTPServer) handleReviewCaseGet(w http.ResponseWriter, r *http.Request, path string) {
+	if s.identity == nil || !s.cfg.Identity.AdminEnabled || !s.cfg.Identity.CasesEnabled {
+		writeError(w, http.StatusServiceUnavailable, errors.New("identity cases are disabled"))
+		return
+	}
+	raw := strings.TrimPrefix(path, "/api/v1/admin/review-cases/")
+	caseID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || caseID <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("invalid review case id"))
+		return
+	}
+	item, err := s.identity.repo.GetReviewCase(r.Context(), caseID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func identityRiskLevelRange(level string) (int, int, bool) {
 	switch level {
 	case "none":
@@ -144,6 +163,42 @@ func (s *HTTPServer) handleReviewCaseFeedback(w http.ResponseWriter, r *http.Req
 	}
 	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "review_risk_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: "success", Reason: input.Reason, Metadata: map[string]any{"feedback": input.Feedback, "enforcement_changed": false}})
 	writeJSON(w, http.StatusOK, map[string]any{"resolved": true, "enforcement_changed": false})
+}
+
+func (s *HTTPServer) handleReviewCaseResolve(w http.ResponseWriter, r *http.Request, path string, body []byte) {
+	if s.identity == nil || !s.cfg.Identity.AdminEnabled || !s.cfg.Identity.CasesEnabled {
+		writeError(w, http.StatusServiceUnavailable, errors.New("identity cases are disabled"))
+		return
+	}
+	caseID, ok := numericPathID(path, "/api/v1/admin/review-cases/", "/resolve")
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("invalid review case id"))
+		return
+	}
+	var input struct {
+		UserID           int64  `json:"user_id"`
+		Resolution       string `json:"resolution"`
+		Reason           string `json:"reason"`
+		RequestID        string `json:"request_id"`
+		ExpectedRevision int    `json:"expected_revision"`
+	}
+	if err := decodeStrictJSON(body, &input); err != nil || input.UserID <= 0 || strings.TrimSpace(input.RequestID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("invalid resolve request"))
+		return
+	}
+	current, err := s.identity.repo.GetReviewCase(r.Context(), caseID)
+	if err != nil || current.UserID != input.UserID {
+		writeError(w, http.StatusConflict, errors.New("review case user does not match"))
+		return
+	}
+	actor, _ := actorID(r)
+	item, replayed, err := s.identity.repo.ResolveReviewCase(r.Context(), caseID, actor, input.Resolution, input.Reason, input.RequestID, input.ExpectedRevision)
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	_ = s.service.RecordAudit(r.Context(), AuditReport{AuditKey: "resolve:" + strings.TrimSpace(input.RequestID), ActorID: actor, Action: "resolve_risk_review_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"resolution": input.Resolution, "user_id": input.UserID, "revision": item.Revision, "idempotent_replay": replayed}})
+	writeJSON(w, http.StatusOK, map[string]any{"case": item, "resolved": true, "idempotent_replay": replayed})
 }
 
 func (s *HTTPServer) handleIdentityRuleEffects(w http.ResponseWriter, r *http.Request) {

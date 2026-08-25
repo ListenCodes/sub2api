@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func identityRuleCode(path, suffix string) (string, bool) {
@@ -136,13 +137,24 @@ func (s *HTTPServer) handleReviewCaseCreate(w http.ResponseWriter, r *http.Reque
 		SignalFamily string `json:"signal_family"`
 		Status       string `json:"status"`
 		Reason       string `json:"reason"`
+		ReviewDueAt  string `json:"review_due_at"`
+		Goal         string `json:"observation_goal"`
 	}
 	if err := decodeStrictJSON(body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	actor, _ := actorID(r)
-	item, err := s.identity.repo.CreateReviewCase(r.Context(), input.UserID, actor, input.SignalFamily, input.Status, input.Reason)
+	var reviewDue time.Time
+	if strings.TrimSpace(input.ReviewDueAt) != "" {
+		parsedReviewDue, parseErr := time.Parse(time.RFC3339, input.ReviewDueAt)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, errors.New("invalid review due time"))
+			return
+		}
+		reviewDue = parsedReviewDue
+	}
+	item, err := s.identity.repo.CreateReviewCaseWithObservation(r.Context(), input.UserID, actor, input.SignalFamily, input.Status, input.Reason, reviewDue, input.Goal)
 	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
@@ -158,19 +170,27 @@ func (s *HTTPServer) handleReviewCaseObserve(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var input struct {
-		Reason string `json:"reason"`
+		Reason           string `json:"reason"`
+		ReviewDueAt      string `json:"review_due_at"`
+		ObservationGoal  string `json:"observation_goal"`
+		ExpectedRevision int    `json:"expected_revision"`
 	}
 	if err := decodeStrictJSON(body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	actor, _ := actorID(r)
-	item, err := s.identity.repo.ObserveReviewCase(r.Context(), caseID, actor, input.Reason)
+	reviewDue, err := time.Parse(time.RFC3339, strings.TrimSpace(input.ReviewDueAt))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid review due time"))
+		return
+	}
+	item, err := s.identity.repo.ObserveReviewCaseWithReview(r.Context(), caseID, actor, input.Reason, reviewDue, input.ObservationGoal, input.ExpectedRevision)
 	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
-	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "observe_risk_review_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"case_status": item.Status, "user_id": item.UserID}})
+	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "observe_risk_review_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: "success", Reason: strings.TrimSpace(input.Reason), Metadata: map[string]any{"case_status": item.Status, "user_id": item.UserID, "review_due_at": item.ReviewDueAt, "observation_goal": item.ObservationGoal, "revision": item.Revision}})
 	writeJSON(w, http.StatusOK, item)
 }
 

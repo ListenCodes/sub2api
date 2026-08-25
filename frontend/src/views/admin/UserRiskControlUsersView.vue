@@ -28,11 +28,15 @@
       </template>
 
       <template #filters>
-			<section class="mb-2 flex overflow-x-auto border-y border-gray-200 py-1 sm:grid sm:grid-cols-5 sm:overflow-visible dark:border-dark-700" data-testid="risk-work-overview" aria-live="polite">
+			<section class="mb-2 flex overflow-x-auto border-y border-gray-200 py-1 sm:grid sm:grid-cols-4 sm:overflow-visible dark:border-dark-700" data-testid="risk-work-overview" aria-live="polite">
 				<button v-for="item in workOverviewItems" :key="item.key" type="button" class="flex min-h-10 min-w-48 items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-70 sm:min-w-0 dark:hover:bg-dark-800" :disabled="!workOverviewLoaded || workOverviewLoading" :data-testid="`work-count-${item.key}`" @click="openWorkView(item.key)"><span class="whitespace-nowrap text-gray-600 dark:text-gray-300">{{ item.label }}</span><strong class="text-gray-900 dark:text-white">{{ item.count }}</strong></button>
 			</section>
 			<div v-if="workOverviewError" class="mb-2 flex items-center justify-between gap-3 text-xs text-amber-700 dark:text-amber-300" data-testid="work-overview-error" role="alert"><span>{{ workOverviewLoaded ? '工作概览刷新失败，当前数量可能已过期' : `工作概览不可用：${workOverviewError}` }}</span><button type="button" class="font-medium underline" data-testid="retry-work-overview" :disabled="workOverviewLoading" @click="loadWorkOverview">重试</button></div>
-			<div class="mb-3 inline-flex max-w-full overflow-x-auto border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800" role="tablist" aria-label="案件视图" data-testid="risk-case-views">
+			<div class="mb-3 inline-flex border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800" role="tablist" aria-label="工作模式" data-testid="risk-work-modes">
+				<button type="button" role="tab" class="min-h-9 px-3 text-sm font-medium" :class="mode === 'queue' ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'" :aria-selected="mode === 'queue'" @click="setMode('queue')">处置队列</button>
+				<button type="button" role="tab" class="min-h-9 px-3 text-sm font-medium" :class="mode === 'users' ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'" :aria-selected="mode === 'users'" @click="setMode('users')">用户查询</button>
+			</div>
+			<div v-if="mode === 'queue'" class="mb-3 ml-0 inline-flex max-w-full overflow-x-auto border-b border-gray-200 dark:border-dark-700 sm:ml-3" role="tablist" aria-label="处置队列" data-testid="risk-case-views">
 				<button v-for="option in caseViews" :key="option.value" type="button" role="tab" class="min-h-9 whitespace-nowrap px-3 text-sm font-medium" :class="view === option.value ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'" :aria-selected="view === option.value" @click="setView(option.value)">{{ option.label }}</button>
 			</div>
 			<section class="flex flex-wrap items-center gap-3" data-testid="primary-risk-filters">
@@ -74,7 +78,6 @@
             <div class="flex flex-wrap gap-2">
               <button type="button" class="btn btn-danger btn-sm" data-testid="batch-ban" :disabled="!canBatchBan" @click="openBatchAction('disabled')">{{ formatRiskAction('ban') }}</button>
               <button type="button" class="btn btn-primary btn-sm" data-testid="batch-unban" :disabled="!canBatchUnban" @click="openBatchAction('active')">{{ formatRiskAction('unban') }}</button>
-              <button type="button" class="btn btn-secondary btn-sm" data-testid="batch-mark-processed" @click="openBatchAction('processed')">标记已处理</button>
               <button type="button" class="btn btn-ghost btn-sm" data-testid="clear-selection" @click="clearSelection">取消选择</button>
             </div>
           </section>
@@ -83,7 +86,7 @@
             <template #cell-select="{ row: user }"><input :checked="selectedIds.has(user.id)" type="checkbox" :data-testid="`user-select-${user.id}`" class="rounded border-gray-300 text-primary-600" :aria-label="`选择账号 ${user.email || user.username || user.id}`" @click.stop @change.stop="toggleSelection(user.id)" /></template>
 			<template #cell-account="{ row: user }"><div class="min-w-0 max-w-[50vw] text-left sm:max-w-none" :data-testid="`user-row-${user.id}`"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :data-testid="`account-secondary-${user.id}`"><span v-if="user.username">{{ user.username }} · </span>#{{ user.id }}</p></div></template>
 			<template #cell-accountStatus="{ row: user }"><span class="font-medium">{{ formatAccountStatus(user.status) }}</span></template>
-			<template #cell-evaluation="{ row: user }"><span>{{ evaluationCoverageLabel(user) }}</span><span class="mt-1 block text-xs text-gray-400">{{ user.identity?.active_rule_count || 0 }} 条有效规则</span></template>
+			<template #cell-evaluation="{ row: user }"><span>{{ evaluationCoverageLabel(user) }}</span><span v-if="user.identity" class="mt-1 block text-xs text-gray-400">{{ user.identity.active_signal_count == null ? '有效身份信号待同步' : `${user.identity.active_signal_count} 条有效身份信号` }}</span></template>
 			<template #cell-riskType="{ row: user }"><div class="max-w-sm whitespace-normal text-left"><p class="font-medium text-gray-800 dark:text-gray-200">{{ displayReason(user) }}</p><p class="mt-1 text-xs text-gray-400">证据强度：{{ evidenceStrengthLabel(user.evidence_strength) }}</p></div></template>
 			<template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /><span v-if="(user.historical_max_score || 0) > (user.risk_score || 0)" class="mt-1 block text-xs text-gray-400">历史最高 {{ user.historical_max_score }}</span></template>
             <template #cell-lastEvent="{ row: user }">{{ formatDate(user.last_event_at) }}</template>
@@ -141,12 +144,12 @@ const pageSize = ref(responsivePageSize(getPersistedPageSize(20)))
 const total = ref(0)
 const sortBy = ref<RiskSortBy | undefined>('risk_score')
 const sortOrder = ref<'asc' | 'desc'>('desc')
-const view = ref<RiskCaseView>('all')
-const batchAction = ref<'disabled' | 'active' | 'processed' | null>(null)
+const view = ref<RiskCaseView>('unassigned')
+const batchAction = ref<'disabled' | 'active' | null>(null)
 const batchReason = ref('')
 const batchValidationError = ref('')
 const batchResults = ref<Array<{ id: number; status: 'success' | 'partial' | 'failed'; reason?: string }>>([])
-const workOverview = ref({ pending: 0, mine: 0, observing: 0, atRisk: 0, dataQuality: 0 })
+const workOverview = ref({ unassignedPending: 0, myInReview: 0, reviewDue: 0, allOpen: 0 })
 const workOverviewLoaded = ref(false)
 const workOverviewLoading = ref(true)
 const workOverviewError = ref('')
@@ -163,12 +166,12 @@ const columns: Column[] = [
 ]
 
 const caseViews: Array<{ value: RiskCaseView; label: string }> = [
-	{ value: 'pending', label: '待复核' },
-	{ value: 'my', label: '我的案件' },
-	{ value: 'observing', label: '观察中' },
-	{ value: 'resolved', label: '已处理' },
-	{ value: 'all', label: '全部用户' },
+	{ value: 'unassigned', label: '待领取' },
+	{ value: 'mine', label: '我的处理中' },
+	{ value: 'due', label: '待复查' },
+	{ value: 'open', label: '全部未结' },
 ]
+const mode = computed<'queue' | 'users'>(() => view.value === 'users' ? 'users' : 'queue')
 const draft = reactive<UserRiskFilters>({ search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false })
 const activeFilters = reactive<UserRiskFilters>({ ...draft })
 let loadRequestID = 0
@@ -179,11 +182,10 @@ const riskTypeFilterOptions = computed(() => [{ value: '', label: '全部主信�
 const riskLevelFilterOptions = computed(() => [{ value: '', label: t('admin.userRiskControl.allRiskLevels') }, ...riskLevelOptions])
 const processingStatusFilterOptions = computed(() => [{ value: '', label: '全部处理状态' }, ...processingStatusOptions])
 const workOverviewItems = computed(() => [
-  { key: 'pending', label: '待复核', count: workOverviewLoaded.value ? workOverview.value.pending : '—' },
-  { key: 'my', label: '我的案件 / 复核中', count: workOverviewLoaded.value ? workOverview.value.mine : '—' },
-  { key: 'observing', label: '观察中', count: workOverviewLoaded.value ? workOverview.value.observing : '—' },
-  { key: 'at-risk', label: '有风险', count: workOverviewLoaded.value ? workOverview.value.atRisk : '—' },
-  { key: 'data-quality', label: '数据异常', count: workOverviewLoaded.value ? workOverview.value.dataQuality : '—' },
+	{ key: 'unassigned', label: '待领取', count: workOverviewLoaded.value ? workOverview.value.unassignedPending : '—' },
+	{ key: 'mine', label: '我的处理中', count: workOverviewLoaded.value ? workOverview.value.myInReview : '—' },
+	{ key: 'due', label: '待复查', count: workOverviewLoaded.value ? workOverview.value.reviewDue : '—' },
+	{ key: 'open', label: '全部未结', count: workOverviewLoaded.value ? workOverview.value.allOpen : '—' },
 ])
 const mobileSortOptions = [
   { value: 'risk_score:desc', label: '风险优先' },
@@ -216,7 +218,7 @@ const canBatchBan = computed(() => selectedUsers.value.length > 0 && selectedUse
 const canBatchUnban = computed(() => selectedUsers.value.length > 0 && selectedUsers.value.every((user) => user.status === 'disabled'))
 const batchSuccessCount = computed(() => batchResults.value.filter((result) => result.status === 'success').length)
 const batchSummary = computed(() => batchSuccessCount.value === batchResults.value.length ? 'success' : batchResults.value.some((result) => result.status === 'partial' || result.status === 'success') ? 'partial' : 'failed')
-const batchDialogTitle = computed(() => batchAction.value === 'disabled' ? '确认批量封禁' : batchAction.value === 'active' ? '确认批量解封' : '确认批量标记已处理')
+const batchDialogTitle = computed(() => batchAction.value === 'disabled' ? '确认批量封禁' : '确认批量解封')
 
 function errorMessage(err: unknown) {
   return typeof err === 'object' && err !== null && 'message' in err && typeof err.message === 'string' && err.message.trim() ? err.message : err instanceof Error ? err.message : t('admin.userRiskControl.loadFailed')
@@ -234,8 +236,9 @@ function positiveInteger(value: string, fallback: number): number {
 
 function restoreRouteState() {
   if (!route) return
-	const requestedView = queryText('view') as RiskCaseView
-	view.value = caseViews.some((option) => option.value === requestedView) ? requestedView : 'all'
+	const legacyView = ({ pending: 'unassigned', my: 'mine', observing: 'due', all: 'users', resolved: 'users' } as Record<string, RiskCaseView>)[queryText('view')]
+	const requestedView = (legacyView || queryText('view')) as RiskCaseView
+	view.value = requestedView === 'users' || caseViews.some((option) => option.value === requestedView) ? requestedView : 'unassigned'
   const nextSort = queryText('sort_by')
   const allowedSorts: RiskSortBy[] = ['risk_score', 'risk_level', 'event_count', 'last_event_at', 'created_at']
   Object.assign(draft, {
@@ -259,7 +262,7 @@ async function syncRouteState() {
   if (!route || !router) return
   const query: LocationQueryRaw = { ...route.query }
   const values: Record<string, string | undefined> = {
-		view: view.value === 'all' ? undefined : view.value,
+		view: view.value === 'unassigned' ? undefined : view.value,
     search: String(activeFilters.search || '') || undefined,
     status: String(activeFilters.status || '') || undefined,
     risk_type: String(activeFilters.riskType || '') || undefined,
@@ -356,15 +359,18 @@ async function setView(next: RiskCaseView) {
 	await loadUsers()
 }
 
+async function setMode(next: 'queue' | 'users') {
+	if (mode.value === next || loading.value) return
+	view.value = next === 'users' ? 'users' : 'unassigned'
+	page.value = 1
+	clearSelection()
+	await syncRouteState()
+	await loadUsers()
+}
+
 async function openWorkView(key: string) {
-  Object.assign(draft, { search: '', status: '', riskType: '', riskLevel: '', processingStatus: '', pendingOnly: false, riskOnly: false, minScore: undefined, maxScore: undefined })
-  Object.assign(activeFilters, draft)
-  if (key === 'pending' || key === 'my' || key === 'observing') view.value = key
-  else {
-    view.value = 'all'
-    if (key === 'at-risk') draft.riskOnly = activeFilters.riskOnly = true
-    if (key === 'data-quality') draft.processingStatus = activeFilters.processingStatus = 'data_quality'
-  }
+	if (!caseViews.some((option) => option.value === key)) return
+	view.value = key as RiskCaseView
   page.value = 1
   clearSelection()
   await syncRouteState()
@@ -428,24 +434,23 @@ function clearSelection() { selectedIds.value = new Set() }
 function displayReason(user: RiskUserRow) { return user.risk_type?.startsWith('v2_') ? formatIdentitySignal(user.risk_type) : formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
 function evidenceStrengthLabel(value?: string) { return ({ observation: '仅观察', weak: '弱', medium_high: '中高', high: '高' } as Record<string, string>)[value || ''] || '未评估' }
 function evaluationCoverageLabel(user: RiskUserRow) { const state = user.identity?.quality_state; return ({ healthy: '评估完整', degraded: '部分覆盖', not_evaluable: '不可评估', paused: '质量保护暂停', disabled: '评估关闭' } as Record<string, string>)[state || ''] || '尚无身份数据' }
-function caseStatusLabel(value?: string | null) { return ({ pending: '待复核', in_review: '复核中', observing: '观察中', resolved: '已处理' } as Record<string, string>)[value || ''] || '无案件' }
+function caseStatusLabel(value?: string | null) { return ({ pending: '待领取', in_review: '处理中', observing: '待复查', resolved: '已结案' } as Record<string, string>)[value || ''] || '无案件' }
 function formatDate(value?: string | null) { return value ? new Date(value).toLocaleString() : '-' }
 function handleUpdated(updated: RiskUserRow) {
   const index = users.value.findIndex((user) => user.id === updated.id)
   if (index >= 0) users.value[index] = { ...users.value[index], ...updated }
-  selectedUser.value = null
-  void loadUsers()
+	void Promise.all([loadUsers(), loadWorkOverview()])
 }
 function handleCaseClaimed(updated: RiskUserRow) {
   const index = users.value.findIndex((user) => user.id === updated.id)
   if (index >= 0) users.value[index] = { ...users.value[index], ...updated }
-  selectedUser.value = selectedUser.value ? { ...selectedUser.value, ...updated } : null
+	void Promise.all([loadUsers(), loadWorkOverview()])
 }
 function handlePartialStatus(updated: RiskUserRow) {
 	const index = users.value.findIndex((user) => user.id === updated.id)
 	if (index >= 0) users.value[index] = { ...users.value[index], ...updated }
 }
-function openBatchAction(action: 'disabled' | 'active' | 'processed') {
+function openBatchAction(action: 'disabled' | 'active') {
   if ((action === 'disabled' && !canBatchBan.value) || (action === 'active' && !canBatchUnban.value)) return
   batchAction.value = action
   batchReason.value = ''
@@ -463,9 +468,7 @@ async function confirmBatchAction() {
   batchValidationError.value = ''
   const ids = Array.from(selectedIds.value)
   try {
-    const results = batchAction.value === 'processed'
-      ? await userRiskControlV2API.markUsersProcessed(ids, reason)
-      : await userRiskControlV2API.batchSetUserStatus(ids, batchAction.value, reason)
+		const results = await userRiskControlV2API.batchSetUserStatus(ids, batchAction.value, reason)
     batchResults.value = results
     clearSelection()
     batchAction.value = null

@@ -18,20 +18,24 @@
             </div>
             <p v-if="caseMessage" class="mt-3 text-sm text-emerald-600 dark:text-emerald-400" role="status">{{ caseMessage }}</p>
             <p v-if="caseActionError" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ caseActionError }}</p>
-			<div v-if="!activeUser.case_id" class="mt-4 space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="建案原因" required :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="create-review-case" :disabled="caseSaving" @click="createCase('pending')">人工建案</button><button type="button" class="btn btn-secondary" data-testid="create-observing-case" :disabled="caseSaving" @click="createCase('observing')">转入观察</button></div></div>
-			<div v-else-if="currentCaseStatus === 'pending'" class="mt-4 space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="转观察原因" :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-secondary" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">{{ caseSaving ? t('admin.userRiskControl.claimingCase') : t('admin.userRiskControl.claimCase') }}</button><button type="button" class="btn btn-secondary" data-testid="observe-review-case" :disabled="caseSaving" @click="observeCase">转入观察</button></div></div>
+			<div v-if="!activeUser.case_id" class="mt-4 space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="建案原因" required :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="grid gap-3 sm:grid-cols-2"><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" data-testid="observation-due-at" /></label><TextArea v-model="observationGoal" data-testid="observation-goal" label="观察目标" placeholder="转观察时必填" /></div><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="create-review-case" :disabled="caseSaving" @click="createCase('pending')">人工建案</button><button type="button" class="btn btn-secondary" data-testid="create-observing-case" :disabled="caseSaving" @click="createCase('observing')">转入观察</button></div></div>
+			<div v-else-if="currentCaseStatus === 'pending'" class="mt-4"><button type="button" class="btn btn-primary" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">{{ caseSaving ? t('admin.userRiskControl.claimingCase') : t('admin.userRiskControl.claimCase') }}</button></div>
+			<div v-else-if="currentCaseStatus === 'observing'" class="mt-4 border-l-2 border-gray-300 pl-3 text-sm dark:border-dark-600"><p><strong>复查时间：</strong>{{ formatDate(activeUser.review_due_at || '') }}</p><p class="mt-1 break-words"><strong>观察目标：</strong>{{ activeUser.observation_goal || '历史案件未记录目标' }}</p><button type="button" class="btn btn-primary mt-3" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">开始复查</button></div>
             <div v-if="currentCaseStatus === 'in_review'" class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,14rem)_1fr]">
               <div>
                 <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('admin.userRiskControl.feedbackType') }}</label>
-                <Select v-model="feedback" data-testid="review-feedback-type" :options="feedbackOptions" :aria-label="t('admin.userRiskControl.feedbackType')" />
-              </div>
-              <TextArea v-model="feedbackReason" data-testid="review-feedback-reason" :label="t('admin.userRiskControl.feedbackReason')" required :placeholder="t('admin.userRiskControl.feedbackReasonPlaceholder')" :error="feedbackError" @update:model-value="feedbackError = ''" />
+			  <Select v-model="feedback" data-testid="review-feedback-type" :options="feedbackOptions" :aria-label="t('admin.userRiskControl.feedbackType')" :disabled="resolutionLocked" />
+			  </div>
+			  <TextArea v-model="feedbackReason" data-testid="review-feedback-reason" :label="t('admin.userRiskControl.feedbackReason')" required :placeholder="t('admin.userRiskControl.feedbackReasonPlaceholder')" :error="feedbackError" :disabled="resolutionLocked" @update:model-value="feedbackError = ''" />
+			  <div><label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">账号动作</label><Select v-model="accountAction" data-testid="review-account-action" :options="accountActionOptions" :disabled="resolutionLocked" /></div>
+			  <div class="grid gap-3 sm:grid-cols-2"><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" /></label><TextArea v-model="observationGoal" label="观察目标" /></div>
               <div class="sm:col-start-2">
-                <button type="button" class="btn btn-primary" data-testid="submit-review-feedback" :disabled="caseSaving" @click="submitFeedback">
+                <button type="button" class="btn btn-primary" data-testid="submit-review-feedback" :disabled="caseSaving || resolutionLocked" @click="submitFeedback">
                   {{ caseSaving ? t('common.saving') : t('admin.userRiskControl.submitFeedback') }}
                 </button>
 				<button type="button" class="btn btn-secondary ml-2" :disabled="caseSaving" @click="observeCase">转入观察</button>
-              </div>
+			</div>
+			<div v-if="resolutionResult" class="mt-4 border border-gray-200 p-3 text-sm dark:border-dark-700" data-testid="resolution-step-results"><p class="font-medium">完成结果：{{ resolutionResult.result === 'success' ? '全部完成' : '部分完成' }}</p><p class="mt-1">账号：{{ resolutionResult.account.result }}<span v-if="resolutionResult.account.failure_reason"> · {{ resolutionResult.account.failure_reason }}</span></p><p class="mt-1">案件：{{ resolutionResult.case.result || (resolutionResult.result === 'success' ? 'resolved' : 'failed') }}<span v-if="resolutionResult.case.failure_reason"> · {{ resolutionResult.case.failure_reason }}</span></p><button v-if="resolutionResult.retryable" type="button" class="btn btn-secondary mt-3" :disabled="caseSaving" data-testid="retry-resolve-case" @click="submitFeedback">重试未完成步骤</button></div>
             </div>
           </section>
           <div v-if="identityTab === 'summary' && legacyLoading" class="space-y-3 py-5"><div v-for="index in 2" :key="index" class="h-14 animate-pulse rounded bg-gray-100 dark:bg-dark-700" /></div>
@@ -57,7 +61,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import UserRiskIdentityDetail from '@/features/extensions/user-risk/UserRiskIdentityDetail.vue'
-import { userRiskControlV2API, type AccountStatus, type AssociatedRiskUser, type RiskCaseStatus, type RiskFeedback, type RiskUserDetail, type RiskUserRow } from '@/api/admin/userRiskControlV2'
+import { userRiskControlV2API, type AccountStatus, type AssociatedRiskUser, type ResolveRiskCaseResult, type RiskCaseStatus, type RiskFeedback, type RiskUserDetail, type RiskUserRow } from '@/api/admin/userRiskControlV2'
 import { formatAccountStatus, formatAuditResult, formatIdentitySignal, formatRiskAction, formatRiskLevel, formatRiskReason, formatRiskType } from '@/utils/userRiskControlLabels'
 
 const props = defineProps<{ user: RiskUserRow }>()
@@ -71,12 +75,22 @@ const currentStatus = ref<AccountStatus>(props.user.status), saving = ref(false)
 const currentCaseStatus = ref<RiskCaseStatus | undefined>(props.user.case_status)
 const caseSaving = ref(false), feedback = ref<RiskFeedback>('insufficient_evidence'), feedbackReason = ref(''), feedbackError = ref(''), caseMessage = ref(''), caseActionError = ref('')
 const manualCaseReason = ref(''), manualCaseError = ref('')
+const observationDueAt = ref(defaultObservationDueAt()), observationGoal = ref('')
+const accountAction = ref<'none' | 'disable' | 'restore'>('none')
+const resolutionResult = ref<ResolveRiskCaseResult | null>(null)
+const resolutionRequestID = ref('')
+const resolutionLocked = computed(() => resolutionResult.value?.result === 'partial')
 const feedbackOptions: Array<{ value: RiskFeedback; label: string }> = [
   { value: 'confirmed_abuse', label: t('admin.userRiskControl.feedbackConfirmedAbuse') },
   { value: 'legitimate_shared', label: t('admin.userRiskControl.feedbackLegitimateShared') },
   { value: 'insufficient_evidence', label: t('admin.userRiskControl.feedbackInsufficientEvidence') },
   { value: 'data_error', label: t('admin.userRiskControl.feedbackDataError') },
   { value: 'business_violation', label: t('admin.userRiskControl.feedbackBusinessViolation') },
+]
+const accountActionOptions = [
+	{ value: 'none', label: '不修改账号状态' },
+	{ value: 'disable', label: '禁用账号并撤销会话' },
+	{ value: 'restore', label: '恢复账号' },
 ]
 const identityTab = ref('summary')
 const legacyDetail = ref<RiskUserDetail | null>(null), legacyLoading = ref(true)
@@ -123,10 +137,10 @@ async function claimCase() {
   caseMessage.value = ''
   caseActionError.value = ''
   try {
-    await userRiskControlV2API.claimReviewCase(activeUser.value.case_id)
+		const item = await userRiskControlV2API.claimReviewCase(activeUser.value.case_id)
     currentCaseStatus.value = 'in_review'
     caseMessage.value = t('admin.userRiskControl.claimCaseSuccess')
-    const updated = { ...activeUser.value, case_status: 'in_review' as const, processing_status: 'in_review' }
+		const updated = { ...activeUser.value, case_status: 'in_review' as const, processing_status: 'in_review', case_revision: item?.revision ?? activeUser.value.case_revision }
     investigationStack.value[investigationStack.value.length - 1] = updated
     emit('case-claimed', updated)
   } catch (error) {
@@ -139,14 +153,30 @@ async function createCase(status: 'pending' | 'observing') {
 	if (activeUser.value.case_id || caseSaving.value) return
 	if (!manualCaseReason.value.trim()) { manualCaseError.value = '建案原因不能为空'; return }
 	caseSaving.value = true; caseMessage.value = ''; caseActionError.value = ''
-	try { const item = await userRiskControlV2API.createReviewCase(activeUser.value.id, manualCaseReason.value, status); currentCaseStatus.value = item.status; const updated = { ...activeUser.value, case_id: item.id, case_status: item.status, processing_status: item.status }; investigationStack.value[investigationStack.value.length - 1] = updated; manualCaseReason.value = ''; caseMessage.value = status === 'observing' ? '已转入观察' : '人工案件已建立'; emit('updated', updated) } catch (error) { caseActionError.value = error instanceof Error ? error.message : '人工建案失败' } finally { caseSaving.value = false }
+	try {
+		let observation: { reviewDueAt: string; goal: string } | undefined
+		if (status === 'observing') {
+			const value = observationInput()
+			if (!value) return
+			observation = value
+		}
+		const item = await userRiskControlV2API.createReviewCase(activeUser.value.id, manualCaseReason.value, status, 'manual_review', observation)
+		currentCaseStatus.value = item.status
+		const updated = { ...activeUser.value, case_id: item.id, case_status: item.status, processing_status: item.status, review_due_at: item.review_due_at, observation_goal: item.observation_goal, case_revision: item.revision }
+		investigationStack.value[investigationStack.value.length - 1] = updated
+		manualCaseReason.value = ''
+		caseMessage.value = status === 'observing' ? '已转入观察' : '人工案件已建立'
+		emit('updated', updated)
+	} catch (error) { caseActionError.value = error instanceof Error ? error.message : '人工建案失败' } finally { caseSaving.value = false }
 }
 async function observeCase() {
 	if (!activeUser.value.case_id || caseSaving.value) return
 	const observeReason = feedbackReason.value.trim() || manualCaseReason.value.trim()
-	if (!observeReason) { if (currentCaseStatus.value === 'pending') manualCaseError.value = '请先填写转观察原因'; else feedbackError.value = '请先填写转观察原因'; return }
+	if (!observeReason) { feedbackError.value = '请先填写转观察原因'; return }
+	const observation = observationInput()
+	if (!observation) return
 	caseSaving.value = true; caseMessage.value = ''; caseActionError.value = ''
-	try { await userRiskControlV2API.observeReviewCase(activeUser.value.case_id, observeReason); currentCaseStatus.value = 'observing'; const updated = { ...activeUser.value, case_status: 'observing' as const, processing_status: 'observing' }; investigationStack.value[investigationStack.value.length - 1] = updated; feedbackReason.value = ''; caseMessage.value = '已转入观察'; emit('updated', updated) } catch (error) { caseActionError.value = error instanceof Error ? error.message : '转入观察失败' } finally { caseSaving.value = false }
+	try { const item = await userRiskControlV2API.observeReviewCase(activeUser.value.case_id, observeReason, observation.reviewDueAt, observation.goal, activeUser.value.case_revision || 0); currentCaseStatus.value = 'observing'; const updated = { ...activeUser.value, case_status: 'observing' as const, processing_status: 'observing', review_due_at: item.review_due_at, observation_goal: item.observation_goal, case_revision: item.revision }; investigationStack.value[investigationStack.value.length - 1] = updated; feedbackReason.value = ''; caseMessage.value = '已转入观察'; emit('updated', updated) } catch (error) { caseActionError.value = error instanceof Error ? error.message : '转入观察失败' } finally { caseSaving.value = false }
 }
 async function submitFeedback() {
   if (!activeUser.value.case_id || caseSaving.value || currentCaseStatus.value !== 'in_review') return
@@ -159,13 +189,16 @@ async function submitFeedback() {
   caseMessage.value = ''
   caseActionError.value = ''
   try {
-    await userRiskControlV2API.submitReviewFeedback(activeUser.value.case_id, feedback.value, trimmedReason)
-    currentCaseStatus.value = 'resolved'
-    feedbackReason.value = ''
-    caseMessage.value = t('admin.userRiskControl.submitFeedbackSuccess')
-    const updated = { ...activeUser.value, case_status: 'resolved' as const, processing_status: 'resolved', pending: false }
-    investigationStack.value[investigationStack.value.length - 1] = updated
-    emit('updated', updated)
+	if (!resolutionRequestID.value) resolutionRequestID.value = `review-${activeUser.value.case_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+	const result = await userRiskControlV2API.resolveReviewCase(activeUser.value.case_id, activeUser.value.id, feedback.value, trimmedReason, accountAction.value, activeUser.value.case_revision || 0, resolutionRequestID.value)
+	resolutionResult.value = result
+	if (result.result === 'partial') { caseActionError.value = '部分步骤未完成，请按结果重试。'; return }
+	currentCaseStatus.value = 'resolved'
+	feedbackReason.value = ''
+	caseMessage.value = t('admin.userRiskControl.submitFeedbackSuccess')
+	const updated = { ...activeUser.value, status: (result.account.after_status || activeUser.value.status) as AccountStatus, case_status: 'resolved' as const, processing_status: 'resolved', pending: false, resolution_reason: trimmedReason }
+	investigationStack.value[investigationStack.value.length - 1] = updated
+	emit('updated', updated)
   } catch (error) {
     caseActionError.value = error instanceof Error ? error.message : t('admin.userRiskControl.caseActionFailed')
   } finally {
@@ -175,6 +208,13 @@ async function submitFeedback() {
 function openConfirmation() { if (!accountActionable.value || (currentStatus.value !== 'active' && currentStatus.value !== 'disabled')) return; confirming.value = true; secondaryActionsOpen.value = false; validationError.value = ''; accountActionError.value = ''; reason.value = '' }
 function closeConfirmation() { if (!saving.value) confirming.value = false }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
+function defaultObservationDueAt() { const due = new Date(Date.now() + 24 * 60 * 60 * 1000); const local = new Date(due.getTime() - due.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 16) }
+function observationInput() {
+	const due = new Date(observationDueAt.value)
+	const goal = observationGoal.value.trim()
+	if (!goal || Number.isNaN(due.getTime()) || due.getTime() <= Date.now()) { caseActionError.value = '转入观察必须填写未来复查时间和观察目标'; return null }
+	return { reviewDueAt: due.toISOString(), goal }
+}
 function caseStatusLabel(value?: RiskCaseStatus) { return ({ pending: t('admin.userRiskControl.viewPending'), in_review: t('admin.userRiskControl.viewMine'), observing: t('admin.userRiskControl.viewObserving'), resolved: t('admin.userRiskControl.viewResolved') } as Record<string, string>)[value || ''] || t('admin.userRiskControl.noCases') }
 let legacyRequest = 0
 async function loadLegacy() {
@@ -200,7 +240,7 @@ async function loadLegacy() {
   catch { if (request === legacyRequest) legacyDetail.value = null }
   finally { if (request === legacyRequest) legacyLoading.value = false }
 }
-function resetActiveState() { currentStatus.value = activeUser.value.status; currentCaseStatus.value = activeUser.value.case_status; identityTab.value = 'summary'; secondaryActionsOpen.value = false; confirming.value = false; manualCaseReason.value = ''; manualCaseError.value = ''; accountActionWarning.value = ''; accountActionError.value = ''; void loadLegacy() }
+function resetActiveState() { currentStatus.value = activeUser.value.status; currentCaseStatus.value = activeUser.value.case_status; identityTab.value = 'summary'; secondaryActionsOpen.value = false; confirming.value = false; manualCaseReason.value = ''; manualCaseError.value = ''; observationDueAt.value = activeUser.value.review_due_at ? new Date(new Date(activeUser.value.review_due_at).getTime() - new Date(activeUser.value.review_due_at).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : defaultObservationDueAt(); observationGoal.value = activeUser.value.observation_goal || ''; resolutionResult.value = null; resolutionRequestID.value = ''; accountActionWarning.value = ''; accountActionError.value = ''; void loadLegacy() }
 function investigateUser(item: AssociatedRiskUser) {
   const account = item.account
   const status: AccountStatus = account?.status === 'active' || account?.status === 'disabled' || account?.status === 'pending' ? account.status : 'pending'

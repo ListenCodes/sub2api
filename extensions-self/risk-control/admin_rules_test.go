@@ -137,7 +137,7 @@ func TestAdminRuleCreateWritesAuditRecord(t *testing.T) {
 func TestAdminRuleTestWritesAuditRecord(t *testing.T) {
 	repo := NewMemoryRepository(nil)
 	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, repo)
-	body := []byte(`{"event_type":"login_failure","count":5,"rule":{"code":"login_failure_test","name":"登录失败测试","threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
+	body := []byte(`{"sample":{"event_type":"login_failure","observed_count":5,"user_id":42},"rule":{"code":"login_failure_test","name":"登录失败测试","event_types":["login_failure"],"count_strategy":"user_events","window_seconds":300,"threshold":5,"score":80,"risk_level":"high","action":"review"}}`)
 	request := signedRequest(http.MethodPost, "/api/v1/admin/rules/test", body, testSecret, "nonce-rule-test-audit", time.Now())
 	request.Header.Set("X-Risk-Actor-ID", "7")
 	response := serveJSON(server, request)
