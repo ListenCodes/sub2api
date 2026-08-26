@@ -97,7 +97,8 @@ describe('UserRiskIdentityDetail', () => {
 
 		expect(userRiskControlV2API.revokeNetworkLabel).not.toHaveBeenCalled()
 		expect(userRiskControlV2API.previewNetworkLabel).toHaveBeenCalledWith(11, '')
-		expect(document.body.textContent).toContain('需完成历史回放')
+		expect(document.body.textContent).toContain('需完成一次历史回放')
+		expect(document.body.textContent).toContain('已记录的消解信号会立即按当前规则恢复')
 		document.body.querySelector<HTMLButtonElement>('[data-testid="confirm-revoke-network-label"]')!.click()
 		await flushPromises()
 		expect(userRiskControlV2API.revokeNetworkLabel).toHaveBeenCalledWith(11, '网络归类已失效')

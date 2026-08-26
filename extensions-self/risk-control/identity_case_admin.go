@@ -134,7 +134,7 @@ func (s *HTTPServer) handleReviewCaseClaim(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusConflict, err)
 		return
 	}
-	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "claim_risk_review_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: "success"})
+	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "claim_risk_review_case", TargetType: "risk_review_case", TargetID: strconv.FormatInt(caseID, 10), Result: "success", Metadata: map[string]any{"user_id": item.UserID, "previous_assignee_id": item.PreviousAssigneeID, "assignee_id": item.AssigneeID, "revision": item.Revision}})
 	writeJSON(w, http.StatusOK, item)
 }
 

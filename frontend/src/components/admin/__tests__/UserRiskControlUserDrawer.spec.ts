@@ -112,22 +112,47 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
 		const wrapper = mountDrawer({ case_id: undefined, case_status: undefined, risk_score: 0, risk_level: null, risk_type: null })
 		await flushPromises()
 
-		expect(wrapper.get('[data-testid="review-case-workspace"]').text()).toContain('当前无需处置')
+		expect(wrapper.get('[data-testid="review-case-workspace"]').text()).toContain('仅在有额外线索时建立案件')
+		expect(wrapper.get('[data-testid="review-case-workspace"]').text()).not.toContain('当前无需处置')
 		expect(wrapper.get('[data-testid="open-manual-case"]').text()).toContain('建立复核案件')
 		expect(wrapper.find('[data-testid="manual-case-reason"]').exists()).toBe(false)
 		expect(wrapper.find('[data-testid="observation-goal"]').exists()).toBe(false)
 		expect(wrapper.find('[data-testid="create-observing-case"]').exists()).toBe(false)
 	})
 
-	it('keeps unclaimed pending cases in the claim-only workflow', async () => {
+	it('lets an administrator move an unclaimed case directly into observation', async () => {
 		const wrapper = mountDrawer()
 		await flushPromises()
 
 		expect(wrapper.find('[data-testid="observe-review-case"]').exists()).toBe(false)
 		expect(wrapper.find('[data-testid="observation-goal"]').exists()).toBe(false)
 		expect(wrapper.get('[data-testid="claim-review-case"]').exists()).toBe(true)
-		expect(userRiskControlV2API.observeReviewCase).not.toHaveBeenCalled()
+		await wrapper.get('[data-testid="observe-pending-case"]').trigger('click')
+		await wrapper.get('[data-testid="pending-observation-reason"] textarea').setValue('等待补充注册资料')
+		await wrapper.get('[data-testid="pending-observation-goal"] textarea').setValue('核验后续登录设备')
+		await wrapper.get('[data-testid="confirm-observe-pending-case"]').trigger('click')
+		await flushPromises()
+		expect(userRiskControlV2API.observeReviewCase).toHaveBeenCalledWith(31, '等待补充注册资料', expect.any(String), '核验后续登录设备', 0)
 		expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
+	})
+
+	it('creates a case directly in observation with its review context', async () => {
+		vi.mocked(userRiskControlV2API.createReviewCase).mockResolvedValue({ id: 32, status: 'observing', review_due_at: '2026-08-27T00:00:00Z', observation_goal: '核验关联账号', revision: 1 })
+		const wrapper = mountDrawer({ case_id: undefined, case_status: undefined })
+		await flushPromises()
+		await wrapper.get('[data-testid="open-manual-case"]').trigger('click')
+		await wrapper.get('[data-testid="manual-case-observing"]').trigger('click')
+		await wrapper.get('[data-testid="manual-case-reason"] textarea').setValue('共享设备需要观察')
+		await wrapper.get('[data-testid="manual-observation-goal"] textarea').setValue('核验关联账号')
+		await wrapper.get('[data-testid="create-review-case"]').trigger('click')
+		await flushPromises()
+		expect(userRiskControlV2API.createReviewCase).toHaveBeenCalledWith(7, '共享设备需要观察', 'observing', 'manual_review', { reviewDueAt: expect.any(String), goal: '核验关联账号' })
+	})
+
+	it('marks an overdue observation in the case badge', async () => {
+		const wrapper = mountDrawer({ case_status: 'observing', review_due_at: '2020-01-01T00:00:00Z', observation_goal: '复查' })
+		await flushPromises()
+		expect(wrapper.get('[data-testid="review-case-workspace"]').text()).toContain('观察已到期')
 	})
 
 	it('shows observation fields only after an in-review operator chooses observation', async () => {

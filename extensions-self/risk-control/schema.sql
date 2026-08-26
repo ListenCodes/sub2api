@@ -460,6 +460,7 @@ CREATE TABLE IF NOT EXISTS risk_identity_signals (
     evidence_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
     decision_id VARCHAR(96) REFERENCES risk_decisions(decision_id),
     status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','resolved','superseded')),
+	resolved_by_shared_network BOOLEAN NOT NULL DEFAULT FALSE,
     active_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     active_until TIMESTAMPTZ,
     first_hit_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -474,6 +475,7 @@ ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS signal_family VARCHAR
 ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS evidence_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS decision_id VARCHAR(96) REFERENCES risk_decisions(decision_id);
 ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS status VARCHAR(24) NOT NULL DEFAULT 'active';
+ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS resolved_by_shared_network BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS active_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS active_until TIMESTAMPTZ;
 ALTER TABLE risk_identity_signals ADD COLUMN IF NOT EXISTS first_hit_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
@@ -684,6 +686,14 @@ CREATE TABLE IF NOT EXISTS risk_shared_network_labels (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM risk_schema_migrations WHERE version=10) THEN
+    UPDATE risk_identity_signals signal SET resolved_by_shared_network=TRUE
+    WHERE signal.status='resolved' AND signal.domain IN ('ip','composite')
+      AND EXISTS(SELECT 1 FROM risk_shared_network_labels label WHERE label.network_identity_id=signal.network_identity_id AND label.label IN ('home','company','school','trusted_egress','mobile_cgnat'));
+    INSERT INTO risk_schema_migrations(version) VALUES(10);
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_risk_identity_signals_user_time ON risk_identity_signals(user_id, occurred_at DESC);
 DO $$ BEGIN
     IF EXISTS (
@@ -777,6 +787,7 @@ ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS v2_signals BIGIN
 ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS rule_hits JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS sample_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS evidence_high_water BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS label_high_water BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS rule_watermark JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE risk_identity_rebuild_jobs ADD COLUMN IF NOT EXISTS approved_dry_run_id BIGINT;
 

@@ -134,9 +134,16 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	if _, err := service.Ingest(ctx, registrationIdentityReport("lifecycle-registration-labeled", 1006, base, "8.8.4.4", "shared-browser")); err != nil {
 		t.Fatal(err)
 	}
-	var labeledIPSignals int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_identity_signals signal JOIN risk_identity_events event ON event.id=signal.event_id WHERE event.event_key='lifecycle-registration-labeled' AND signal.domain='ip'`).Scan(&labeledIPSignals); err != nil || labeledIPSignals != 0 {
-		t.Fatalf("safe shared-network IP signals = %d, error=%v", labeledIPSignals, err)
+	var labeledIPSignals, suppressedIPSignals int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE signal.status='resolved' AND signal.resolved_by_shared_network) FROM risk_identity_signals signal JOIN risk_identity_events event ON event.id=signal.event_id WHERE event.event_key='lifecycle-registration-labeled' AND signal.domain='ip'`).Scan(&labeledIPSignals, &suppressedIPSignals); err != nil || labeledIPSignals != 1 || suppressedIPSignals != 1 {
+		t.Fatalf("safe shared-network IP signals = %d, suppressed = %d, error=%v", labeledIPSignals, suppressedIPSignals, err)
+	}
+	if err := service.repo.LabelSharedNetwork(ctx, networkID, 7, "public_proxy", "network is no longer trusted"); err != nil {
+		t.Fatal(err)
+	}
+	var restoredIPSignals int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM risk_identity_signals signal JOIN risk_identity_events event ON event.id=signal.event_id WHERE event.event_key='lifecycle-registration-labeled' AND signal.domain='ip' AND signal.status='active' AND NOT signal.resolved_by_shared_network`).Scan(&restoredIPSignals); err != nil || restoredIPSignals != 1 {
+		t.Fatalf("restored shared-network IP signals = %d, error=%v", restoredIPSignals, err)
 	}
 
 	if _, err := service.repo.DisableIdentityRule(ctx, "v2_registration_composite_accounts", "release fixture disable", 7); err != nil {
@@ -161,6 +168,10 @@ func TestIdentitySignalLifecycleCasesAndSharedNetworkPostgres(t *testing.T) {
 	}
 	if err := db.QueryRowContext(ctx, `SELECT overall_score FROM risk_identity_user_summaries WHERE user_id=1004`).Scan(&score); err != nil || score != 0 {
 		t.Fatalf("expired current score = %d, error=%v", score, err)
+	}
+	var currentDecisions int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE status='active' OR current_score<>0) FROM risk_decisions WHERE user_id=1004`).Scan(&currentDecisions); err != nil || currentDecisions != 0 {
+		t.Fatalf("expired decisions still current = %d, error=%v", currentDecisions, err)
 	}
 	var caseStatus string
 	if err := db.QueryRowContext(ctx, `SELECT status,current_score,historical_max_score FROM risk_review_cases WHERE user_id=1004 AND status='pending'`).Scan(&caseStatus, &score, &historical); err != nil {
@@ -366,8 +377,22 @@ func TestIdentityRebuildKeepsVersionedEvidenceAndCasesPostgres(t *testing.T) {
 	if _, err := service.repo.Rebuild(ctx, 7, false, dryRun.ID+1, cfg); err == nil || !strings.Contains(err.Error(), "不属于当前管理员") {
 		t.Fatalf("rebuild accepted a different Dry Run ID: %v", err)
 	}
-	result, err := service.repo.Rebuild(ctx, 7, false, dryRun.ID, cfg)
-	if err != nil || result.ApprovedDryRunID != dryRun.ID {
+	var networkID int64
+	if err := db.QueryRowContext(ctx, `SELECT network_identity_id FROM risk_identity_events WHERE event_key='rebuild-registration-0'`).Scan(&networkID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.repo.LabelSharedNetwork(ctx, networkID, 7, "company", "verify rebuild label watermark"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.repo.Rebuild(ctx, 7, false, dryRun.ID, cfg); err == nil || !strings.Contains(err.Error(), "共享网络标签") {
+		t.Fatalf("rebuild accepted a stale shared-network watermark: %v", err)
+	}
+	freshDryRun, err := service.repo.Rebuild(ctx, 7, true, 0, cfg)
+	if err != nil || freshDryRun.LabelHighWater <= dryRun.LabelHighWater {
+		t.Fatalf("fresh rebuild Dry Run = %+v, error=%v", freshDryRun, err)
+	}
+	result, err := service.repo.Rebuild(ctx, 7, false, freshDryRun.ID, cfg)
+	if err != nil || result.ApprovedDryRunID != freshDryRun.ID {
 		t.Fatalf("rebuild apply = %+v, error=%v", result, err)
 	}
 	var missingVersions, missingRuleSnapshots, activeCases, caseEvidence int

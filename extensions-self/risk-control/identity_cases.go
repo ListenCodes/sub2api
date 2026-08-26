@@ -70,8 +70,8 @@ func (r *SQLIdentityRepository) ListReviewCases(ctx context.Context, view string
 	}
 	base := `WITH current_scores AS (
  SELECT signal.user_id,signal.signal_family,MAX(signal.score)::int current_score
- FROM risk_identity_signals signal JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
- WHERE signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+ FROM risk_identity_signals signal JOIN risk_identity_rules rule ON rule.code=signal.rule_code JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+ WHERE signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND version.enabled
  GROUP BY signal.user_id,signal.signal_family
 ) `
 	condition := strings.Join(where, " AND ")
@@ -170,7 +170,15 @@ func (r *SQLIdentityRepository) ClaimReviewCase(ctx context.Context, caseID, act
 	}
 	var item RiskReviewCase
 	var opened, last, activity time.Time
-	err := r.db.QueryRowContext(ctx, `UPDATE risk_review_cases SET assignee_id=$2,status='in_review',review_due_at=NULL,observation_goal='',last_activity_at=NOW(),revision=revision+1,updated_at=NOW() WHERE id=$1 AND status IN ('pending','in_review','observing') AND (assignee_id=0 OR assignee_id=$2) RETURNING id,user_id,COALESCE(decision_id,''),signal_family,status,resolution,current_score,historical_max_score,primary_signal,evidence_strength,assignee_id,created_by,observation_goal,resolution_reason,revision,opened_at,last_hit_at,last_activity_at`, caseID, actorID).Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &item.CreatedBy, &item.ObservationGoal, &item.ResolutionReason, &item.Revision, &opened, &last, &activity)
+	err := r.db.QueryRowContext(ctx, `WITH claimable AS (
+ SELECT id,assignee_id previous_assignee_id FROM risk_review_cases
+ WHERE id=$1 AND status IN ('pending','in_review','observing')
+   AND (assignee_id=0 OR assignee_id=$2 OR (status='observing' AND review_due_at IS NOT NULL AND review_due_at<=NOW()))
+ FOR UPDATE
+)
+UPDATE risk_review_cases case_row SET assignee_id=$2,status='in_review',review_due_at=NULL,observation_goal='',last_activity_at=NOW(),revision=case_row.revision+1,updated_at=NOW()
+FROM claimable WHERE case_row.id=claimable.id
+RETURNING case_row.id,case_row.user_id,COALESCE(case_row.decision_id,''),case_row.signal_family,case_row.status,case_row.resolution,case_row.current_score,case_row.historical_max_score,case_row.primary_signal,case_row.evidence_strength,case_row.assignee_id,case_row.created_by,case_row.observation_goal,case_row.resolution_reason,case_row.revision,case_row.opened_at,case_row.last_hit_at,case_row.last_activity_at,claimable.previous_assignee_id`, caseID, actorID).Scan(&item.ID, &item.UserID, &item.DecisionID, &item.SignalFamily, &item.Status, &item.Resolution, &item.CurrentScore, &item.HistoricalMaxScore, &item.PrimarySignal, &item.EvidenceStrength, &item.AssigneeID, &item.CreatedBy, &item.ObservationGoal, &item.ResolutionReason, &item.Revision, &opened, &last, &activity, &item.PreviousAssigneeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return item, errors.New("case is unavailable or assigned to another administrator")
 	}
@@ -199,6 +207,7 @@ func (r *SQLIdentityRepository) ResolveReviewCase(ctx context.Context, caseID, a
 	if err := tx.QueryRowContext(ctx, `SELECT id,user_id,status,resolution,resolution_reason,resolution_request_id,revision,assignee_id FROM risk_review_cases WHERE id=$1 FOR UPDATE`, caseID).Scan(&item.ID, &item.UserID, &item.Status, &item.Resolution, &item.ResolutionReason, &storedRequest, &item.Revision, &item.AssigneeID); err != nil {
 		return RiskReviewCase{}, false, errors.New("review case is unavailable")
 	}
+	item.ResolutionRequestID = storedRequest
 	if item.Status == "resolved" && requestID != "" && storedRequest == requestID && item.Resolution == feedback && item.ResolutionReason == reason {
 		return item, true, tx.Commit()
 	}
@@ -221,7 +230,7 @@ func (r *SQLIdentityRepository) ResolveReviewCase(ctx context.Context, caseID, a
 	if err := tx.Commit(); err != nil {
 		return RiskReviewCase{}, false, err
 	}
-	item.Status, item.Resolution, item.ResolutionReason, item.Revision = "resolved", feedback, reason, item.Revision+1
+	item.Status, item.Resolution, item.ResolutionReason, item.ResolutionRequestID, item.Revision = "resolved", feedback, reason, requestID, item.Revision+1
 	return item, false, nil
 }
 
@@ -310,11 +319,18 @@ SELECT 'identity',code,revision,signal_family,domain,active_from,FALSE,jsonb_bui
 FROM risk_identity_rules WHERE code=$1 ON CONFLICT(rule_kind,rule_code,revision) DO NOTHING`, code); err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='superseded' WHERE rule_code=$1 AND status='active'`, code); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='superseded',resolved_by_shared_network=FALSE WHERE rule_code=$1 AND (status='active' OR resolved_by_shared_network)`, code); err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='superseded',current_score=0
-	WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.rule_code=$1)`, code); err != nil {
+	if _, err := tx.ExecContext(ctx, `WITH affected AS (
+ SELECT DISTINCT decision_id FROM risk_identity_signals WHERE rule_code=$1 AND COALESCE(decision_id,'')<>''
+), decision_state AS (
+ SELECT affected.decision_id,COALESCE(MAX(signal.score) FILTER(WHERE signal.status='active'),0)::int current_score
+ FROM affected LEFT JOIN risk_identity_signals signal ON signal.decision_id=affected.decision_id
+ GROUP BY affected.decision_id
+)
+UPDATE risk_decisions decision SET status=CASE WHEN state.current_score>0 THEN 'active' ELSE 'superseded' END,current_score=state.current_score
+FROM decision_state state WHERE decision.decision_id=state.decision_id`, code); err != nil {
 		return 0, err
 	}
 	if err := refreshIdentityReviewCases(ctx, tx, userIDs, family); err != nil {
@@ -418,6 +434,10 @@ func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkI
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE risk_identity_signals IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return err
 	}
+	var previousLabel string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT label FROM risk_shared_network_labels WHERE network_identity_id=$1),'')`, networkID).Scan(&previousLabel); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO risk_shared_network_labels(network_identity_id,label,reason,actor_id) VALUES($1,$2,$3,$4) ON CONFLICT(network_identity_id) DO UPDATE SET label=EXCLUDED.label,reason=EXCLUDED.reason,actor_id=EXCLUDED.actor_id,updated_at=NOW()`, networkID, label, reason, actorID); err != nil {
 		return err
 	}
@@ -425,6 +445,11 @@ func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkI
 		return err
 	}
 	if !safeSharedNetworkLabel(label) {
+		if safeSharedNetworkLabel(previousLabel) {
+			if err := restoreSharedNetworkSignals(ctx, tx, networkID); err != nil {
+				return err
+			}
+		}
 		return tx.Commit()
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM risk_identity_signals WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND status='active' AND user_id>0`, networkID)
@@ -443,10 +468,22 @@ func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkI
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='resolved' WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND status='active'`, networkID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='resolved',resolved_by_shared_network=TRUE WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND status='active'`, networkID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='resolved',current_score=0 WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.network_identity_id=$1 AND signal.domain IN ('ip','composite') AND signal.status='resolved')`, networkID); err != nil {
+	if _, err := tx.ExecContext(ctx, `WITH affected AS (
+ SELECT DISTINCT decision_id FROM risk_identity_signals
+ WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND resolved_by_shared_network AND COALESCE(decision_id,'')<>''
+), decision_state AS (
+ SELECT affected.decision_id,COALESCE(MAX(signal.score) FILTER(WHERE signal.status='active'),0)::int current_score
+ FROM affected LEFT JOIN risk_identity_signals signal ON signal.decision_id=affected.decision_id
+ GROUP BY affected.decision_id
+)
+UPDATE risk_decisions decision SET status=CASE WHEN state.current_score>0 THEN 'active' ELSE 'resolved' END,current_score=state.current_score
+FROM decision_state state WHERE decision.decision_id=state.decision_id`, networkID); err != nil {
+		return err
+	}
+	if err := refreshAllIdentityReviewCases(ctx, tx); err != nil {
 		return err
 	}
 	for _, userID := range userIDs {
@@ -455,4 +492,54 @@ func (r *SQLIdentityRepository) LabelSharedNetwork(ctx context.Context, networkI
 		}
 	}
 	return tx.Commit()
+}
+
+func restoreSharedNetworkSignals(ctx context.Context, tx *sql.Tx, networkID int64) error {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id FROM risk_identity_signals WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND resolved_by_shared_network AND user_id>0`, networkID)
+	if err != nil {
+		return err
+	}
+	userIDs := []int64{}
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			rows.Close()
+			return err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals signal SET
+ status=CASE
+  WHEN signal.active_until IS NOT NULL AND signal.active_until<=NOW() THEN 'expired'
+  WHEN EXISTS(SELECT 1 FROM risk_identity_rules rule JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision WHERE rule.code=signal.rule_code AND rule.enabled AND rule.mode='shadow' AND version.enabled) THEN 'active'
+  ELSE 'superseded'
+ END,
+ resolved_by_shared_network=FALSE
+ WHERE signal.network_identity_id=$1 AND signal.domain IN ('ip','composite') AND signal.resolved_by_shared_network`, networkID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `WITH affected AS (
+	 SELECT DISTINCT decision_id FROM risk_identity_signals
+	 WHERE network_identity_id=$1 AND domain IN ('ip','composite') AND NOT resolved_by_shared_network AND COALESCE(decision_id,'')<>''
+	), decision_state AS (
+	 SELECT affected.decision_id,COALESCE(MAX(signal.score) FILTER(WHERE signal.status='active'),0)::int current_score
+	 FROM affected LEFT JOIN risk_identity_signals signal ON signal.decision_id=affected.decision_id
+	 GROUP BY affected.decision_id
+)
+UPDATE risk_decisions decision SET status=CASE WHEN state.current_score>0 THEN 'active' ELSE 'superseded' END,current_score=state.current_score
+FROM decision_state state WHERE decision.decision_id=state.decision_id`, networkID); err != nil {
+		return err
+	}
+	if err := refreshAllIdentityReviewCases(ctx, tx); err != nil {
+		return err
+	}
+	for _, userID := range userIDs {
+		if err := refreshIdentityUserSummary(ctx, tx, userID); err != nil {
+			return err
+		}
+	}
+	return nil
 }

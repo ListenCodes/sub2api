@@ -174,6 +174,15 @@ func (r *SQLRepository) ListRules(ctx context.Context) ([]Rule, error) {
 }
 
 func (r *SQLRepository) CreateRule(ctx context.Context, input Rule) (Rule, error) {
+	return createRule(ctx, r.db, input)
+}
+
+type ruleSQLExecutor interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func createRule(ctx context.Context, executor ruleSQLExecutor, input Rule) (Rule, error) {
 	eventTypes, err := json.Marshal(input.EventTypes)
 	if err != nil {
 		return Rule{}, err
@@ -181,7 +190,7 @@ func (r *SQLRepository) CreateRule(ctx context.Context, input Rule) (Rule, error
 	var rule Rule
 	var raw []byte
 	input.CountStrategy = normalizeCountStrategy(input.CountStrategy)
-	err = r.db.QueryRowContext(ctx, `INSERT INTO risk_rules (code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, input.Code, input.Name, input.Description, string(eventTypes), input.CountStrategy, input.Enabled, input.WindowSeconds, input.Threshold, input.Score, input.RiskLevel, input.Action, 1).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
+	err = executor.QueryRowContext(ctx, `INSERT INTO risk_rules (code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, input.Code, input.Name, input.Description, string(eventTypes), input.CountStrategy, input.Enabled, input.WindowSeconds, input.Threshold, input.Score, input.RiskLevel, input.Action, 1).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
 	if err != nil {
 		if isRuleCodeConflict(err) {
 			return Rule{}, ErrRuleCodeConflict
@@ -200,11 +209,15 @@ func isRuleCodeConflict(err error) bool {
 }
 
 func (r *SQLRepository) UpdateRule(ctx context.Context, code string, expectedRevision int, update Rule) (Rule, error) {
+	return updateRule(ctx, r.db, code, expectedRevision, update)
+}
+
+func updateRule(ctx context.Context, executor ruleSQLExecutor, code string, expectedRevision int, update Rule) (Rule, error) {
 	eventTypes, _ := json.Marshal(update.EventTypes)
 	var rule Rule
 	var raw []byte
 	update.CountStrategy = normalizeCountStrategy(update.CountStrategy)
-	err := r.db.QueryRowContext(ctx, `UPDATE risk_rules SET name=$2,description=$3,event_types=$4,count_strategy=$5,enabled=$6,window_seconds=$7,threshold=$8,score=$9,risk_level=$10,action=$11,revision=revision+1,updated_at=NOW() WHERE code=$1 AND revision=$12 RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, code, update.Name, update.Description, eventTypes, update.CountStrategy, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, expectedRevision).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
+	err := executor.QueryRowContext(ctx, `UPDATE risk_rules SET name=$2,description=$3,event_types=$4,count_strategy=$5,enabled=$6,window_seconds=$7,threshold=$8,score=$9,risk_level=$10,action=$11,revision=revision+1,updated_at=NOW() WHERE code=$1 AND revision=$12 RETURNING id,code,name,description,event_types,count_strategy,enabled,window_seconds,threshold,score,risk_level,action,revision`, code, update.Name, update.Description, eventTypes, update.CountStrategy, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, expectedRevision).Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Description, &raw, &rule.CountStrategy, &rule.Enabled, &rule.WindowSeconds, &rule.Threshold, &rule.Score, &rule.RiskLevel, &rule.Action, &rule.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Rule{}, ErrRuleRevisionConflict
 	}
@@ -215,6 +228,55 @@ func (r *SQLRepository) UpdateRule(ctx context.Context, code string, expectedRev
 		return Rule{}, err
 	}
 	return rule, nil
+}
+
+func (r *SQLRepository) CreateRuleWithAudit(ctx context.Context, input Rule, actorID int64, reason string) (Rule, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Rule{}, err
+	}
+	defer tx.Rollback()
+	created, err := createRule(ctx, tx, input)
+	if err != nil {
+		return Rule{}, err
+	}
+	after := eventRuleSnapshot(created)
+	if err := insertRuleMutationAudit(ctx, tx, actorID, "create_rule", created.Code, reason, created.Revision, map[string]any{}, after); err != nil {
+		return Rule{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Rule{}, err
+	}
+	return created, nil
+}
+
+func (r *SQLRepository) UpdateRuleWithAudit(ctx context.Context, code string, expectedRevision int, update Rule, before Rule, actorID int64, reason string) (Rule, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Rule{}, err
+	}
+	defer tx.Rollback()
+	updated, err := updateRule(ctx, tx, code, expectedRevision, update)
+	if err != nil {
+		return Rule{}, err
+	}
+	beforeSnapshot, afterSnapshot := eventRuleSnapshot(before), eventRuleSnapshot(updated)
+	if err := insertRuleMutationAudit(ctx, tx, actorID, "update_rule", code, reason, updated.Revision, beforeSnapshot, afterSnapshot); err != nil {
+		return Rule{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Rule{}, err
+	}
+	return updated, nil
+}
+
+func insertRuleMutationAudit(ctx context.Context, executor ruleSQLExecutor, actorID int64, action, targetID, reason string, revision int, before, after map[string]any) error {
+	metadata, err := json.Marshal(map[string]any{"revision": revision, "before": before, "after": after, "diff": ruleFieldDiff(before, after)})
+	if err != nil {
+		return err
+	}
+	_, err = executor.ExecContext(ctx, `INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason,metadata) VALUES($1,$2,'rule',$3,'success',$4,$5)`, actorID, action, targetID, strings.TrimSpace(reason), metadata)
+	return err
 }
 
 func (r *SQLRepository) UpsertSubject(ctx context.Context, event EventRecord) error {
@@ -301,11 +363,11 @@ func riskIndexProjectionCTE() string {
 	return riskSubjectProjectionCTE + `, eligible_identity AS MATERIALIZED (
  SELECT signal.id,signal.user_id,signal.rule_code AS risk_type,signal.score,signal.evidence_count,signal.domain,signal.last_hit_at
  FROM risk_identity_signals signal
- JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision
+ JOIN risk_identity_rules rule ON rule.code=signal.rule_code
  JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
  WHERE signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW())
-   AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW())
-   AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+   AND rule.enabled AND rule.mode='shadow'
+   AND version.enabled
 ), identity_best AS MATERIALIZED (
  SELECT DISTINCT ON(user_id) id,user_id,risk_type,score,evidence_count,domain,last_hit_at
  FROM eligible_identity ORDER BY user_id,score DESC,last_hit_at DESC,id DESC

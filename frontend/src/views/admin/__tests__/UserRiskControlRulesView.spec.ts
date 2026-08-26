@@ -93,8 +93,41 @@ describe('UserRiskControlRulesView', () => {
 
 		expect(wrapper.get('[data-testid="rule-view-identity"]').attributes('aria-selected')).toBe('true')
 		expect(wrapper.get('[data-testid="identity-v2-rules"]').exists()).toBe(true)
-		expect(wrapper.get('[data-testid="edit-identity-rule-mobile-v2_registration_email_retries"]').classes()).toContain('md:hidden')
+		expect(wrapper.get('[data-testid="identity-rule-tools"]').classes()).toEqual(expect.arrayContaining(['flex-wrap', 'sm:flex-nowrap', 'sm:overflow-x-auto']))
+		expect(wrapper.get('[data-testid="identity-rule-mobile-list"]').classes()).toContain('md:hidden')
+		expect(wrapper.get('[data-testid="edit-identity-rule-mobile-v2_registration_email_retries"]').attributes('aria-label')).toBe('编辑规则')
 		expect(wrapper.get('[data-testid="edit-identity-rule-v2_registration_email_retries"]').classes()).toEqual(expect.arrayContaining(['hidden', 'md:inline-flex']))
+	})
+
+	it('shows a real loading state before the identity response is available', async () => {
+		let resolveIdentity!: (value: Awaited<ReturnType<typeof userRiskControlV2API.listIdentityRules>>) => void
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.listIdentityRules).mockReturnValue(new Promise((resolve) => { resolveIdentity = resolve }))
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await wrapper.vm.$nextTick()
+		expect(wrapper.get('[data-testid="identity-rules-loading"]').text()).toContain('正在加载')
+		expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).not.toContain('暂无身份规则')
+		resolveIdentity([])
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-v2-rules"]').text()).toContain('暂无身份规则')
+	})
+
+	it('keeps effects and version request states isolated while switching tools', async () => {
+		let resolveEffects!: (value: Awaited<ReturnType<typeof userRiskControlV2API.listIdentityRuleEffects>>) => void
+		let resolveVersions!: (value: Awaited<ReturnType<typeof userRiskControlV2API.listIdentityRuleVersions>>) => void
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		vi.mocked(userRiskControlV2API.listIdentityRuleEffects).mockReturnValue(new Promise((resolve) => { resolveEffects = resolve }))
+		vi.mocked(userRiskControlV2API.listIdentityRuleVersions).mockReturnValue(new Promise((resolve) => { resolveVersions = resolve }))
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await wrapper.get('[data-testid="rule-view-shadow"]').trigger('click')
+		await wrapper.get('[data-testid="rule-view-versions"]').trigger('click')
+		resolveEffects([])
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-rule-versions"]').text()).toContain('正在加载版本记录')
+		resolveVersions([])
+		await flushPromises()
+		expect(wrapper.get('[data-testid="identity-rule-versions"]').text()).not.toContain('正在加载版本记录')
 	})
 
 	it('publishes an identity rule directly with one save action', async () => {
@@ -376,6 +409,26 @@ describe('UserRiskControlRulesView', () => {
 		expect(daily.map((rule) => rule.code)).not.toContain('api_error_burst')
 		expect(wrapper.get('[data-testid="retired-event-rules"]').text()).toContain('已迁移的 API 可靠性规则')
 		expect(wrapper.find('[data-testid="edit-retired-rule-3"]').exists()).toBe(true)
+	})
+
+	it('offers reliability templates and only compatible count strategies', async () => {
+		vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([])
+		const wrapper = mount(UserRiskControlRulesView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		await openEventRules(wrapper)
+		expect(wrapper.get('[data-testid="rule-mobile-sort"]').exists()).toBe(true)
+		await wrapper.get('[data-testid="new-rule"]').trigger('click')
+		expect(bodyElement('[data-testid="template-api_error_rate"]')).toBeTruthy()
+		expect(bodyElement('[data-testid="template-upstream_failure_rate"]')).toBeTruthy()
+		const eventType = wrapper.findComponent('[data-testid="rule-event-type"]')
+		eventType.vm.$emit('update:modelValue', 'api_error')
+		await flushPromises()
+		let options = wrapper.findComponent('[data-testid="rule-count-strategy-create"]').props('options') as Array<{ value: string }>
+		expect(options.map((option) => option.value)).toEqual(['user_events', 'api_client_distinct_users'])
+		eventType.vm.$emit('update:modelValue', 'login_failure')
+		await flushPromises()
+		options = wrapper.findComponent('[data-testid="rule-count-strategy-create"]').props('options') as Array<{ value: string }>
+		expect(options.map((option) => option.value)).toEqual(['user_events'])
 	})
   it('uses shared responsive table and rule form controls', async () => {
     vi.mocked(userRiskControlV2API.listRules).mockResolvedValue([{ id: 1, code: 'login_failure', name: '登录失败爆发', enabled: true, windowSeconds: 300, threshold: 5, score: 80, riskLevel: 'high', action: 'review', revision: 3 }])

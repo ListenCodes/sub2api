@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func validTestRule() Rule {
@@ -131,6 +134,73 @@ func TestAdminRuleCreateWritesAuditRecord(t *testing.T) {
 	items, total, err := repo.ListAudit(context.Background(), 10, 0, "create_rule", 0, "")
 	if err != nil || total != 1 || len(items) != 1 || items[0].ActorID != 7 || items[0].Reason != "上线前验证" {
 		t.Fatalf("audit = total %d items %+v error=%v", total, items, err)
+	}
+}
+
+type nonAuditedRuleRepository struct{ RiskRepository }
+
+func TestAdminRuleCreateRefusesRepositoryWithoutAtomicAudit(t *testing.T) {
+	base := NewMemoryRepository(nil)
+	server := NewHTTPServer(Config{InternalSecret: testSecret, Mode: "enforce"}, nonAuditedRuleRepository{RiskRepository: base})
+	body := []byte(`{"code":"custom_login_failure","name":"自定义登录失败","event_types":["login_failure"],"count_strategy":"user_events","enabled":true,"window_seconds":300,"threshold":5,"score":80,"risk_level":"high","action":"review","reason":"上线前验证"}`)
+	request := signedRequest(http.MethodPost, "/api/v1/admin/rules", body, testSecret, "nonce-reject-non-atomic-rule", time.Now())
+	request.Header.Set("X-Risk-Actor-ID", "7")
+	response := serveJSON(server, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	rules, err := base.ListRules(context.Background())
+	if err != nil || len(rules) != 0 {
+		t.Fatalf("rule mutation escaped audit guard: rules=%+v error=%v", rules, err)
+	}
+}
+
+func TestSQLRuleCreateRollsBackWhenAuditCannotBeWritten(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rule := validTestRule()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO risk_rules`).
+		WithArgs(rule.Code, rule.Name, rule.Description, sqlmock.AnyArg(), rule.CountStrategy, rule.Enabled, rule.WindowSeconds, rule.Threshold, rule.Score, rule.RiskLevel, rule.Action, 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "code", "name", "description", "event_types", "count_strategy", "enabled", "window_seconds", "threshold", "score", "risk_level", "action", "revision"}).
+			AddRow(17, rule.Code, rule.Name, rule.Description, `["login_failure"]`, rule.CountStrategy, true, 300, 5, 80, "high", "review", 1))
+	mock.ExpectExec(`INSERT INTO risk_audit_logs`).WillReturnError(errors.New("audit unavailable"))
+	mock.ExpectRollback()
+
+	if _, err := NewSQLRepository(db).CreateRuleWithAudit(context.Background(), rule, 7, "上线前验证"); err == nil || !strings.Contains(err.Error(), "audit unavailable") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLRuleUpdateRollsBackWhenAuditCannotBeWritten(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	before := validTestRule()
+	before.ID, before.Revision = 17, 1
+	update := before
+	update.Threshold = 8
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE risk_rules`).
+		WithArgs(before.Code, update.Name, update.Description, sqlmock.AnyArg(), update.CountStrategy, update.Enabled, update.WindowSeconds, update.Threshold, update.Score, update.RiskLevel, update.Action, 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "code", "name", "description", "event_types", "count_strategy", "enabled", "window_seconds", "threshold", "score", "risk_level", "action", "revision"}).
+			AddRow(17, before.Code, update.Name, update.Description, `["login_failure"]`, update.CountStrategy, true, 300, 8, 80, "high", "review", 2))
+	mock.ExpectExec(`INSERT INTO risk_audit_logs`).WillReturnError(errors.New("audit unavailable"))
+	mock.ExpectRollback()
+
+	if _, err := NewSQLRepository(db).UpdateRuleWithAudit(context.Background(), before.Code, 1, update, before, 7, "调整阈值"); err == nil || !strings.Contains(err.Error(), "audit unavailable") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

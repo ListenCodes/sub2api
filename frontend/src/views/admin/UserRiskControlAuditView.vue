@@ -88,7 +88,7 @@ const router = inject(routerKey, null)
 const records = ref<RiskAuditRecord[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(getPersistedPageSize(20))
+const pageSize = ref(responsivePageSize(getPersistedPageSize(20)))
 const loading = ref(true)
 const error = ref('')
 const sortBy = ref<AuditFilters['sortBy']>()
@@ -168,7 +168,7 @@ function restoreRouteState() {
   })
   Object.assign(activeFilters, draft)
   page.value = positiveInteger(queryText('page'), 1)
-  pageSize.value = positiveInteger(queryText('page_size'), getPersistedPageSize(20))
+	pageSize.value = responsivePageSize(positiveInteger(queryText('page_size'), getPersistedPageSize(20)))
   sortBy.value = ['created_at', 'result', 'target'].includes(nextSort) ? nextSort as NonNullable<AuditFilters['sortBy']> : undefined
   sortOrder.value = queryText('sort_order') === 'asc' ? 'asc' : 'desc'
 }
@@ -244,7 +244,9 @@ async function setMobileSort(value: string | number | boolean | null) {
 }
 async function resetFilters() { Object.assign(draft, { action: '', targetUserId: undefined, target: '', actor: '', result: '', from: '', to: '' }); await runFiltersNow() }
 async function changePage(next: number) { page.value = next; await syncRouteState(); await loadAudit() }
-async function changePageSize(next: number) { pageSize.value = next; page.value = 1; await syncRouteState(); await loadAudit() }
+async function changePageSize(next: number) { pageSize.value = responsivePageSize(next); page.value = 1; await syncRouteState(); await loadAudit() }
+function isNarrowViewport() { return typeof window !== 'undefined' && window.innerWidth > 0 && window.innerWidth < 768 }
+function responsivePageSize(value: number) { return isNarrowViewport() ? Math.min(value, 20) : value }
 async function handleTableSort(key: string, order: 'asc' | 'desc') {
   const next = ({ time: 'created_at', target: 'target', result: 'result' } as const)[key as 'time' | 'target' | 'result']
   if (!next) return

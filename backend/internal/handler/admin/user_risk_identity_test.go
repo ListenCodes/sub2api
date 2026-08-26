@@ -133,6 +133,37 @@ func TestProxyUserRiskIdentityReusesHashedAuditKeyWithinOneViewSession(t *testin
 	}
 }
 
+func TestProxyUserRiskIdentityDoesNotDiscloseSensitiveBodyWhenAuditFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/admin/users/9/identity-summary":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"user_id":9,"sensitive_marker":"must-not-leak"}`))
+		case "/api/v1/internal/audit":
+			writer.WriteHeader(http.StatusInternalServerError)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("RISK_CONTROL_URL", upstream.URL)
+	t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "identity-audit-failure-secret")
+
+	handler := &CustomUserHandler{riskControlClient: service.NewRiskControlClientFromEnv()}
+	engine := gin.New()
+	engine.GET("/admin/users/:id/:section", func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
+		handler.ProxyUserRiskIdentity(c)
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/users/9/identity-summary", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable || bytes.Contains(recorder.Body.Bytes(), []byte("must-not-leak")) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestProxyRiskWorkOverviewReturnsOneServerAggregate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/api/v1/admin/work-overview" {

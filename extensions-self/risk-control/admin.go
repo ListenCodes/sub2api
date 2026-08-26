@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,11 @@ import (
 	"strings"
 	"time"
 )
+
+type auditedRuleRepository interface {
+	CreateRuleWithAudit(context.Context, Rule, int64, string) (Rule, error)
+	UpdateRuleWithAudit(context.Context, string, int, Rule, Rule, int64, string) (Rule, error)
+}
 
 func (s *HTTPServer) handleOverview(w http.ResponseWriter, r *http.Request) {
 	overview, err := s.service.repo.Overview(r.Context(), time.Now().UTC().Add(-24*time.Hour))
@@ -210,18 +216,18 @@ func (s *HTTPServer) handleRuleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("retired V1 rule code is reserved"))
 		return
 	}
-	created, err := s.service.repo.CreateRule(r.Context(), input.Rule)
+	actor, _ := actorID(r)
+	repo, ok := s.service.repo.(auditedRuleRepository)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("atomic rule audit is unavailable"))
+		return
+	}
+	created, err := repo.CreateRuleWithAudit(r.Context(), input.Rule, actor, input.Reason)
 	if errors.Is(err, ErrRuleCodeConflict) {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	actor, _ := actorID(r)
-	after := eventRuleSnapshot(created)
-	if err := s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "create_rule", TargetType: "rule", TargetID: created.Code, Result: "success", Reason: input.Reason, Metadata: map[string]any{"revision": created.Revision, "before": map[string]any{}, "after": after, "diff": ruleFieldDiff(map[string]any{}, after)}}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -294,7 +300,13 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 			return
 		}
 	}
-	updated, err := s.service.repo.UpdateRule(r.Context(), code, input.Revision, input.Rule)
+	actor, _ := actorID(r)
+	repo, ok := s.service.repo.(auditedRuleRepository)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("atomic rule audit is unavailable"))
+		return
+	}
+	updated, err := repo.UpdateRuleWithAudit(r.Context(), code, input.Revision, input.Rule, current, actor, input.Reason)
 	if errors.Is(err, ErrRuleRevisionConflict) {
 		writeError(w, http.StatusConflict, err)
 		return
@@ -303,9 +315,6 @@ func (s *HTTPServer) handleRuleUpdate(w http.ResponseWriter, r *http.Request, co
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	actor, _ := actorID(r)
-	before, after := eventRuleSnapshot(current), eventRuleSnapshot(updated)
-	_ = s.service.RecordAudit(r.Context(), AuditReport{ActorID: actor, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Reason: input.Reason, Metadata: map[string]any{"revision": updated.Revision, "before": before, "after": after, "diff": ruleFieldDiff(before, after)}})
 	writeJSON(w, http.StatusOK, map[string]any{"id": updated.ID, "revision": updated.Revision})
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,13 +56,16 @@ func (h *CustomUserHandler) ProxyUserRiskIdentity(c *gin.Context) {
 	}
 	body, status, err := h.proxyRiskIdentity(c, method, path, requestBody)
 	if err != nil {
-		h.recordIdentityDetailAudit(c, userID, section, http.StatusServiceUnavailable)
+		_ = h.recordIdentityDetailAudit(c, userID, section, http.StatusServiceUnavailable)
 		return
 	}
 	if section == "associated-users" && status >= 200 && status < 300 {
 		body = h.enrichAssociatedUsers(c.Request.Context(), body)
 	}
-	h.recordIdentityDetailAudit(c, userID, section, status)
+	if auditErr := h.recordIdentityDetailAudit(c, userID, section, status); auditErr != nil && status >= 200 && status < 300 {
+		response.Error(c, http.StatusServiceUnavailable, "Sensitive query audit is unavailable")
+		return
+	}
 	c.Data(status, "application/json", body)
 }
 
@@ -239,15 +243,15 @@ func attachIdentityAccounts(items []map[string]any, users map[int64]map[string]a
 	}
 }
 
-func (h *CustomUserHandler) recordIdentityDetailAudit(c *gin.Context, userID int64, section string, status int) {
+func (h *CustomUserHandler) recordIdentityDetailAudit(c *gin.Context, userID int64, section string, status int) error {
 	if h == nil || h.riskControlClient == nil {
-		return
+		return errors.New("risk control audit service is unavailable")
 	}
 	result := "success"
 	if status < 200 || status >= 300 {
 		result = "failed"
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 	defer cancel()
 	sessionID := strings.TrimSpace(c.GetHeader("X-Risk-View-Session"))
 	if !validRiskViewSession(sessionID) {
@@ -255,7 +259,7 @@ func (h *CustomUserHandler) recordIdentityDetailAudit(c *gin.Context, userID int
 	}
 	actorID := getAdminIDFromContext(c)
 	digest := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s", actorID, userID, sessionID)))
-	_ = h.riskControlClient.ReportAudit(ctx, service.RiskAuditReport{AuditKey: fmt.Sprintf("identity-view:%x", digest), ActorID: actorID, Action: "view_identity_detail", TargetType: "user", TargetID: strconv.FormatInt(userID, 10), Result: result, Metadata: map[string]any{"section": section, "sections": []string{section}}})
+	return h.riskControlClient.ReportAudit(ctx, service.RiskAuditReport{AuditKey: fmt.Sprintf("identity-view:%x", digest), ActorID: actorID, Action: "view_identity_detail", TargetType: "user", TargetID: strconv.FormatInt(userID, 10), Result: result, Metadata: map[string]any{"section": section, "sections": []string{section}}})
 }
 
 func validRiskViewSession(value string) bool {

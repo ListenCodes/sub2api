@@ -50,10 +50,6 @@ func TestApplyIdentityRuleRevisionPublishesAndAuditsInOneTransaction(t *testing.
 		WithArgs(code, 3, "registration_identity", "composite", true, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT DISTINCT user_id FROM risk_identity_signals WHERE rule_code=$1 AND status='active' AND user_id>0`)).
 		WithArgs(code).WillReturnRows(sqlmock.NewRows([]string{"user_id"}))
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE risk_identity_signals SET status='superseded' WHERE rule_code=$1 AND status='active'`)).
-		WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE risk_decisions decision SET status='superseded',current_score=0 WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.rule_code=$1)`)).
-		WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO risk_audit_logs(actor_id,action,target_type,target_id,result,reason,metadata) VALUES($1,$2,'identity_rule',$3,'success',$4,$5)`)).
 		WithArgs(int64(7), "publish_identity_rule", code, "管理员直接发布规则", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM risk_identity_rule_drafts WHERE rule_code=$1`)).
@@ -151,7 +147,7 @@ func TestRollbackIdentityRuleRestoresTargetEnabledState(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO risk_rule_versions`).WithArgs(code, 6, "registration_identity", "composite", false, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT DISTINCT user_id FROM risk_identity_signals`).WithArgs(code).WillReturnRows(sqlmock.NewRows([]string{"user_id"}))
 	mock.ExpectExec(`UPDATE risk_identity_signals SET status='superseded'`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`UPDATE risk_decisions decision SET status='superseded'`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)WITH affected AS .*UPDATE risk_decisions`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO risk_audit_logs`).WithArgs(int64(7), "rollback_identity_rule", code, "管理员直接回滚规则", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`DELETE FROM risk_identity_rule_drafts`).WithArgs(code).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()

@@ -340,6 +340,7 @@ type RiskReviewCase struct {
 	PrimarySignal       string `json:"primary_signal"`
 	EvidenceStrength    string `json:"evidence_strength"`
 	AssigneeID          int64  `json:"assignee_id"`
+	PreviousAssigneeID  int64  `json:"-"`
 	CreatedBy           int64  `json:"created_by"`
 	ReviewDueAt         string `json:"review_due_at,omitempty"`
 	ObservationGoal     string `json:"observation_goal,omitempty"`
@@ -383,6 +384,7 @@ type RebuildResult struct {
 	RuleHits           map[string]int64 `json:"rule_hits"`
 	SampleUserIDs      []int64          `json:"sample_user_ids"`
 	EvidenceHighWater  int64            `json:"evidence_high_water"`
+	LabelHighWater     int64            `json:"label_high_water"`
 	RuleWatermark      map[string]int   `json:"rule_watermark"`
 	ApprovedDryRunID   int64            `json:"approved_dry_run_id,omitempty"`
 	StartedAt          string           `json:"started_at"`

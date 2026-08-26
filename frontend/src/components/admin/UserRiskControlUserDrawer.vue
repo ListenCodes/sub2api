@@ -12,14 +12,14 @@
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ activeUser.case_id ? `${t('admin.userRiskControl.reviewCase')} #${activeUser.case_id}` : '人工复核' }}</h3>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ activeUser.case_id ? t('admin.userRiskControl.reviewFeedbackHint') : isNormalAccount ? '当前无需处置；仅在有额外线索时建立案件。' : '需要人工跟进时，可建立一个待领取案件。' }}</p>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ activeUser.case_id ? t('admin.userRiskControl.reviewFeedbackHint') : isNormalAccount ? '仅在有额外线索时建立案件。' : '需要人工跟进时，可建立一个待领取案件。' }}</p>
               </div>
               <span v-if="activeUser.case_id" class="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-200">{{ caseStatusLabel(currentCaseStatus) }}</span>
             </div>
             <p v-if="caseMessage" class="mt-3 text-sm text-emerald-600 dark:text-emerald-400" role="status">{{ caseMessage }}</p>
             <p v-if="caseActionError" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ caseActionError }}</p>
-			<div v-if="!activeUser.case_id" class="mt-4"><button v-if="!manualCaseOpen" type="button" class="btn btn-secondary" data-testid="open-manual-case" @click="manualCaseOpen = true">建立复核案件</button><div v-else class="space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="建案原因" required :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="create-review-case" :disabled="caseSaving" @click="createCase">建立待领取案件</button><button type="button" class="btn btn-secondary" :disabled="caseSaving" @click="closeManualCase">取消</button></div></div></div>
-			<div v-else-if="currentCaseStatus === 'pending'" class="mt-4"><button type="button" class="btn btn-primary" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">{{ caseSaving ? t('admin.userRiskControl.claimingCase') : t('admin.userRiskControl.claimCase') }}</button></div>
+			<div v-if="!activeUser.case_id" class="mt-4"><button v-if="!manualCaseOpen" type="button" class="btn btn-secondary" data-testid="open-manual-case" @click="manualCaseOpen = true">建立复核案件</button><div v-else class="space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="建案原因" required :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="inline-flex border border-gray-200 p-1 dark:border-dark-700" role="group" aria-label="建案方式"><button type="button" class="px-3 py-2 text-sm font-medium" :class="manualCaseStatus === 'pending' ? 'bg-primary-600 text-white' : 'text-gray-600 dark:text-gray-300'" :aria-pressed="manualCaseStatus === 'pending'" data-testid="manual-case-pending" @click="manualCaseStatus = 'pending'">待领取</button><button type="button" class="px-3 py-2 text-sm font-medium" :class="manualCaseStatus === 'observing' ? 'bg-primary-600 text-white' : 'text-gray-600 dark:text-gray-300'" :aria-pressed="manualCaseStatus === 'observing'" data-testid="manual-case-observing" @click="manualCaseStatus = 'observing'">直接观察</button></div><div v-if="manualCaseStatus === 'observing'" class="grid gap-3 sm:grid-cols-2" data-testid="manual-observation-form"><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" :disabled="caseSaving" /></label><TextArea v-model="observationGoal" data-testid="manual-observation-goal" label="观察目标" required :disabled="caseSaving" /></div><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="create-review-case" :disabled="caseSaving" @click="createCase">{{ manualCaseStatus === 'observing' ? '建案并观察' : '建立待领取案件' }}</button><button type="button" class="btn btn-secondary" :disabled="caseSaving" @click="closeManualCase">取消</button></div></div></div>
+			<div v-else-if="currentCaseStatus === 'pending'" class="mt-4 space-y-3"><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">{{ caseSaving ? t('admin.userRiskControl.claimingCase') : t('admin.userRiskControl.claimCase') }}</button><button type="button" class="btn btn-secondary" data-testid="observe-pending-case" :disabled="caseSaving" @click="observationOpen = true">直接观察</button></div><div v-if="observationOpen" class="grid gap-3 border-t border-gray-200 pt-3 sm:grid-cols-2 dark:border-dark-700" data-testid="pending-observation-form"><TextArea v-model="feedbackReason" class="sm:col-span-2" data-testid="pending-observation-reason" label="转观察原因" required :error="feedbackError" @update:model-value="feedbackError = ''" /><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" :disabled="caseSaving" /></label><TextArea v-model="observationGoal" data-testid="pending-observation-goal" label="观察目标" required :disabled="caseSaving" /><div class="flex flex-wrap gap-2 sm:col-span-2"><button type="button" class="btn btn-primary" data-testid="confirm-observe-pending-case" :disabled="caseSaving" @click="observeCase">确认观察</button><button type="button" class="btn btn-secondary" :disabled="caseSaving" @click="observationOpen = false">取消</button></div></div></div>
 			<div v-else-if="currentCaseStatus === 'observing'" class="mt-4 border-l-2 border-gray-300 pl-3 text-sm dark:border-dark-600"><p><strong>复查时间：</strong>{{ formatDate(activeUser.review_due_at || '') }}</p><p class="mt-1 break-words"><strong>观察目标：</strong>{{ activeUser.observation_goal || '历史案件未记录目标' }}</p><button type="button" class="btn btn-primary mt-3" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">开始复查</button></div>
 			<div v-if="currentCaseStatus === 'in_review' || resolutionRecovery" class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,14rem)_1fr]">
               <div>
@@ -76,7 +76,7 @@ const currentStatus = ref<AccountStatus>(props.user.status), saving = ref(false)
 const currentCaseStatus = ref<RiskCaseStatus | undefined>(props.user.case_status)
 const caseSaving = ref(false), feedback = ref<RiskFeedback>('insufficient_evidence'), feedbackReason = ref(''), feedbackError = ref(''), caseMessage = ref(''), caseActionError = ref('')
 const manualCaseReason = ref(''), manualCaseError = ref('')
-const manualCaseOpen = ref(false), observationOpen = ref(false)
+const manualCaseOpen = ref(false), manualCaseStatus = ref<'pending' | 'observing'>('pending'), observationOpen = ref(false)
 const observationDueAt = ref(defaultObservationDueAt()), observationGoal = ref('')
 const accountAction = ref<'none' | 'disable' | 'restore'>('none')
 const resolutionResult = ref<ResolveRiskCaseResult | null>(null)
@@ -215,9 +215,11 @@ async function claimCase() {
 async function createCase() {
 	if (activeUser.value.case_id || caseSaving.value) return
 	if (!manualCaseReason.value.trim()) { manualCaseError.value = '建案原因不能为空'; return }
+	const observation = manualCaseStatus.value === 'observing' ? observationInput() : undefined
+	if (manualCaseStatus.value === 'observing' && !observation) return
 	caseSaving.value = true; caseMessage.value = ''; caseActionError.value = ''
 	try {
-		const item = await userRiskControlV2API.createReviewCase(activeUser.value.id, manualCaseReason.value, 'pending', 'manual_review', undefined)
+		const item = await userRiskControlV2API.createReviewCase(activeUser.value.id, manualCaseReason.value, manualCaseStatus.value, 'manual_review', observation || undefined)
 		currentCaseStatus.value = item.status
 		const updated = { ...activeUser.value, case_id: item.id, case_status: item.status, processing_status: item.status, review_due_at: item.review_due_at, observation_goal: item.observation_goal, case_revision: item.revision }
 		investigationStack.value[investigationStack.value.length - 1] = updated
@@ -330,7 +332,7 @@ async function reloadPartialCase() {
 }
 function openConfirmation() { if (!accountActionable.value || (currentStatus.value !== 'active' && currentStatus.value !== 'disabled')) return; confirming.value = true; secondaryActionsOpen.value = false; validationError.value = ''; accountActionError.value = ''; reason.value = '' }
 function closeConfirmation() { if (!saving.value) confirming.value = false }
-function closeManualCase() { manualCaseOpen.value = false; manualCaseReason.value = ''; manualCaseError.value = '' }
+function closeManualCase() { manualCaseOpen.value = false; manualCaseStatus.value = 'pending'; manualCaseReason.value = ''; manualCaseError.value = '' }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
 function defaultObservationDueAt() { const due = new Date(Date.now() + 24 * 60 * 60 * 1000); const local = new Date(due.getTime() - due.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 16) }
 function observationInput() {
@@ -339,7 +341,14 @@ function observationInput() {
 	if (!goal || Number.isNaN(due.getTime()) || due.getTime() <= Date.now()) { caseActionError.value = '转入观察必须填写未来复查时间和观察目标'; return null }
 	return { reviewDueAt: due.toISOString(), goal }
 }
-function caseStatusLabel(value?: RiskCaseStatus) { return ({ pending: t('admin.userRiskControl.viewPending'), in_review: t('admin.userRiskControl.viewMine'), observing: t('admin.userRiskControl.viewObserving'), resolved: t('admin.userRiskControl.viewResolved') } as Record<string, string>)[value || ''] || t('admin.userRiskControl.noCases') }
+function caseStatusLabel(value?: RiskCaseStatus) {
+	if (value === 'observing' && activeUser.value.review_due_at) {
+		const remaining = new Date(activeUser.value.review_due_at).getTime() - Date.now()
+		if (Number.isFinite(remaining) && remaining <= 0) return '观察已到期'
+		if (Number.isFinite(remaining) && remaining <= 24 * 60 * 60 * 1000) return '观察即将到期'
+	}
+	return ({ pending: t('admin.userRiskControl.viewPending'), in_review: t('admin.userRiskControl.viewMine'), observing: t('admin.userRiskControl.viewObserving'), resolved: t('admin.userRiskControl.viewResolved') } as Record<string, string>)[value || ''] || t('admin.userRiskControl.noCases')
+}
 function resolutionStepLabel(value?: string) { return ({ success: '已完成', failed: '失败', skipped: '无需执行', not_executed: '未执行', resolved: '已结案', partial: '部分完成' } as Record<string, string>)[value || ''] || '状态未知' }
 let legacyRequest = 0
 async function loadLegacy() {
@@ -399,7 +408,7 @@ function restoreResolutionRecovery() {
 		caseActionError.value = '上次结案请求结果未知，已保留原请求，可直接重试确认。'
 	}
 }
-function resetActiveState() { currentStatus.value = activeUser.value.status; currentCaseStatus.value = activeUser.value.case_status; identityTab.value = 'summary'; secondaryActionsOpen.value = false; confirming.value = false; manualCaseOpen.value = false; observationOpen.value = false; manualCaseReason.value = ''; manualCaseError.value = ''; observationDueAt.value = activeUser.value.review_due_at ? new Date(new Date(activeUser.value.review_due_at).getTime() - new Date(activeUser.value.review_due_at).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : defaultObservationDueAt(); observationGoal.value = activeUser.value.observation_goal || ''; resolutionResult.value = null; resolutionRequestID.value = ''; resolutionRecovery.value = null; accountActionWarning.value = ''; accountActionError.value = ''; restoreResolutionRecovery(); restoreAccountRecovery(); legacyDetail.value = null; legacyError.value = ''; void loadLegacy() }
+function resetActiveState() { currentStatus.value = activeUser.value.status; currentCaseStatus.value = activeUser.value.case_status; identityTab.value = 'summary'; secondaryActionsOpen.value = false; confirming.value = false; manualCaseOpen.value = false; manualCaseStatus.value = 'pending'; observationOpen.value = false; manualCaseReason.value = ''; manualCaseError.value = ''; observationDueAt.value = activeUser.value.review_due_at ? new Date(new Date(activeUser.value.review_due_at).getTime() - new Date(activeUser.value.review_due_at).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : defaultObservationDueAt(); observationGoal.value = activeUser.value.observation_goal || ''; resolutionResult.value = null; resolutionRequestID.value = ''; resolutionRecovery.value = null; accountActionWarning.value = ''; accountActionError.value = ''; restoreResolutionRecovery(); restoreAccountRecovery(); legacyDetail.value = null; legacyError.value = ''; void loadLegacy() }
 function investigateUser(item: AssociatedRiskUser) {
   const account = item.account
   const status: AccountStatus = account?.status === 'active' || account?.status === 'disabled' || account?.status === 'pending' ? account.status : 'pending'

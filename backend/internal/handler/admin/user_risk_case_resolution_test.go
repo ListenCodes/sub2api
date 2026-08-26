@@ -18,11 +18,15 @@ import (
 type riskCaseResolutionAdminStub struct {
 	service.AdminService
 	user        service.User
+	getErr      error
 	updateErr   error
 	updateCalls int
 }
 
 func (s *riskCaseResolutionAdminStub) GetUser(context.Context, int64) (*service.User, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	copy := s.user
 	return &copy, nil
 }
@@ -83,7 +87,7 @@ func TestResolveRiskCaseReturnsStructuredSuccess(t *testing.T) {
 			if body["request_id"] != "resolve-9-attempt-1" || body["expected_revision"] != float64(3) {
 				t.Fatalf("resolve body = %+v", body)
 			}
-			_, _ = writer.Write([]byte(`{"id":9,"status":"resolved","revision":4,"result":"resolved"}`))
+			_, _ = writer.Write([]byte(`{"case":{"id":9,"user_id":42,"status":"resolved","resolution":"legitimate_shared","resolution_reason":"证据显示为正常共享环境","resolution_request_id":"resolve-9-attempt-1","revision":4},"resolved":true,"idempotent_replay":false}`))
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -166,7 +170,7 @@ func TestResolveRiskCaseReportsAccountFailureAfterResolvingCase(t *testing.T) {
 		}
 		if request.URL.Path == "/api/v1/admin/review-cases/9/resolve" {
 			resolveCalls++
-			_, _ = writer.Write([]byte(`{"id":9,"status":"resolved"}`))
+			_, _ = writer.Write([]byte(`{"case":{"id":9,"user_id":42,"status":"resolved","resolution":"confirmed_abuse","resolution_reason":"确认账号存在滥用行为","resolution_request_id":"resolve-9-account-failed","revision":4},"resolved":true,"idempotent_replay":false}`))
 			return
 		}
 		_, _ = writer.Write([]byte(`{"ok":true}`))
@@ -182,6 +186,86 @@ func TestResolveRiskCaseReportsAccountFailureAfterResolvingCase(t *testing.T) {
 	caseStep, _ := data["case"].(map[string]any)
 	if response.Code != http.StatusOK || data["result"] != "partial" || accountStep["result"] != "failed" || accountStep["pending_step"] != "status_confirmation" || caseStep["result"] != "resolved" || resolveCalls != 1 || adminStub.updateCalls != 1 {
 		t.Fatalf("status=%d data=%+v resolve=%d updates=%d", response.Code, data, resolveCalls, adminStub.updateCalls)
+	}
+}
+
+func TestResolveRiskCaseRejectsUnverifiedSuccessResponseBeforeAccountMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed json", body: `{"case":`},
+		{name: "missing contract", body: `{}`},
+		{name: "not resolved", body: `{"case":{"id":9,"user_id":42,"status":"in_review","revision":3},"resolved":false}`},
+		{name: "wrong case", body: `{"case":{"id":10,"user_id":42,"status":"resolved","resolution":"confirmed_abuse","resolution_reason":"确认账号存在滥用行为","resolution_request_id":"resolve-unverified","revision":4},"resolved":true}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestID := "resolve-unverified-" + strings.ReplaceAll(test.name, " ", "-")
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				if request.Method == http.MethodGet {
+					_, _ = writer.Write([]byte(`{"id":9,"user_id":42,"status":"in_review","revision":3}`))
+					return
+				}
+				if request.URL.Path == "/api/v1/admin/review-cases/9/resolve" {
+					_, _ = writer.Write([]byte(strings.ReplaceAll(test.body, "resolve-unverified", requestID)))
+					return
+				}
+				_, _ = writer.Write([]byte(`{"ok":true}`))
+			}))
+			defer upstream.Close()
+			t.Setenv("RISK_CONTROL_URL", upstream.URL)
+			t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "resolve-unverified-secret")
+			adminStub := &riskCaseResolutionAdminStub{user: service.User{ID: 42, Status: service.StatusActive}}
+			handler := &CustomUserHandler{adminService: adminStub, riskControlClient: service.NewRiskControlClientFromEnv()}
+			response := resolveRiskCaseRequest(t, handler, `{"user_id":42,"resolution":"confirmed_abuse","reason":"确认账号存在滥用行为","account_action":"disable","expected_case_revision":3}`, requestID)
+			data := decodeResolveRiskCaseData(t, response)
+			accountStep, _ := data["account"].(map[string]any)
+			caseStep, _ := data["case"].(map[string]any)
+			if response.Code != http.StatusOK || data["result"] != "partial" || data["retryable"] != true || accountStep["result"] != "not_executed" || caseStep["result"] != "partial" || adminStub.updateCalls != 0 {
+				t.Fatalf("status=%d data=%+v updates=%d", response.Code, data, adminStub.updateCalls)
+			}
+		})
+	}
+}
+
+func TestResolveRiskCaseMarksPermanentAccountPolicyErrorsNotRetryable(t *testing.T) {
+	tests := []struct {
+		name      string
+		getErr    error
+		updateErr error
+	}{
+		{name: "admin cannot be disabled", updateErr: service.ErrCannotDisableAdminUser},
+		{name: "user no longer exists", getErr: service.ErrUserNotFound},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestID := "resolve-permanent-" + strings.ReplaceAll(test.name, " ", "-")
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				if request.Method == http.MethodGet {
+					_, _ = writer.Write([]byte(`{"id":9,"user_id":42,"status":"in_review","revision":3}`))
+					return
+				}
+				if request.URL.Path == "/api/v1/admin/review-cases/9/resolve" {
+					_, _ = writer.Write([]byte(strings.ReplaceAll(`{"case":{"id":9,"user_id":42,"status":"resolved","resolution":"confirmed_abuse","resolution_reason":"确认账号存在滥用行为","resolution_request_id":"resolve-permanent","revision":4},"resolved":true}`, "resolve-permanent", requestID)))
+					return
+				}
+				_, _ = writer.Write([]byte(`{"ok":true}`))
+			}))
+			defer upstream.Close()
+			t.Setenv("RISK_CONTROL_URL", upstream.URL)
+			t.Setenv("RISK_CONTROL_INTERNAL_SECRET", "resolve-permanent-secret")
+			adminStub := &riskCaseResolutionAdminStub{user: service.User{ID: 42, Status: service.StatusActive}, getErr: test.getErr, updateErr: test.updateErr}
+			handler := &CustomUserHandler{adminService: adminStub, riskControlClient: service.NewRiskControlClientFromEnv()}
+			response := resolveRiskCaseRequest(t, handler, `{"user_id":42,"resolution":"confirmed_abuse","reason":"确认账号存在滥用行为","account_action":"disable","expected_case_revision":3}`, requestID)
+			data := decodeResolveRiskCaseData(t, response)
+			accountStep, _ := data["account"].(map[string]any)
+			if response.Code != http.StatusOK || data["result"] != "partial" || data["retryable"] != false || accountStep["result"] != "not_executed" || accountStep["retryable"] != false {
+				t.Fatalf("status=%d data=%+v", response.Code, data)
+			}
+		})
 	}
 }
 

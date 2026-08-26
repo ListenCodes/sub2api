@@ -13,7 +13,10 @@ vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
 afterAll(() => { delete config.global.stubs.RouterLink })
-beforeEach(() => window.localStorage.clear())
+beforeEach(() => {
+	window.localStorage.clear()
+	Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
+})
 afterEach(() => {
   vi.useRealTimers()
   vi.clearAllMocks()
@@ -124,6 +127,15 @@ describe('UserRiskControlAuditView', () => {
     await flushPromises()
 		expect(userRiskControlV2API.listAudit).toHaveBeenLastCalledWith({ category: 'disposition', action: '', result: '', page: 1, pageSize: 50 })
   })
+
+	it('caps a persisted large page before the first mobile audit request', async () => {
+		Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+		window.localStorage.setItem('table-page-size', '50')
+		vi.mocked(userRiskControlV2API.listAudit).mockResolvedValue({ items: [], total: 80, page: 1, page_size: 20 })
+		mount(UserRiskControlAuditView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+		expect(userRiskControlV2API.listAudit).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 20 }))
+	})
 
   it('moves to the next audit page using the server total', async () => {
     vi.mocked(userRiskControlV2API.listAudit)

@@ -273,18 +273,28 @@ func (r *SQLIdentityRepository) applyIdentityRuleRevision(ctx context.Context, c
 	if err := userRows.Close(); err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='superseded' WHERE rule_code=$1 AND status='active'`, code); err != nil {
-		return 0, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status='superseded',current_score=0 WHERE decision.status='active' AND EXISTS(SELECT 1 FROM risk_identity_signals signal WHERE signal.decision_id=decision.decision_id AND signal.rule_code=$1)`, code); err != nil {
-		return 0, err
-	}
-	if err := refreshIdentityReviewCases(ctx, tx, userIDs, family); err != nil {
-		return 0, err
-	}
-	for _, userID := range userIDs {
-		if err := refreshIdentityUserSummary(ctx, tx, userID); err != nil {
+	if !enabled {
+		if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals SET status='superseded',resolved_by_shared_network=FALSE WHERE rule_code=$1 AND (status='active' OR resolved_by_shared_network)`, code); err != nil {
 			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `WITH affected AS (
+ SELECT DISTINCT decision_id FROM risk_identity_signals WHERE rule_code=$1 AND COALESCE(decision_id,'')<>''
+), decision_state AS (
+ SELECT affected.decision_id,COALESCE(MAX(signal.score) FILTER(WHERE signal.status='active'),0)::int current_score
+ FROM affected LEFT JOIN risk_identity_signals signal ON signal.decision_id=affected.decision_id
+ GROUP BY affected.decision_id
+)
+UPDATE risk_decisions decision SET status=CASE WHEN state.current_score>0 THEN 'active' ELSE 'superseded' END,current_score=state.current_score
+FROM decision_state state WHERE decision.decision_id=state.decision_id`, code); err != nil {
+			return 0, err
+		}
+		if err := refreshIdentityReviewCases(ctx, tx, userIDs, family); err != nil {
+			return 0, err
+		}
+		for _, userID := range userIDs {
+			if err := refreshIdentityUserSummary(ctx, tx, userID); err != nil {
+				return 0, err
+			}
 		}
 	}
 	before := map[string]any{"revision": revision, "enabled": currentEnabled, "window_seconds": currentWindow, "threshold": currentThreshold, "score": currentScore, "configured_action": currentAction}

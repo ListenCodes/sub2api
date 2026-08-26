@@ -198,10 +198,25 @@ describe('UserRiskControlUsersView', () => {
 		expect(wrapper.text()).toContain('当前风险')
 		expect(wrapper.text()).toContain('主信号')
 		expect(wrapper.text()).toContain('案件状态')
-		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'accountStatus', 'evaluation', 'riskScore', 'riskType', 'lastEvent', 'processing'])
+		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'accountStatus', 'evaluation', 'riskScore', 'riskType', 'lastEvent', 'processing', 'actions'])
 		expect(wrapper.text()).toContain('评估完整')
 		expect(wrapper.text()).not.toContain('203.0.113.0/24')
+		expect(wrapper.get('[data-testid="view-user-risk-7"]').attributes('aria-label')).toContain('alice@example.com')
+		expect(wrapper.get('[data-testid="risk-users-table"]').text()).toContain('暂无风险记录')
   })
+
+	it('does not present unavailable identity evidence as a safe account', async () => {
+		vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 8, username: 'Missing', email: 'missing@example.com', status: 'disabled', risk_score: null, risk_level: null, risk_type: null, account_availability: 'unavailable', identity: { user_id: 8, latest_ip: '', country_code: '', region: '', browser_instance_count: 0, api_client_count: 0, associated_account_count: 0, active_signal_count: 0, active_rule_count: 0, quality_state: 'not_evaluable' } }], total: 1, page: 1, page_size: 20 })
+
+		const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
+		await flushPromises()
+
+		const table = wrapper.get('[data-testid="risk-users-table"]')
+		expect(table.text()).toContain('风险不可评估')
+		expect(table.text()).toContain('风险证据不可用')
+		expect(table.text()).not.toContain('暂无评分')
+		expect(table.text()).not.toContain('暂无风险记录')
+	})
 
   it('resets to the first page when the page size changes', async () => {
     vi.mocked(userRiskControlV2API.listUsers).mockResolvedValue({ items: [{ id: 7, username: 'Alice', email: 'alice@example.com', status: 'active' }], total: 80, page: 1, page_size: 20 })
@@ -249,7 +264,7 @@ describe('UserRiskControlUsersView', () => {
     const wrapper = mount(UserRiskControlUsersView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true } } })
     await flushPromises()
 
-		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'accountStatus', 'evaluation', 'riskScore', 'riskType', 'lastEvent', 'processing'])
+		expect(wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)).toEqual(['select', 'account', 'accountStatus', 'evaluation', 'riskScore', 'riskType', 'lastEvent', 'processing', 'actions'])
     wrapper.getComponent(Pagination).vm.$emit('update:pageSize', 50)
     await flushPromises()
     expect(userRiskControlV2API.listUsers).toHaveBeenLastCalledWith(expect.objectContaining({ pageSize: 50 }))

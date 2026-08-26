@@ -81,7 +81,7 @@
 
     <section v-else-if="activeTab === 'associated'" class="py-4">
         <div v-if="associatedItems.length" class="divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-700">
-			<article v-for="item in associatedItems" :key="item.user_id" class="py-3" :data-testid="`associated-relation-${item.user_id}`"><div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div class="min-w-0"><button type="button" class="break-all text-left text-sm font-semibold text-primary-700 hover:underline dark:text-primary-300" :data-testid="`associated-user-${item.user_id}`" @click="emit('investigate', item)">{{ item.account?.email || `账号 #${item.user_id}` }}</button><p class="mt-1 text-xs text-gray-500"><span v-if="item.account?.username">{{ item.account.username }} · </span>{{ accountAvailabilityLabel(item) }}</p></div><span class="shrink-0 text-xs font-medium" :class="item.concurrent ? 'text-gray-700 dark:text-gray-200' : 'text-amber-700 dark:text-amber-300'">{{ item.concurrent ? `${relationLabel(item.relation)} · ${evidenceStrengthLabel(item.evidence_strength)}证据` : '历史弱关联 · 不参与当前判断' }}</span></div><p class="mt-2 text-xs text-gray-600 dark:text-gray-300">关联依据：{{ associationEvidence(item) }}</p><p v-if="associationTime(item)" class="mt-1 text-xs text-gray-500">{{ associationTime(item) }}</p><p class="mt-1 text-xs" :class="item.concurrent ? 'text-gray-500' : 'text-amber-700 dark:text-amber-300'">{{ associationGuidance(item) }}</p></article>
+			<article v-for="item in associatedItems" :key="item.user_id" class="py-3" :data-testid="`associated-relation-${item.user_id}`"><div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div class="min-w-0"><button type="button" class="break-all text-left text-sm font-semibold text-primary-700 hover:underline dark:text-primary-300" :data-testid="`associated-user-${item.user_id}`" @click="emit('investigate', item)">{{ item.account?.email || `账号 #${item.user_id}` }}</button><p class="mt-1 text-xs text-gray-500"><span v-if="item.account?.username">{{ item.account.username }} · </span>{{ accountAvailabilityLabel(item) }}</p></div><span class="shrink-0 text-xs font-medium" :class="item.concurrent ? 'text-gray-700 dark:text-gray-200' : 'text-amber-700 dark:text-amber-300'">{{ item.concurrent ? `${relationLabel(item.relation)} · ${evidenceStrengthLabel(item.evidence_strength)}证据` : '历史弱关联 · 不参与当前判断' }}</span></div><p class="mt-2 text-xs text-gray-600 dark:text-gray-300">关联依据：{{ associationEvidence(item) }}</p><p v-if="associationTime(item)" class="mt-1 text-xs text-gray-500">{{ associationTime(item) }}</p><p v-for="limitation in associationLimitations(item)" :key="limitation" class="mt-1 text-xs text-amber-700 dark:text-amber-300">局限：{{ limitation }}</p><p class="mt-1 text-xs" :class="item.concurrent ? 'text-gray-500' : 'text-amber-700 dark:text-amber-300'">{{ associationGuidance(item) }}</p></article>
         </div><p v-else class="py-8 text-center text-sm text-gray-500">{{ t('admin.userRiskControl.drawer.noAssociated') }}</p>
         <Pagination v-if="associatedTotal" :page="states.associated.page" :total="associatedTotal" :page-size="states.associated.pageSize" :show-page-size-selector="false" @update:page="changePage('associated', $event)" />
       </section>
@@ -91,7 +91,7 @@
 			<div class="border-y border-gray-200 py-3 text-sm dark:border-dark-700"><p class="font-mono font-medium text-gray-900 dark:text-white">{{ labelTarget.ip }}</p><p class="mt-1 text-xs text-gray-500">关联 {{ labelTarget.associated_account_count }} 个账号 · 当前 {{ networkLabelName(labelTarget.network_label) }}</p></div>
 			<div><label class="input-label">网络类型</label><Select v-model="labelDraft" :options="networkLabelOptions" :disabled="labelSaving" data-testid="network-label-select" @update:model-value="resetLabelPreview" /></div>
 			<TextArea v-model="labelReason" label="判断原因" required data-testid="network-label-reason" :error="labelError" @update:model-value="labelError = ''" />
-			<div v-if="labelPreview" class="border-y border-gray-200 py-3 text-sm dark:border-dark-700" data-testid="network-label-impact"><p class="font-medium text-gray-900 dark:text-white">影响 {{ labelPreview.affected_account_count }} 个账号、{{ labelPreview.affected_signal_count }} 条当前信号、{{ labelPreview.affected_decision_count }} 个决策</p><p class="mt-1 text-xs text-gray-500">{{ labelRevokePreview ? '撤销后既有已消解信号不会自动恢复，需完成历史回放后再据结果处置账号。' : labelPreview.resolved_domains.length ? `将消解 ${labelPreview.resolved_domains.join('、')} 风险；账号状态不会改变。` : '仅记录分类，不自动改变风险信号或账号状态。' }}</p><p v-if="labelPreview.requires_rebuild" class="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">此操作需要后续历史回放。</p></div>
+			<div v-if="labelPreview" class="border-y border-gray-200 py-3 text-sm dark:border-dark-700" data-testid="network-label-impact"><p class="font-medium text-gray-900 dark:text-white">影响 {{ labelPreview.affected_account_count }} 个账号、{{ labelPreview.affected_signal_count }} 条当前信号、{{ labelPreview.affected_decision_count }} 个决策</p><p class="mt-1 text-xs text-gray-500">{{ networkLabelImpactDescription() }}</p><p v-if="labelPreview.requires_rebuild" class="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">需完成一次历史回放，以补齐旧版本未留存的标签期活动。</p></div>
 			<p v-if="labelActionError" class="text-sm text-red-600 dark:text-red-300">{{ labelActionError }}</p>
 		</div>
 		<template #footer><button v-if="labelTarget?.network_label && !labelRevokePreview" type="button" class="btn btn-danger" data-testid="preview-revoke-network-label" :disabled="labelSaving" @click="previewNetworkLabelRevoke">预览撤销</button><button v-if="labelTarget?.network_label && labelRevokePreview" type="button" class="btn btn-danger" data-testid="confirm-revoke-network-label" :disabled="labelSaving" @click="revokeNetworkLabel">确认撤销</button><span class="flex-1" /><button type="button" class="btn btn-secondary" @click="closeNetworkLabel">取消</button><button v-if="!labelPreview || labelRevokePreview" type="button" class="btn btn-secondary" data-testid="preview-network-label" :disabled="labelSaving" @click="previewNetworkLabel">预览应用</button><button v-else type="button" class="btn btn-primary" data-testid="apply-network-label" :disabled="labelSaving" @click="applyNetworkLabel">确认应用</button></template>
@@ -170,6 +170,32 @@ function deviceRiskEvidence(kind: DeviceIdentity['identity_kind']) { return kind
 function associationEvidence(item: AssociatedRiskUser) { const parts = [[item.shared_network_count, '共享公网 IP'], [item.shared_browser_instance_count, '共享浏览器实例'], [item.shared_api_client_count, 'API 客户端'], [item.cooccurring_evidence_count, '同期综合证据']] as Array<[number, string]>; return parts.filter(([count]) => count > 0).map(([count, label]) => `${label} ${count} 次`).join(' · ') || '未返回可复核证据' }
 function associationTime(item: AssociatedRiskUser) { const parts: string[] = []; if (item.overlap_start && item.overlap_end) parts.push(`${item.concurrent ? '同期范围' : '记录范围'}：${formatDate(item.overlap_start)} 至 ${formatDate(item.overlap_end)}`); if (item.evidence_window_seconds > 0) parts.push(`判定窗口 ${formatEvidenceWindow(item.evidence_window_seconds)}`); return parts.join(' · ') }
 function associationGuidance(item: AssociatedRiskUser) { if (item.concurrent) return '存在真实同期证据，仍需结合账号行为人工判断。'; if (item.shared_network_count > 0 && !item.shared_browser_instance_count && !item.shared_api_client_count) return '仅共享公网 IP，可能来自家庭、公司、学校或代理等共享环境。'; if (item.shared_browser_instance_count > 0) return '没有同期证据，且浏览器实例可能由多人共享，仅供排查。'; return '没有同期证据，仅供排查，不会直接触发账号处置。' }
+function associationLimitations(item: AssociatedRiskUser) {
+	const labels: Record<string, string> = {
+		ip_only: '仅共享公网 IP 属于弱证据，不能单独证明账号由同一主体控制。',
+		ip_only_is_weak_evidence: '仅共享公网 IP 属于弱证据，不能单独证明账号由同一主体控制。',
+		shared_network_possible: '家庭、公司、学校、代理或移动网络可能由多人共享。',
+		historical_relationship_not_proof_of_concurrency: '历史关联不代表账号在同一时间段并发活动。',
+		browser_instance_can_be_shared: '浏览器实例可能被多人或共享设备共同使用。',
+		api_client_is_observation_only: 'API 客户端关联只用于观察，不参与自动处置。',
+		daily_aggregate_has_no_event_ids: '日聚合证据无法定位到单个原始事件。',
+		shared_context_requires_manual_review: '共享身份环境仍需结合账号行为人工复核。',
+	}
+	const values = new Set<string>()
+	let unknown = false
+	for (const limitation of item.limitations || []) {
+		if (labels[limitation]) values.add(labels[limitation])
+		else unknown = true
+	}
+	if (unknown) values.add('存在未识别的证据限制，请人工复核。')
+	return [...values]
+}
+function networkLabelImpactDescription() {
+	if (!labelPreview.value) return ''
+	if (labelRevokePreview.value || labelPreview.value.requires_rebuild) return '已记录的消解信号会立即按当前规则恢复；旧版本曾未留存的标签期活动需要历史回放补齐。'
+	if (labelPreview.value.resolved_domains.length) return `将消解 ${labelPreview.value.resolved_domains.join('、')} 风险；账号状态不会改变。`
+	return '仅记录分类，不自动改变风险信号或账号状态。'
+}
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
 function formatEvidenceWindow(seconds: number) { if (seconds >= 86400 && seconds % 86400 === 0) return `${seconds / 86400} 天`; if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} 小时`; if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} 分钟`; return `${seconds || 0} 秒` }
 function coverage(valid = 0, total = 0) { return total > 0 ? `${Math.round(valid * 100 / total)}% (${valid}/${total})` : '-' }

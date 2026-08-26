@@ -362,6 +362,37 @@ func (r *MemoryRepository) UpdateRule(_ context.Context, code string, expectedRe
 	return update, nil
 }
 
+func (r *MemoryRepository) CreateRuleWithAudit(_ context.Context, rule Rule, actorID int64, reason string) (Rule, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.rules[rule.Code]; exists {
+		return Rule{}, ErrRuleCodeConflict
+	}
+	rule.ID = r.nextRuleID
+	r.nextRuleID++
+	rule.Revision = 1
+	rule.CountStrategy = normalizeCountStrategy(rule.CountStrategy)
+	after := eventRuleSnapshot(rule)
+	r.appendAuditLocked(AuditRecord{ActorID: actorID, Action: "create_rule", TargetType: "rule", TargetID: rule.Code, Result: "success", Reason: strings.TrimSpace(reason), Metadata: map[string]any{"revision": rule.Revision, "before": map[string]any{}, "after": after, "diff": ruleFieldDiff(map[string]any{}, after)}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	r.rules[rule.Code] = rule
+	return rule, nil
+}
+
+func (r *MemoryRepository) UpdateRuleWithAudit(_ context.Context, code string, expectedRevision int, update Rule, before Rule, actorID int64, reason string) (Rule, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.rules[code]
+	if !ok || current.Revision != expectedRevision {
+		return Rule{}, ErrRuleRevisionConflict
+	}
+	update.ID, update.Code, update.Revision = current.ID, code, current.Revision+1
+	update.CountStrategy = normalizeCountStrategy(update.CountStrategy)
+	beforeSnapshot, afterSnapshot := eventRuleSnapshot(before), eventRuleSnapshot(update)
+	r.appendAuditLocked(AuditRecord{ActorID: actorID, Action: "update_rule", TargetType: "rule", TargetID: code, Result: "success", Reason: strings.TrimSpace(reason), Metadata: map[string]any{"revision": update.Revision, "before": beforeSnapshot, "after": afterSnapshot, "diff": ruleFieldDiff(beforeSnapshot, afterSnapshot)}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	r.rules[code] = update
+	return update, nil
+}
+
 func (r *MemoryRepository) UpsertSubject(_ context.Context, event EventRecord) error {
 	if event.UserID <= 0 {
 		return nil
@@ -556,6 +587,11 @@ func (r *MemoryRepository) ListEvents(_ context.Context, limit, offset int, user
 func (r *MemoryRepository) InsertAudit(_ context.Context, audit AuditRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.appendAuditLocked(audit)
+	return nil
+}
+
+func (r *MemoryRepository) appendAuditLocked(audit AuditRecord) {
 	enrichAuditRecord(&audit)
 	if audit.AuditKey != "" {
 		if _, exists := r.auditKeys[audit.AuditKey]; exists {
@@ -568,7 +604,7 @@ func (r *MemoryRepository) InsertAudit(_ context.Context, audit AuditRecord) err
 					break
 				}
 			}
-			return nil
+			return
 		}
 		r.auditKeys[audit.AuditKey] = struct{}{}
 	}
@@ -577,7 +613,6 @@ func (r *MemoryRepository) InsertAudit(_ context.Context, audit AuditRecord) err
 		r.nextAuditID++
 	}
 	r.audits = append(r.audits, audit)
-	return nil
 }
 
 func mergeAuditMetadata(current, incoming map[string]any) map[string]any {

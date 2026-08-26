@@ -150,7 +150,7 @@ func (r *SQLIdentityRepository) ExpireSignals(ctx context.Context) error {
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT signal.user_id FROM risk_identity_signals signal
 WHERE signal.user_id>0 AND signal.status='active' AND ((signal.active_until IS NOT NULL AND signal.active_until<=NOW()) OR NOT EXISTS(
  SELECT 1 FROM risk_identity_rules rule JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
- WHERE rule.code=signal.rule_code AND rule.revision=signal.rule_revision AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+ WHERE rule.code=signal.rule_code AND rule.enabled AND rule.mode='shadow' AND version.enabled
 ))`)
 	if err != nil {
 		return err
@@ -164,22 +164,37 @@ WHERE signal.user_id>0 AND signal.status='active' AND ((signal.active_until IS N
 		}
 		userIDs = append(userIDs, userID)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_identity_signals signal SET status=CASE WHEN signal.active_until IS NOT NULL AND signal.active_until<=NOW() THEN 'expired' ELSE 'superseded' END
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE identity_expired_decisions ON COMMIT DROP AS WITH changed AS (
+ UPDATE risk_identity_signals signal SET status=CASE WHEN signal.active_until IS NOT NULL AND signal.active_until<=NOW() THEN 'expired' ELSE 'superseded' END
 WHERE signal.status='active' AND ((signal.active_until IS NOT NULL AND signal.active_until<=NOW()) OR NOT EXISTS(
  SELECT 1 FROM risk_identity_rules rule JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
- WHERE rule.code=signal.rule_code AND rule.revision=signal.rule_revision AND rule.enabled AND rule.mode='shadow' AND rule.active_from<=NOW() AND (rule.active_until IS NULL OR rule.active_until>NOW()) AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
-))`); err != nil {
+ WHERE rule.code=signal.rule_code AND rule.enabled AND rule.mode='shadow' AND version.enabled
+ )) RETURNING decision_id
+)
+ SELECT DISTINCT decision_id FROM changed WHERE COALESCE(decision_id,'')<>''
+`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE risk_decisions decision SET status=signal.status,current_score=0 FROM risk_identity_signals signal WHERE decision.decision_id=signal.decision_id AND decision.status='active' AND signal.status IN ('expired','superseded')`); err != nil {
+	if _, err := tx.ExecContext(ctx, `WITH decision_state AS (
+ SELECT affected.decision_id,COALESCE(MAX(signal.score) FILTER(WHERE signal.status='active'),0)::int current_score,
+  COALESCE(BOOL_OR(signal.status='superseded'),FALSE) has_superseded
+ FROM identity_expired_decisions affected LEFT JOIN risk_identity_signals signal ON signal.decision_id=affected.decision_id
+ GROUP BY affected.decision_id
+)
+UPDATE risk_decisions decision SET status=CASE WHEN state.current_score>0 THEN 'active' WHEN state.has_superseded THEN 'superseded' ELSE 'expired' END,current_score=state.current_score
+FROM decision_state state WHERE decision.decision_id=state.decision_id`); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE risk_review_cases case_row SET current_score=COALESCE((
-	 SELECT MAX(signal.score) FROM risk_identity_signals signal JOIN risk_identity_rules rule ON rule.code=signal.rule_code AND rule.revision=signal.rule_revision JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
-	 WHERE signal.user_id=case_row.user_id AND signal.signal_family=case_row.signal_family AND signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND version.enabled AND version.active_from<=NOW() AND (version.active_until IS NULL OR version.active_until>NOW())
+	 SELECT MAX(signal.score) FROM risk_identity_signals signal JOIN risk_identity_rules rule ON rule.code=signal.rule_code JOIN risk_rule_versions version ON version.id=signal.rule_version_id AND version.rule_kind='identity' AND version.rule_code=signal.rule_code AND version.revision=signal.rule_revision
+	 WHERE signal.user_id=case_row.user_id AND signal.signal_family=case_row.signal_family AND signal.score>0 AND signal.status='active' AND signal.active_from<=NOW() AND (signal.active_until IS NULL OR signal.active_until>NOW()) AND rule.enabled AND rule.mode='shadow' AND version.enabled
 ),0),updated_at=NOW() WHERE case_row.status IN ('pending','in_review','observing')`); err != nil {
 		return err
 	}

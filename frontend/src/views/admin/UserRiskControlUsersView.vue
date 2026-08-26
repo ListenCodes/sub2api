@@ -89,10 +89,11 @@
 			<template #cell-account="{ row: user }"><div class="min-w-0 max-w-[50vw] text-left sm:max-w-none" :data-testid="`user-row-${user.id}`"><p class="truncate font-medium text-gray-900 dark:text-white" :title="user.email || user.username || `用户 #${user.id}`" :data-testid="`account-primary-${user.id}`">{{ user.email || user.username || `用户 #${user.id}` }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :data-testid="`account-secondary-${user.id}`"><span v-if="user.username">{{ user.username }} · </span>#{{ user.id }}</p></div></template>
 			<template #cell-accountStatus="{ row: user }"><span class="font-medium">{{ formatAccountStatus(user.status) }}</span></template>
 			<template #cell-evaluation="{ row: user }"><span>{{ evaluationCoverageLabel(user) }}</span><span v-if="user.identity" class="mt-1 block text-xs text-gray-400">{{ user.identity.active_signal_count == null ? '有效身份信号待同步' : `${user.identity.active_signal_count} 条有效身份信号` }}</span></template>
-			<template #cell-riskType="{ row: user }"><div class="max-w-sm whitespace-normal text-left"><p class="font-medium text-gray-800 dark:text-gray-200">{{ displayReason(user) }}</p><p class="mt-1 text-xs text-gray-400">证据强度：{{ evidenceStrengthLabel(user.evidence_strength) }}</p></div></template>
-			<template #cell-riskScore="{ row: user }"><RiskScoreBadge :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /><span v-if="(user.historical_max_score || 0) > (user.risk_score || 0)" class="mt-1 block text-xs text-gray-400">历史最高 {{ user.historical_max_score }}</span></template>
+			<template #cell-riskType="{ row: user }"><div class="max-w-sm whitespace-normal text-left"><p class="font-medium text-gray-800 dark:text-gray-200">{{ hasCurrentRisk(user) ? displayReason(user) : riskEvidenceUnavailableLabel(user) || '暂无风险记录' }}</p><p v-if="hasCurrentRisk(user)" class="mt-1 text-xs text-gray-400">证据强度：{{ evidenceStrengthLabel(user.evidence_strength) }}</p></div></template>
+			<template #cell-riskScore="{ row: user }"><span v-if="!hasCurrentRisk(user) && riskAssessmentUnavailableLabel(user)" class="inline-flex min-h-6 items-center text-xs font-medium text-amber-700 dark:text-amber-300">{{ riskAssessmentUnavailableLabel(user) }}</span><RiskScoreBadge v-else :score="user.risk_score" :available="user.risk_score !== null && user.risk_score !== undefined && Boolean(user.risk_level)" :explicit-level="user.risk_level" /><span v-if="(user.historical_max_score || 0) > (user.risk_score || 0)" class="mt-1 block text-xs text-gray-400">历史最高 {{ user.historical_max_score }}</span></template>
             <template #cell-lastEvent="{ row: user }">{{ formatDate(user.last_event_at) }}</template>
-			<template #cell-processing="{ row: user }"><span>{{ caseStatusLabel(user.case_status || user.processing_status) }}</span><span v-if="user.assignee_id" class="mt-1 block text-xs text-gray-400">处理人 #{{ user.assignee_id }}</span></template>
+			<template #cell-processing="{ row: user }"><span>{{ caseStatusLabel(user) }}</span><span v-if="user.case_status === 'observing' && user.review_due_at" class="mt-1 block text-xs text-gray-400">{{ formatDate(user.review_due_at) }}</span><span v-if="user.assignee_id" class="mt-1 block text-xs text-gray-400">处理人 #{{ user.assignee_id }}</span></template>
+			<template #cell-actions="{ row: user }"><button type="button" class="btn btn-ghost btn-icon" :aria-label="`查看账号 ${user.email || user.username || user.id} 的风险详情`" title="查看账号风险详情" :data-testid="`view-user-risk-${user.id}`" @click.stop="openUser(user)"><Icon name="eye" size="sm" /></button></template>
             <template #empty><EmptyState :title="t('admin.userRiskControl.empty')" /></template>
           </DataTable>
         </div>
@@ -167,6 +168,7 @@ const columns: Column[] = [
 	{ key: 'riskType', label: '主信号' },
 	{ key: 'lastEvent', label: '最近命中', sortable: true },
 	{ key: 'processing', label: '案件状态' },
+	{ key: 'actions', label: '操作', class: 'w-16 text-center' },
 ]
 
 const caseViews: Array<{ value: RiskCaseView; label: string }> = [
@@ -505,11 +507,28 @@ function toggleSelection(id: number) {
   selectedIds.value = next
 }
 function clearSelection() { selectedIds.value = new Set() }
+function openUser(user: RiskUserRow) { selectedUser.value = user }
 function clearProcessingFilterForQueue() { draft.processingStatus = ''; activeFilters.processingStatus = '' }
+function hasCurrentRisk(user: RiskUserRow) { return Number(user.risk_score || 0) > 0 || Boolean(user.risk_type) }
 function displayReason(user: RiskUserRow) { return user.risk_type?.startsWith('v2_') ? formatIdentitySignal(user.risk_type) : formatRiskReason(user.risk_reason, { eventType: user.risk_type || undefined, count: user.event_count }) }
+function riskAssessmentUnavailableLabel(user: RiskUserRow) {
+	if (user.account_availability && user.account_availability !== 'available') return '风险不可评估'
+	return ({ degraded: '风险数据不完整', not_evaluable: '风险不可评估', paused: '风险评估已暂停', disabled: '风险评估已关闭' } as Record<string, string>)[user.identity?.quality_state || ''] || ''
+}
+function riskEvidenceUnavailableLabel(user: RiskUserRow) {
+	if (user.account_availability && user.account_availability !== 'available') return '风险证据不可用'
+	return ({ degraded: '仅部分风险证据可用', not_evaluable: '风险证据不可用', paused: '质量保护期间不生成新结论', disabled: '身份风险评估当前已关闭' } as Record<string, string>)[user.identity?.quality_state || ''] || ''
+}
 function evidenceStrengthLabel(value?: string) { return ({ observation: '仅观察', weak: '弱', medium_high: '中高', high: '高' } as Record<string, string>)[value || ''] || '未评估' }
 function evaluationCoverageLabel(user: RiskUserRow) { const state = user.identity?.quality_state; return ({ healthy: '评估完整', degraded: '部分覆盖', not_evaluable: '不可评估', paused: '质量保护暂停', disabled: '评估关闭' } as Record<string, string>)[state || ''] || '尚无身份数据' }
-function caseStatusLabel(value?: string | null) { return ({ pending: '待领取', in_review: '处理中', observing: '待复查', resolved: '已结案' } as Record<string, string>)[value || ''] || '无案件' }
+function caseStatusLabel(user: RiskUserRow) {
+	const value = user.case_status || user.processing_status
+	if (value !== 'observing') return ({ pending: '待领取', in_review: '处理中', resolved: '已结案' } as Record<string, string>)[value || ''] || '无案件'
+	if (!user.review_due_at) return '待复查'
+	const remaining = new Date(user.review_due_at).getTime() - Date.now()
+	if (remaining <= 0) return '已到期'
+	return remaining <= 24 * 60 * 60 * 1000 ? '即将到期' : '待复查'
+}
 function formatDate(value?: string | null) { return value ? new Date(value).toLocaleString() : '-' }
 function handleUpdated(updated: RiskUserRow) {
   const index = users.value.findIndex((user) => user.id === updated.id)
