@@ -11,14 +11,14 @@
           <section v-if="identityTab === 'summary'" class="border-t border-gray-200 py-5 dark:border-dark-700" data-testid="review-case-workspace">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ activeUser.case_id ? `${t('admin.userRiskControl.reviewCase')} #${activeUser.case_id}` : '人工复核闭环' }}</h3>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.userRiskControl.reviewFeedbackHint') }}</p>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ activeUser.case_id ? `${t('admin.userRiskControl.reviewCase')} #${activeUser.case_id}` : '人工复核' }}</h3>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ activeUser.case_id ? t('admin.userRiskControl.reviewFeedbackHint') : isNormalAccount ? '当前无需处置；仅在有额外线索时建立案件。' : '需要人工跟进时，可建立一个待领取案件。' }}</p>
               </div>
-              <span class="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-200">{{ caseStatusLabel(currentCaseStatus) }}</span>
+              <span v-if="activeUser.case_id" class="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-200">{{ caseStatusLabel(currentCaseStatus) }}</span>
             </div>
             <p v-if="caseMessage" class="mt-3 text-sm text-emerald-600 dark:text-emerald-400" role="status">{{ caseMessage }}</p>
             <p v-if="caseActionError" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ caseActionError }}</p>
-			<div v-if="!activeUser.case_id" class="mt-4 space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="建案原因" required :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="grid gap-3 sm:grid-cols-2"><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" data-testid="observation-due-at" /></label><TextArea v-model="observationGoal" data-testid="observation-goal" label="观察目标" placeholder="转观察时必填" /></div><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="create-review-case" :disabled="caseSaving" @click="createCase('pending')">人工建案</button><button type="button" class="btn btn-secondary" data-testid="create-observing-case" :disabled="caseSaving" @click="createCase('observing')">转入观察</button></div></div>
+			<div v-if="!activeUser.case_id" class="mt-4"><button v-if="!manualCaseOpen" type="button" class="btn btn-secondary" data-testid="open-manual-case" @click="manualCaseOpen = true">建立复核案件</button><div v-else class="space-y-3"><TextArea v-model="manualCaseReason" data-testid="manual-case-reason" label="建案原因" required :error="manualCaseError" @update:model-value="manualCaseError = ''" /><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary" data-testid="create-review-case" :disabled="caseSaving" @click="createCase">建立待领取案件</button><button type="button" class="btn btn-secondary" :disabled="caseSaving" @click="closeManualCase">取消</button></div></div></div>
 			<div v-else-if="currentCaseStatus === 'pending'" class="mt-4"><button type="button" class="btn btn-primary" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">{{ caseSaving ? t('admin.userRiskControl.claimingCase') : t('admin.userRiskControl.claimCase') }}</button></div>
 			<div v-else-if="currentCaseStatus === 'observing'" class="mt-4 border-l-2 border-gray-300 pl-3 text-sm dark:border-dark-600"><p><strong>复查时间：</strong>{{ formatDate(activeUser.review_due_at || '') }}</p><p class="mt-1 break-words"><strong>观察目标：</strong>{{ activeUser.observation_goal || '历史案件未记录目标' }}</p><button type="button" class="btn btn-primary mt-3" data-testid="claim-review-case" :disabled="caseSaving" @click="claimCase">开始复查</button></div>
 			<div v-if="currentCaseStatus === 'in_review' || resolutionRecovery" class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,14rem)_1fr]">
@@ -28,13 +28,13 @@
 			  </div>
 			  <TextArea v-model="feedbackReason" data-testid="review-feedback-reason" :label="t('admin.userRiskControl.feedbackReason')" required :placeholder="t('admin.userRiskControl.feedbackReasonPlaceholder')" :error="feedbackError" :disabled="resolutionLocked" @update:model-value="feedbackError = ''" />
 			  <div><label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">账号动作</label><Select v-model="accountAction" data-testid="review-account-action" :options="accountActionOptions" :disabled="resolutionLocked" /></div>
-			  <div class="grid gap-3 sm:grid-cols-2"><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" :disabled="resolutionLocked" /></label><TextArea v-model="observationGoal" label="观察目标" :disabled="resolutionLocked" /></div>
               <div class="sm:col-start-2">
                 <button type="button" class="btn btn-primary" data-testid="submit-review-feedback" :disabled="caseSaving || resolutionLocked" @click="submitFeedback">
                   {{ caseSaving ? t('common.saving') : t('admin.userRiskControl.submitFeedback') }}
                 </button>
-				<button type="button" class="btn btn-secondary ml-2" :disabled="caseSaving || resolutionLocked" data-testid="observe-review-case" @click="observeCase">转入观察</button>
+				<button type="button" class="btn btn-secondary ml-2" :disabled="caseSaving || resolutionLocked" data-testid="observe-review-case" @click="observationOpen = true">转入观察</button>
 			</div>
+			<div v-if="observationOpen" class="sm:col-span-2 grid gap-3 border-t border-gray-200 pt-3 sm:grid-cols-2 dark:border-dark-700" data-testid="observation-form"><label class="block text-xs font-medium text-gray-600 dark:text-gray-300">复查时间<input v-model="observationDueAt" type="datetime-local" class="input mt-1 w-full" :disabled="caseSaving" /></label><TextArea v-model="observationGoal" data-testid="observation-goal" label="观察目标" required :disabled="caseSaving" /><div class="flex flex-wrap gap-2 sm:col-span-2"><button type="button" class="btn btn-primary" data-testid="confirm-observe-review-case" :disabled="caseSaving" @click="observeCase">确认转入观察</button><button type="button" class="btn btn-secondary" :disabled="caseSaving" @click="observationOpen = false">取消</button></div></div>
 			<div v-if="resolutionResult || resolutionRecovery" class="mt-4 border border-gray-200 p-3 text-sm dark:border-dark-700" data-testid="resolution-step-results"><template v-if="resolutionResult"><p class="font-medium">完成结果：{{ resolutionResult.result === 'success' ? '全部完成' : '部分完成' }}</p><p class="mt-1">账号：{{ resolutionStepLabel(resolutionResult.account.result) }}<span v-if="resolutionResult.account.failure_reason"> · {{ resolutionResult.account.failure_reason }}</span></p><p class="mt-1">案件：{{ resolutionStepLabel(resolutionResult.case.result || (resolutionResult.result === 'success' ? 'resolved' : 'failed')) }}<span v-if="resolutionResult.case.failure_reason"> · {{ resolutionResult.case.failure_reason }}</span></p></template><p v-else class="font-medium">结案请求结果待确认</p><p v-if="resolutionRecovery && !resolutionResult" class="mt-1 text-gray-600 dark:text-gray-300">已保留原请求，可安全重试确认案件与账号动作。</p><button v-if="resolutionRecovery || resolutionResult?.retryable" type="button" class="btn btn-secondary mt-3" :disabled="caseSaving" data-testid="retry-resolve-case" @click="submitFeedback">重试未完成步骤</button><button v-else-if="resolutionResult?.result === 'partial'" type="button" class="btn btn-secondary mt-3" :disabled="caseSaving" data-testid="reload-review-case" @click="reloadPartialCase">重新加载案件</button></div>
             </div>
           </section>
@@ -76,6 +76,7 @@ const currentStatus = ref<AccountStatus>(props.user.status), saving = ref(false)
 const currentCaseStatus = ref<RiskCaseStatus | undefined>(props.user.case_status)
 const caseSaving = ref(false), feedback = ref<RiskFeedback>('insufficient_evidence'), feedbackReason = ref(''), feedbackError = ref(''), caseMessage = ref(''), caseActionError = ref('')
 const manualCaseReason = ref(''), manualCaseError = ref('')
+const manualCaseOpen = ref(false), observationOpen = ref(false)
 const observationDueAt = ref(defaultObservationDueAt()), observationGoal = ref('')
 const accountAction = ref<'none' | 'disable' | 'restore'>('none')
 const resolutionResult = ref<ResolveRiskCaseResult | null>(null)
@@ -211,23 +212,18 @@ async function claimCase() {
     caseSaving.value = false
   }
 }
-async function createCase(status: 'pending' | 'observing') {
+async function createCase() {
 	if (activeUser.value.case_id || caseSaving.value) return
 	if (!manualCaseReason.value.trim()) { manualCaseError.value = '建案原因不能为空'; return }
 	caseSaving.value = true; caseMessage.value = ''; caseActionError.value = ''
 	try {
-		let observation: { reviewDueAt: string; goal: string } | undefined
-		if (status === 'observing') {
-			const value = observationInput()
-			if (!value) return
-			observation = value
-		}
-		const item = await userRiskControlV2API.createReviewCase(activeUser.value.id, manualCaseReason.value, status, 'manual_review', observation)
+		const item = await userRiskControlV2API.createReviewCase(activeUser.value.id, manualCaseReason.value, 'pending', 'manual_review', undefined)
 		currentCaseStatus.value = item.status
 		const updated = { ...activeUser.value, case_id: item.id, case_status: item.status, processing_status: item.status, review_due_at: item.review_due_at, observation_goal: item.observation_goal, case_revision: item.revision }
 		investigationStack.value[investigationStack.value.length - 1] = updated
 		manualCaseReason.value = ''
-		caseMessage.value = status === 'observing' ? '已转入观察' : '人工案件已建立'
+		manualCaseOpen.value = false
+		caseMessage.value = '人工案件已建立'
 		emit('updated', updated)
 	} catch (error) { caseActionError.value = error instanceof Error ? error.message : '人工建案失败' } finally { caseSaving.value = false }
 }
@@ -238,7 +234,7 @@ async function observeCase() {
 	const observation = observationInput()
 	if (!observation) return
 	caseSaving.value = true; caseMessage.value = ''; caseActionError.value = ''
-	try { const item = await userRiskControlV2API.observeReviewCase(activeUser.value.case_id, observeReason, observation.reviewDueAt, observation.goal, activeUser.value.case_revision || 0); currentCaseStatus.value = 'observing'; const updated = { ...activeUser.value, case_status: 'observing' as const, processing_status: 'observing', review_due_at: item.review_due_at, observation_goal: item.observation_goal, case_revision: item.revision }; investigationStack.value[investigationStack.value.length - 1] = updated; feedbackReason.value = ''; caseMessage.value = '已转入观察'; emit('updated', updated) } catch (error) { caseActionError.value = error instanceof Error ? error.message : '转入观察失败' } finally { caseSaving.value = false }
+	try { const item = await userRiskControlV2API.observeReviewCase(activeUser.value.case_id, observeReason, observation.reviewDueAt, observation.goal, activeUser.value.case_revision || 0); currentCaseStatus.value = 'observing'; observationOpen.value = false; const updated = { ...activeUser.value, case_status: 'observing' as const, processing_status: 'observing', review_due_at: item.review_due_at, observation_goal: item.observation_goal, case_revision: item.revision }; investigationStack.value[investigationStack.value.length - 1] = updated; feedbackReason.value = ''; caseMessage.value = '已转入观察'; emit('updated', updated) } catch (error) { caseActionError.value = error instanceof Error ? error.message : '转入观察失败' } finally { caseSaving.value = false }
 }
 async function submitFeedback() {
 	if (!activeUser.value.case_id || caseSaving.value || (currentCaseStatus.value !== 'in_review' && !resolutionRecovery.value)) return
@@ -334,6 +330,7 @@ async function reloadPartialCase() {
 }
 function openConfirmation() { if (!accountActionable.value || (currentStatus.value !== 'active' && currentStatus.value !== 'disabled')) return; confirming.value = true; secondaryActionsOpen.value = false; validationError.value = ''; accountActionError.value = ''; reason.value = '' }
 function closeConfirmation() { if (!saving.value) confirming.value = false }
+function closeManualCase() { manualCaseOpen.value = false; manualCaseReason.value = ''; manualCaseError.value = '' }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString() : '-' }
 function defaultObservationDueAt() { const due = new Date(Date.now() + 24 * 60 * 60 * 1000); const local = new Date(due.getTime() - due.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 16) }
 function observationInput() {
@@ -402,7 +399,7 @@ function restoreResolutionRecovery() {
 		caseActionError.value = '上次结案请求结果未知，已保留原请求，可直接重试确认。'
 	}
 }
-function resetActiveState() { currentStatus.value = activeUser.value.status; currentCaseStatus.value = activeUser.value.case_status; identityTab.value = 'summary'; secondaryActionsOpen.value = false; confirming.value = false; manualCaseReason.value = ''; manualCaseError.value = ''; observationDueAt.value = activeUser.value.review_due_at ? new Date(new Date(activeUser.value.review_due_at).getTime() - new Date(activeUser.value.review_due_at).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : defaultObservationDueAt(); observationGoal.value = activeUser.value.observation_goal || ''; resolutionResult.value = null; resolutionRequestID.value = ''; resolutionRecovery.value = null; accountActionWarning.value = ''; accountActionError.value = ''; restoreResolutionRecovery(); restoreAccountRecovery(); legacyDetail.value = null; legacyError.value = ''; void loadLegacy() }
+function resetActiveState() { currentStatus.value = activeUser.value.status; currentCaseStatus.value = activeUser.value.case_status; identityTab.value = 'summary'; secondaryActionsOpen.value = false; confirming.value = false; manualCaseOpen.value = false; observationOpen.value = false; manualCaseReason.value = ''; manualCaseError.value = ''; observationDueAt.value = activeUser.value.review_due_at ? new Date(new Date(activeUser.value.review_due_at).getTime() - new Date(activeUser.value.review_due_at).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : defaultObservationDueAt(); observationGoal.value = activeUser.value.observation_goal || ''; resolutionResult.value = null; resolutionRequestID.value = ''; resolutionRecovery.value = null; accountActionWarning.value = ''; accountActionError.value = ''; restoreResolutionRecovery(); restoreAccountRecovery(); legacyDetail.value = null; legacyError.value = ''; void loadLegacy() }
 function investigateUser(item: AssociatedRiskUser) {
   const account = item.account
   const status: AccountStatus = account?.status === 'active' || account?.status === 'disabled' || account?.status === 'pending' ? account.status : 'pending'
