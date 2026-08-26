@@ -135,7 +135,7 @@ describe('UserRiskIdentityDetail', () => {
     expect(wrapper.text()).toContain('admin.userRiskControl.retry')
   })
 
-  it('opens an exact associated account inside the investigation flow and folds technical IDs', async () => {
+  it('opens an exact associated account without exposing internal event IDs', async () => {
     vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({
       items: [{
         user_id: 9, relation: 'composite', shared_network_count: 1, shared_browser_instance_count: 1,
@@ -154,14 +154,14 @@ describe('UserRiskIdentityDetail', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('admin.userRiskControl.drawer.deletedAccount')
-    expect(wrapper.text()).not.toContain('来源事件：101, 102')
+    expect(wrapper.text()).not.toContain('来源事件')
+    expect(wrapper.text()).not.toContain('技术详情')
+    expect(wrapper.text()).not.toContain('API 客户端 0 次')
     expect(wrapper.html()).not.toContain('search=9')
     await wrapper.get('[data-testid="associated-user-9"]').trigger('click')
     expect(wrapper.emitted('investigate')?.[0]?.[0]).toMatchObject({ user_id: 9, evidence_strength: 'high' })
-    await wrapper.get('[data-testid="associated-technical-9"]').trigger('click')
-    expect(wrapper.text()).toContain('来源事件：101, 102')
     expect(wrapper.text()).not.toContain('shared_context_requires_manual_review')
-    expect(wrapper.text()).toContain('共享环境仍需结合业务行为人工复核')
+    expect(wrapper.text()).toContain('存在真实同期证据')
   })
 
   it('shows the actual evidence range and readable limitations even for a historical association', async () => {
@@ -182,11 +182,36 @@ describe('UserRiskIdentityDetail', () => {
     await wrapper.findAll('[role="tab"]')[3].trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('实际证据范围：')
+    expect(wrapper.text()).toContain('记录范围：')
     expect(wrapper.text()).toContain('判定窗口 1 天')
-    expect(wrapper.text()).toContain('仅共享 IP 属于弱证据')
-    expect(wrapper.text()).toContain('共享网络可能由多个无关账号共同使用')
-    expect(wrapper.text()).not.toContain('存在需人工解释的技术限制；存在需人工解释的技术限制')
+    expect(wrapper.text()).toContain('仅共享公网 IP')
+    expect(wrapper.text()).toContain('共享环境')
+  })
+
+  it('omits zero counts, empty time ranges, and empty technical details from a weak historical link', async () => {
+    vi.mocked(userRiskControlV2API.listAssociatedUsers).mockResolvedValue({
+      items: [{
+        user_id: 9, relation: 'ip', shared_network_count: 1, shared_browser_instance_count: 0,
+        shared_api_client_count: 0, shared_device_count: 0, cooccurring_evidence_count: 0,
+        evidence_strength: 'weak', evidence_window_seconds: 0, concurrent: false,
+        first_seen_at: '2026-08-12T00:00:00Z', last_seen_at: '2026-08-12T00:01:00Z',
+        source_event_ids: [], limitations: ['ip_only', 'historical_relationship_not_proof_of_concurrency'],
+        account: { id: 9, email: 'related@example.com', username: 'Related', status: 'active', availability: 'available', deleted: false, created_at: '' },
+      }], total: 1,
+    })
+    const wrapper = mount(UserRiskIdentityDetail, { props: { userId: 7 } })
+    await flushPromises()
+    await wrapper.findAll('[role="tab"]')[3].trigger('click')
+    await flushPromises()
+
+    const relation = wrapper.get('[data-testid="associated-relation-9"]').text()
+    expect(relation).toContain('历史弱关联 · 不参与当前判断')
+    expect(relation).toContain('关联依据：共享公网 IP 1 次')
+    expect(relation).not.toContain('0 次')
+    expect(relation).not.toContain('- 至 -')
+    expect(relation).not.toContain('0 秒')
+    expect(relation).not.toContain('技术详情')
+    expect(relation).not.toContain('来源事件')
   })
 
   it.each([
@@ -221,6 +246,8 @@ describe('UserRiskIdentityDetail', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="risk-conclusion"]').text()).toContain('当前未发现需要处理的风险')
     expect(wrapper.find('[data-testid="primary-risk-signal"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="risk-score-summary"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="risk-domain-summary"]').exists()).toBe(false)
   })
 
   it('never promotes zero-point API observations to the primary risk conclusion', async () => {

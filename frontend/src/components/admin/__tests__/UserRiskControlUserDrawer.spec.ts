@@ -94,6 +94,9 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
 	it('creates a manual review case with a required operator reason', async () => {
 		const wrapper = mountDrawer({ case_id: undefined, case_status: undefined })
 		await flushPromises()
+		expect(wrapper.find('[data-testid="manual-case-reason"]').exists()).toBe(false)
+		expect(wrapper.find('[data-testid="create-observing-case"]').exists()).toBe(false)
+		await wrapper.get('[data-testid="open-manual-case"]').trigger('click')
 		await wrapper.get('[data-testid="create-review-case"]').trigger('click')
 		expect(userRiskControlV2API.createReviewCase).not.toHaveBeenCalled()
 		expect(wrapper.text()).toContain('建案原因不能为空')
@@ -105,6 +108,17 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
 		expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, case_id: 32, case_status: 'pending' })
 	})
 
+	it('keeps the no-case workspace compact for a normal account', async () => {
+		const wrapper = mountDrawer({ case_id: undefined, case_status: undefined, risk_score: 0, risk_level: null, risk_type: null })
+		await flushPromises()
+
+		expect(wrapper.get('[data-testid="review-case-workspace"]').text()).toContain('当前无需处置')
+		expect(wrapper.get('[data-testid="open-manual-case"]').text()).toContain('建立复核案件')
+		expect(wrapper.find('[data-testid="manual-case-reason"]').exists()).toBe(false)
+		expect(wrapper.find('[data-testid="observation-goal"]').exists()).toBe(false)
+		expect(wrapper.find('[data-testid="create-observing-case"]').exists()).toBe(false)
+	})
+
 	it('keeps unclaimed pending cases in the claim-only workflow', async () => {
 		const wrapper = mountDrawer()
 		await flushPromises()
@@ -114,6 +128,21 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
 		expect(wrapper.get('[data-testid="claim-review-case"]').exists()).toBe(true)
 		expect(userRiskControlV2API.observeReviewCase).not.toHaveBeenCalled()
 		expect(userRiskControlV2API.setUserStatus).not.toHaveBeenCalled()
+	})
+
+	it('shows observation fields only after an in-review operator chooses observation', async () => {
+		const wrapper = mountDrawer({ case_status: 'in_review', case_revision: 3 })
+		await flushPromises()
+
+		expect(wrapper.find('[data-testid="observation-form"]').exists()).toBe(false)
+		await wrapper.get('[data-testid="observe-review-case"]').trigger('click')
+		expect(wrapper.get('[data-testid="observation-form"]').exists()).toBe(true)
+		await wrapper.get('[data-testid="review-feedback-reason"] textarea').setValue('等待补充登录行为')
+		await wrapper.get('[data-testid="observation-goal"] textarea').setValue('核对未来 24 小时的登录设备')
+		await wrapper.get('[data-testid="confirm-observe-review-case"]').trigger('click')
+		await flushPromises()
+
+		expect(userRiskControlV2API.observeReviewCase).toHaveBeenCalledWith(31, '等待补充登录行为', expect.any(String), '核对未来 24 小时的登录设备', 3)
 	})
 
   it('requires claim and a reason before recording feedback without enforcing an account action', async () => {
