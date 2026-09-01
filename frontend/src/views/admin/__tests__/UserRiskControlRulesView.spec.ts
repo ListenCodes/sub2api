@@ -29,12 +29,14 @@ vi.mock('@/api/admin/userRiskControlV2', () => ({
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
 enableAutoUnmount(afterEach)
 beforeAll(() => { config.global.stubs.RouterLink = { props: ['to'], template: '<a :href="String(to)"><slot /></a>' } })
+let activeObservationDeadline = ''
 beforeEach(() => {
+	activeObservationDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
 	vi.mocked(userRiskControlV2API.getIdentityHealth).mockResolvedValue({
 		enabled: true,
 		admin_enabled: true,
 		mode: 'shadow',
-		shadow_until: '2026-09-01T00:00:00Z',
+		shadow_until: activeObservationDeadline,
 		schema: 'identity',
 		geo_source: 'cloudflare_verified',
 		domains: { ip: 'healthy', device: 'healthy', composite: 'healthy' },
@@ -249,7 +251,7 @@ describe('UserRiskControlRulesView', () => {
 		const status = wrapper.get('[data-testid="identity-shadow-status"]').text()
 		expect(status).toContain('身份检测已启用；当前实际动作以规则行展示为准')
 		expect(status).toContain('生效检测 2 条')
-		expect(status).toContain('2026-09-01')
+		expect(status).toContain(activeObservationDeadline.slice(0, 10))
 		expect(status).toContain('数据质量正常')
 	})
 
