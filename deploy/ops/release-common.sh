@@ -381,9 +381,11 @@ release_find_integrated_stable_merge() {
     parent_one="${parent_list[1]:-}"
     parent_two="${parent_list[2]:-}"
     relevant=0
-    if [[ "$parent_two" == "$release_commit" ]] \
+    if { [[ "$parent_two" == "$release_commit" ]] \
+        && ! git -C "$repo" merge-base --is-ancestor "$release_commit" "$parent_one"; } \
       || { git -C "$repo" merge-base --is-ancestor "$release_commit" "$merge_commit" \
-        && ! git -C "$repo" merge-base --is-ancestor "$release_commit" "$parent_one"; }; then
+        && ! git -C "$repo" merge-base --is-ancestor "$release_commit" "$parent_one" \
+        && ! git -C "$repo" merge-base --is-ancestor "$release_commit" "$parent_two"; }; then
       relevant=1
     fi
     [[ "$relevant" -eq 1 ]] || continue

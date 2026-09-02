@@ -195,6 +195,12 @@ test('dispatcher selects all two-stage update and rollback executors from ledger
   assert.doesNotMatch(dispatcher, /publish-custom\.sh/, 'dispatcher must not invoke the legacy publisher')
 })
 
+test('Stable merge discovery ignores duplicate merges whose ancestry is already in a parent', () => {
+  const releaseCommon = read('deploy/ops/release-common.sh')
+  assert.match(releaseCommon, /parent_two.*release_commit[\s\S]{0,220}merge-base --is-ancestor "\$release_commit" "\$parent_one"/)
+  assert.match(releaseCommon, /! git -C "\$repo" merge-base --is-ancestor "\$release_commit" "\$parent_two"/)
+})
+
 test('release documentation defines only the administrator-triggered digest path', () => {
   const documentation = [
     'AGENTS.md',
