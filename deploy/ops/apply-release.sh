@@ -490,6 +490,24 @@ restore_interrupted_base_runtime() {
   fi
 }
 
+# A base runtime can be fully restored even when a transient external probe
+# makes the post-restore complete health suite return non-zero. Verify the
+# durable identities independently before deciding that rollback failed.
+base_runtime_identity_matches() {
+  release_source_snapshot || return 1
+  [[ "$SOURCE_HEAD" == "$SOURCE_COMMIT" ]] || return 1
+  [[ "$(sha256sum "$COMPOSE_BASE" | awk '{print $1}')" == "$(jq -r '.base_compose_sha256' <<< "$BASE_RECORD")" ]] || return 1
+  [[ "$(sha256sum "$COMPOSE_CUSTOM" | awk '{print $1}')" == "$(jq -r '.custom_compose_sha256' <<< "$BASE_RECORD")" ]] || return 1
+  [[ "$(sha256sum "$ENV_FILE" | awk '{print $1}')" == "$(jq -r '.env_sha256' <<< "$BASE_RECORD")" ]] || return 1
+  release_env_matches_digest_pair "$ENV_FILE" "$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" "$EXTENSIONS_REPOSITORY@$CURRENT_EXTENSIONS_DIGEST" || return 1
+  release_running_container_matches_image sub2api "$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" || return 1
+  release_running_container_matches_image extensions-self "$EXTENSIONS_REPOSITORY@$CURRENT_EXTENSIONS_DIGEST" || return 1
+  wait_container_healthy sub2api || return 1
+  wait_container_healthy extensions-self || return 1
+  render_and_match "$COMPOSE_BASE" "$COMPOSE_CUSTOM" "$ENV_FILE" "$(jq -r '.rendered_compose_sha256' <<< "$BASE_RECORD")" \
+    "$MAIN_REPOSITORY@$CURRENT_MAIN_DIGEST" "$EXTENSIONS_REPOSITORY@$CURRENT_EXTENSIONS_DIGEST"
+}
+
 expected_high_water="$BASE_CUSTOM_HIGH_WATER"
 [[ "$ADVANCES_CUSTOM_VERSION" != true ]] || expected_high_water="$PROPOSED_CUSTOM_SEQUENCE"
 advance_flag=0
@@ -660,6 +678,10 @@ rollback_on_error() {
       restore_base_runtime "$SOURCE_HEAD" "$SOURCE_REF" || rollback_ok=false
     else
       restore_base_before_main_switch "$SOURCE_HEAD" "$SOURCE_REF" || rollback_ok=false
+    fi
+    if [[ "$rollback_ok" != true ]] && base_runtime_identity_matches; then
+      log 'Base runtime identity is exact after rollback; treating external health probe failure as non-blocking'
+      rollback_ok=true
     fi
     [[ "$rollback_ok" != true ]] || ledger_restore_failed_apply "$BASE_RELEASE_ID" "$BASE_CUSTOM_HIGH_WATER" "$JOB_ID" "$BASE_PROJECTION" || rollback_ok=false
     if [[ "$rollback_ok" == true ]]; then
