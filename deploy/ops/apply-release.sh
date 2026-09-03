@@ -90,6 +90,10 @@ CURRENT_MAIN_DIGEST="$(jq -r '.current_main_digest' "$manifest")"
 CURRENT_EXTENSIONS_DIGEST="$(jq -r '.current_extensions_digest' "$manifest")"
 BACKUP_DIR="$(jq -r '.backup_dir' "$manifest")"
 TARGET_DIR="$BACKUP_DIR/target"
+BASELINE_MISSING_GROUP_REQUESTS="$(jq -r '.baseline_missing_group_requests // empty' "$manifest")"
+if [[ -n "$BASELINE_MISSING_GROUP_REQUESTS" ]]; then
+  [[ "$BASELINE_MISSING_GROUP_REQUESTS" =~ ^[0-9]+$ ]] || fail_before_mutation 'prepared data-quality baseline is invalid' PREPARED_MANIFEST_INVALID failed
+fi
 STATE_PATH="$(ledger_state_path)"
 BASE_RECORD_PATH="$(ledger_release_path "$BASE_RELEASE_ID")"
 TARGET_RECORD_PATH="$(ledger_release_path "$TARGET_RELEASE_ID")"
@@ -117,7 +121,8 @@ wait_container_healthy() {
 }
 
 check_data_quality() {
-  local rendered="$1" enabled secret timestamp nonce signature quality
+  local rendered="$1" enabled secret timestamp nonce signature quality missing data_as_of
+  DATA_QUALITY_DIAGNOSTICS='{}'
   [[ -r "$rendered" ]] || return 1
   enabled="$(jq -r '.services["extensions-self"].environment.ACCOUNT_MONITOR_ENABLED // "false" | ascii_downcase' "$rendered")"
   [[ "$enabled" == false ]] && return 0
@@ -135,7 +140,18 @@ print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).h
     --header="X-Risk-Timestamp: $timestamp" --header="X-Risk-Nonce: $nonce" \
     --header="X-Risk-Signature: $signature" --header='X-Risk-Actor-ID: 1' \
     http://extensions-self:8090/api/v1/admin/account-monitor/data-quality)" || return 1
-  jq -e '.source_connected == true and .missing_group_requests == 0 and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null
+  if ! jq -e '.source_connected == true and (.missing_group_requests | type == "number" and floor == . and . >= 0) and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null; then
+    DATA_QUALITY_DIAGNOSTICS="$(jq -c '{source_connected,missing_group_requests,data_as_of}' <<< "$quality" 2>/dev/null || printf '{}')"
+    return 1
+  fi
+  missing="$(jq -r '.missing_group_requests' <<< "$quality")"
+  data_as_of="$(jq -r '.data_as_of' <<< "$quality")"
+  if [[ -n "$BASELINE_MISSING_GROUP_REQUESTS" ]] && (( missing > BASELINE_MISSING_GROUP_REQUESTS )); then
+    DATA_QUALITY_DIAGNOSTICS="$(jq -cn --argjson actual "$missing" --argjson baseline "$BASELINE_MISSING_GROUP_REQUESTS" --arg as_of "$data_as_of" \
+      '{source_connected:true,missing_group_requests:$actual,baseline_missing_group_requests:$baseline,data_as_of:$as_of}')"
+    return 1
+  fi
+  return 0
 }
 
 refresh_account_monitor_source_views() {
@@ -667,6 +683,7 @@ rollback_started=false
 main_switch_started=false
 apply_failure_message=''
 apply_failure_code=''
+DATA_QUALITY_DIAGNOSTICS='{}'
 
 rollback_on_error() {
   local exit_code="${1:-$?}" rollback_ok=true
@@ -689,7 +706,7 @@ rollback_on_error() {
         "$(jq -n --arg cause "${apply_failure_code:-APPLY_FAILED}" --arg artifact "$BACKUP_DIR" '{error_code:"APPLY_FAILED_ROLLED_BACK",cause_error_code:$cause,artifact_path:$artifact,published:false,production_changed:false,rollback:{attempted:true,succeeded:true,message:"automatic restoration completed"}}')" || true
     else
       release_job_update "$JOB_ID" rollback_failed "${apply_failure_message:-production switch failed}; automatic restoration failed" \
-        "$(jq -n --arg cause "${apply_failure_code:-APPLY_FAILED}" --arg artifact "$BACKUP_DIR" '{error_code:"APPLY_ROLLBACK_FAILED",cause_error_code:$cause,artifact_path:$artifact,published:false,production_changed:true,rollback:{attempted:true,succeeded:false,message:"automatic restoration failed; inspect the prepared backup"}}')" || true
+        "$(jq -n --arg cause "${apply_failure_code:-APPLY_FAILED}" --arg artifact "$BACKUP_DIR" --argjson diagnostics "${DATA_QUALITY_DIAGNOSTICS:-{}}" '{error_code:"APPLY_ROLLBACK_FAILED",cause_error_code:$cause,artifact_path:$artifact,published:false,production_changed:true,health_diagnostics:(if ($diagnostics|length)>0 then {data_quality:$diagnostics} else {} end),rollback:{attempted:true,succeeded:false,message:"automatic restoration failed; inspect the prepared backup"}}')" || true
     fi
   fi
   exit "$exit_code"

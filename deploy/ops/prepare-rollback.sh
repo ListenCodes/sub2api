@@ -52,6 +52,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
+capture_data_quality_baseline() {
+  local rendered="$1" enabled secret timestamp nonce signature quality
+  BASELINE_MISSING_GROUP_REQUESTS=0
+  BASELINE_DATA_AS_OF=''
+  [[ -r "$rendered" ]] || return 1
+  enabled="$(jq -r '.services["extensions-self"].environment.ACCOUNT_MONITOR_ENABLED // "false" | ascii_downcase' "$rendered")"
+  [[ "$enabled" == false ]] && return 0
+  [[ "$enabled" == true ]] || return 1
+  secret="$(jq -r '.services["extensions-self"].environment.RISK_CONTROL_INTERNAL_SECRET // empty' "$rendered")"
+  [[ -n "$secret" ]] || return 1
+  timestamp="$(date +%s)"; nonce="prepare-$JOB_ID-$timestamp"
+  signature="$(MONITOR_SECRET="$secret" MONITOR_TIMESTAMP="$timestamp" MONITOR_NONCE="$nonce" python3 -c '
+import hashlib, hmac, os
+message = (os.environ["MONITOR_TIMESTAMP"] + "\n" + os.environ["MONITOR_NONCE"] + "\n").encode()
+print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).hexdigest())
+')" || return 1
+  quality="$(docker exec extensions-self wget -qO- -T 10 \
+    --header="X-Risk-Timestamp: $timestamp" --header="X-Risk-Nonce: $nonce" \
+    --header="X-Risk-Signature: $signature" --header='X-Risk-Actor-ID: 1' \
+    http://extensions-self:8090/api/v1/admin/account-monitor/data-quality)" || return 1
+  jq -e '.source_connected == true and (.missing_group_requests | type == "number" and floor == . and . >= 0) and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null || return 1
+  BASELINE_MISSING_GROUP_REQUESTS="$(jq -r '.missing_group_requests' <<< "$quality")"
+  BASELINE_DATA_AS_OF="$(jq -r '.data_as_of' <<< "$quality")"
+}
+
 STATE_PATH="$(ledger_state_path)"
 ledger_validate_state "$STATE_PATH" || fail_prepare 'release ledger state is invalid' LEDGER_INCONSISTENT
 BASE_RELEASE_ID="$(jq -r '.current_release_id' "$STATE_PATH")"
@@ -125,6 +150,7 @@ release_create_complete_backup "$BACKUP_DIR" "$JOB_ID" "$LOG" || fail_prepare 'f
 RENDERED="$(mktemp "$DATA_DIR/.rollback-current-$JOB_ID.XXXXXX")"
 release_validate_snapshot_against_record "$BACKUP_DIR/docker-compose.yml" "$BACKUP_DIR/docker-compose.custom.yml" "$BACKUP_DIR/.env" "$RENDERED" "$BASE_RECORD" "$LOG" \
   || fail_prepare 'fresh current snapshot drifted from the ledger' CURRENT_SNAPSHOT_DRIFT
+capture_data_quality_baseline "$RENDERED" || fail_prepare 'production data-quality baseline is unavailable or invalid' DATA_QUALITY_BASELINE_FAILED
 rm -f "$RENDERED"; RENDERED=''
 
 prepared_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -143,13 +169,15 @@ jq -n --arg operation rollback --arg base "$BASE_RELEASE_ID" --arg target "$TARG
   --arg target_base "$(sha256sum "$BACKUP_DIR/target/docker-compose.yml" | awk '{print $1}')" --arg target_custom "$(sha256sum "$BACKUP_DIR/target/docker-compose.custom.yml" | awk '{print $1}')" \
   --arg target_rendered "$(sha256sum "$BACKUP_DIR/target/rendered-compose.json" | awk '{print $1}')" --arg target_env "$(sha256sum "$BACKUP_DIR/target/.env" | awk '{print $1}')" \
   --arg target_manifest "$(sha256sum "$BACKUP_DIR/target/SHA256SUMS" | awk '{print $1}')" --arg backup "$BACKUP_DIR" \
-  --arg backup_manifest "$(sha256sum "$BACKUP_DIR/SHA256SUMS" | awk '{print $1}')" --arg prepared "$prepared_at" --arg expires "$expires_at" '
+  --arg backup_manifest "$(sha256sum "$BACKUP_DIR/SHA256SUMS" | awk '{print $1}')" --arg prepared "$prepared_at" --arg expires "$expires_at" \
+  --arg baseline_data_as_of "$BASELINE_DATA_AS_OF" --argjson baseline_missing "$BASELINE_MISSING_GROUP_REQUESTS" '
   {schema_version:1,operation_kind:$operation,base_release_id:$base,target_release_id:$target,base_custom_high_water:$high,
   source_commit:$source,target_commit:$target_commit,target_official_version:$official,target_custom_version:$custom,
   main_digest:$main,extensions_digest:$ext,current_main_digest:$current_main,current_extensions_digest:$current_ext,
   current_base_compose_sha256:$current_base,current_custom_compose_sha256:$current_custom,target_base_compose_sha256:$target_base,
   target_custom_compose_sha256:$target_custom,target_rendered_compose_sha256:$target_rendered,target_env_sha256:$target_env,
   target_artifact_manifest_sha256:$target_manifest,backup_dir:$backup,backup_manifest_sha256:$backup_manifest,
+  baseline_missing_group_requests:$baseline_missing,baseline_data_as_of:$baseline_data_as_of,
   prepared_at:$prepared,expires_at:$expires,images_verified:true,compose_contract:"deploy-explicit-pair-v1",backup_contract:"complete-paired-snapshot-v1"}' \
   > "$MANIFEST_SOURCE"
 release_install_manifest_files "$MANIFEST_DIR" "$MANIFEST_SOURCE" \

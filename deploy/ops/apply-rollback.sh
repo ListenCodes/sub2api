@@ -70,6 +70,10 @@ CURRENT_MAIN_DIGEST="$(jq -r '.current_main_digest' "$manifest")"
 CURRENT_EXTENSIONS_DIGEST="$(jq -r '.current_extensions_digest' "$manifest")"
 BACKUP_DIR="$(jq -r '.backup_dir' "$manifest")"
 TARGET_DIR="$BACKUP_DIR/target"
+BASELINE_MISSING_GROUP_REQUESTS="$(jq -r '.baseline_missing_group_requests // empty' "$manifest")"
+if [[ -n "$BASELINE_MISSING_GROUP_REQUESTS" ]]; then
+  [[ "$BASELINE_MISSING_GROUP_REQUESTS" =~ ^[0-9]+$ ]] || fail_before_mutation 'prepared data-quality baseline is invalid' PREPARED_MANIFEST_INVALID failed
+fi
 STATE_PATH="$(ledger_state_path)"
 BASE_RECORD_PATH="$(ledger_release_path "$BASE_RELEASE_ID")"
 TARGET_RECORD_PATH="$(ledger_release_path "$TARGET_RELEASE_ID")"
@@ -86,7 +90,8 @@ wait_container_healthy() {
 }
 
 check_data_quality() {
-  local rendered="$1" enabled secret timestamp nonce signature quality
+  local rendered="$1" enabled secret timestamp nonce signature quality missing data_as_of
+  DATA_QUALITY_DIAGNOSTICS='{}'
   enabled="$(jq -r '.services["extensions-self"].environment.ACCOUNT_MONITOR_ENABLED // "false" | ascii_downcase' "$rendered")"
   [[ "$enabled" == false ]] && return 0
   [[ "$enabled" == true ]] || return 1
@@ -99,7 +104,18 @@ message = (os.environ["MONITOR_TIMESTAMP"] + "\n" + os.environ["MONITOR_NONCE"] 
 print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).hexdigest())
 ')" || return 1
   quality="$(docker exec extensions-self wget -qO- -T 10 --header="X-Risk-Timestamp: $timestamp" --header="X-Risk-Nonce: $nonce" --header="X-Risk-Signature: $signature" --header='X-Risk-Actor-ID: 1' http://extensions-self:8090/api/v1/admin/account-monitor/data-quality)" || return 1
-  jq -e '.source_connected == true and .missing_group_requests == 0 and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null
+  if ! jq -e '.source_connected == true and (.missing_group_requests | type == "number" and floor == . and . >= 0) and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null; then
+    DATA_QUALITY_DIAGNOSTICS="$(jq -c '{source_connected,missing_group_requests,data_as_of}' <<< "$quality" 2>/dev/null || printf '{}')"
+    return 1
+  fi
+  missing="$(jq -r '.missing_group_requests' <<< "$quality")"
+  data_as_of="$(jq -r '.data_as_of' <<< "$quality")"
+  if [[ -n "$BASELINE_MISSING_GROUP_REQUESTS" ]] && (( missing > BASELINE_MISSING_GROUP_REQUESTS )); then
+    DATA_QUALITY_DIAGNOSTICS="$(jq -cn --argjson actual "$missing" --argjson baseline "$BASELINE_MISSING_GROUP_REQUESTS" --arg as_of "$data_as_of" \
+      '{source_connected:true,missing_group_requests:$actual,baseline_missing_group_requests:$baseline,data_as_of:$as_of}')"
+    return 1
+  fi
+  return 0
 }
 
 run_complete_health() {
@@ -157,6 +173,7 @@ release_running_container_matches_image extensions-self "$EXTENSIONS_REPOSITORY@
 
 rollback_started=false
 failure_message=''; failure_code=''
+DATA_QUALITY_DIAGNOSTICS='{}'
 restore_base_runtime() {
   local rendered
   release_restore_source_snapshot "$SOURCE_HEAD" "$SOURCE_REF" >> "$LOG" 2>&1 || return 1
@@ -181,7 +198,7 @@ rollback_on_error() {
     if [[ "$restored" == true ]]; then
       release_job_update "$JOB_ID" failed_rolled_back "${failure_message:-rollback failed}; pre-rollback release restored" "$(jq -n --arg cause "${failure_code:-ROLLBACK_APPLY_FAILED}" --arg artifact "$BACKUP_DIR" '{error_code:"ROLLBACK_FAILED_RESTORED",cause_error_code:$cause,artifact_path:$artifact,published:false,production_changed:false,rollback:{attempted:true,succeeded:true,message:"automatic restoration completed"}}')" || true
     else
-      release_job_update "$JOB_ID" rollback_failed "${failure_message:-rollback failed}; automatic restoration failed" "$(jq -n --arg cause "${failure_code:-ROLLBACK_APPLY_FAILED}" --arg artifact "$BACKUP_DIR" '{error_code:"ROLLBACK_RESTORATION_FAILED",cause_error_code:$cause,artifact_path:$artifact,published:false,production_changed:true,rollback:{attempted:true,succeeded:false,message:"automatic restoration failed; inspect fresh backup"}}')" || true
+      release_job_update "$JOB_ID" rollback_failed "${failure_message:-rollback failed}; automatic restoration failed" "$(jq -n --arg cause "${failure_code:-ROLLBACK_APPLY_FAILED}" --arg artifact "$BACKUP_DIR" --argjson diagnostics "${DATA_QUALITY_DIAGNOSTICS:-{}}" '{error_code:"ROLLBACK_RESTORATION_FAILED",cause_error_code:$cause,artifact_path:$artifact,published:false,production_changed:true,health_diagnostics:(if ($diagnostics|length)>0 then {data_quality:$diagnostics} else {} end),rollback:{attempted:true,succeeded:false,message:"automatic restoration failed; inspect fresh backup"}}')" || true
     fi
   fi
   exit "$code"

@@ -163,7 +163,9 @@ test('prepare validates evidence and apply deploys and rolls back an immutable i
     'health_checking',
     'rolling_back',
     'rollback_on_error',
-    'base_runtime_identity_matches'
+    'base_runtime_identity_matches',
+    'baseline_missing_group_requests',
+    'capture_data_quality_baseline'
   ]) {
     assert.match(publisher, new RegExp(escapeRegExp(marker)), `publisher is missing ${marker}`)
   }
@@ -185,6 +187,8 @@ test('prepare validates evidence and apply deploys and rolls back an immutable i
   const rollbackFallbackIndex = publisher.indexOf('base_runtime_identity_matches')
   const ledgerRestoreIndex = publisher.indexOf('ledger_restore_failed_apply')
   assert.ok(rollbackFallbackIndex >= 0 && rollbackFallbackIndex < ledgerRestoreIndex)
+  assert.doesNotMatch(publisher, /missing_group_requests\s*==\s*0/)
+  assert.match(publisher, /missing\s*>\s*BASELINE_MISSING_GROUP_REQUESTS/)
 })
 
 test('dispatcher selects all two-stage update and rollback executors from ledger operations', () => {

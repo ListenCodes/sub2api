@@ -177,6 +177,8 @@ release_manifest_valid() {
     and (.update_kind | IN("official", "custom", "combined", "identity-config"))
     and (.base_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
     and (.base_custom_high_water | type == "number" and floor == . and . >= 0)
+    and ((.baseline_missing_group_requests // 0) | type == "number" and floor == . and . >= 0)
+    and ((.baseline_data_as_of // "") | type == "string")
     and (.target_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
     and (.current_official_version | type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
     and (.current_custom_version | type == "string" and test("^v1\\.0\\.[0-9]+$"))
@@ -238,6 +240,8 @@ release_manifest_valid() {
       and (.target_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
       and .base_release_id != .target_release_id
       and (.base_custom_high_water | type == "number" and floor == . and . >= 0)
+      and ((.baseline_missing_group_requests // 0) | type == "number" and floor == . and . >= 0)
+      and ((.baseline_data_as_of // "") | type == "string")
       and (.source_commit | type == "string" and test("^[0-9a-f]{40}$"))
       and (.target_commit | type == "string" and test("^[0-9a-f]{40}$"))
       and (.target_official_version | type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
