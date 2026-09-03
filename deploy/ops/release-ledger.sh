@@ -605,6 +605,9 @@ _ledger_commit_release_unlocked() {
     | .target_release_id=$release
     | .production_changed=true
     | .artifact_path=$backup
+    | .error_code=null
+    | .cause_error_code=null
+    | .health_diagnostics=null
     | .rollback={attempted:false,succeeded:false,message:""}
   ' <<< "$operation")" || return 1
   ledger_atomic_write "$operation_path" "$operation"
@@ -697,6 +700,9 @@ _ledger_commit_rollback_unlocked() {
     | .ts=$now | .updated_at=$now | .finished_at=$now
     | .published=false | .published_commit=$commit | .production_changed=true
     | .target_release_id=$target | .artifact_path=$artifact
+    | .error_code=null
+    | .cause_error_code=null
+    | .health_diagnostics=null
     | .rollback={attempted:false,succeeded:false,message:""}
   ' <<< "$operation")" || return 1
   ledger_atomic_write "$operation_path" "$operation"
