@@ -9,21 +9,71 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const baseline = JSON.parse(readFileSync(resolve(repoRoot, 'deploy/stable-release-baseline.json'), 'utf8'))
 const stableCommit = baseline.commit_sha
 
-function diff(relativePath) {
-  return execFileSync('git', ['diff', '--unified=0', stableCommit, '--', relativePath], {
+function isRevertedStableIntegration(mergeCommit, releaseTag) {
+  const firstParentChild = execFileSync(
+    'git',
+    ['log', '--first-parent', '--reverse', '--format=%H%x00%P%x00%s', `${mergeCommit}..HEAD`],
+    { cwd: repoRoot, encoding: 'utf8' }
+  ).trim().split(/\r?\n/).filter(Boolean)[0]
+  if (!firstParentChild) return false
+
+  const [revertCommit, revertParent, revertSubject] = firstParentChild.split('\0')
+  if (
+    revertParent !== mergeCommit ||
+    revertSubject !== `Revert "merge: integrate stable Release ${releaseTag}"`
+  ) return false
+
+  try {
+    execFileSync('git', ['diff', '--quiet', `${mergeCommit}^1`, revertCommit], {
+      cwd: repoRoot,
+      stdio: 'ignore'
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function latestStableIntegration() {
+  const history = execFileSync(
+    'git',
+    ['log', '--first-parent', '--merges', '--format=%H%x00%s', 'HEAD'],
+    { cwd: repoRoot, encoding: 'utf8' }
+  )
+
+  for (const entry of history.trim().split(/\r?\n/).filter(Boolean)) {
+    const [mergeCommit, subject] = entry.split('\0')
+    const releaseTag = subject?.match(/^merge: integrate stable Release (v\d+\.\d+\.\d+)$/)?.[1]
+    if (!releaseTag) continue
+    if (isRevertedStableIntegration(mergeCommit, releaseTag)) continue
+
+    const releaseCommit = execFileSync('git', ['rev-parse', `${mergeCommit}^2`], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    }).trim()
+    return { releaseTag, releaseCommit }
+  }
+
+  return { releaseTag: baseline.tag, releaseCommit: stableCommit }
+}
+
+const latestStable = latestStableIntegration()
+
+function diff(relativePath, fromCommit = stableCommit) {
+  return execFileSync('git', ['diff', '--unified=0', fromCommit, '--', relativePath], {
     cwd: repoRoot,
     encoding: 'utf8'
   })
 }
 
-function addedLines(relativePath) {
-  return diff(relativePath)
+function addedLines(relativePath, fromCommit = stableCommit) {
+  return diff(relativePath, fromCommit)
     .split(/\r?\n/)
     .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
     .map((line) => line.slice(1))
 }
 
-test(`upstream hotspots remain identical to Stable Release ${baseline.tag}`, () => {
+test(`upstream hotspots remain identical to Stable Release ${latestStable.releaseTag}`, () => {
   const forbidden = [
     'backend/cmd/server/wire_gen.go',
     'backend/internal/handler/wire.go',
@@ -38,18 +88,18 @@ test(`upstream hotspots remain identical to Stable Release ${baseline.tag}`, () 
   ]
 
   for (const relativePath of forbidden) {
-    const patch = diff(relativePath)
+    const patch = diff(relativePath, latestStable.releaseCommit)
     assert.equal(
       patch.trim(),
       '',
-      `${relativePath} exceeds the zero-overlap budget:\n${addedLines(relativePath).join('\n')}`
+      `${relativePath} exceeds the zero-overlap budget:\n${addedLines(relativePath, latestStable.releaseCommit).join('\n')}`
     )
   }
 })
 
 test('legacy release safety routes stay within the reviewed three-line budget', () => {
   const relativePath = 'backend/internal/server/routes/admin.go'
-  assert.deepEqual(addedLines(relativePath), [
+  assert.deepEqual(addedLines(relativePath, latestStable.releaseCommit), [
     '\t\tsystem.GET("/rollback-versions", h.Admin.System.LegacyRollbackUnsupported)',
     '\t\tsystem.POST("/update", h.Admin.System.PrepareUpdate)',
     '\t\tsystem.POST("/rollback", h.Admin.System.LegacyRollbackUnsupported)'
