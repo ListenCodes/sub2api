@@ -165,6 +165,9 @@ test('prepare validates evidence and apply deploys and rolls back an immutable i
     'rollback_on_error',
     'base_runtime_identity_matches',
     'baseline_missing_group_requests',
+    'baseline_quality_from',
+    'baseline_quality_to',
+    'release_data_quality_window',
     'capture_data_quality_baseline'
   ]) {
     assert.match(publisher, new RegExp(escapeRegExp(marker)), `publisher is missing ${marker}`)
@@ -189,6 +192,7 @@ test('prepare validates evidence and apply deploys and rolls back an immutable i
   assert.ok(rollbackFallbackIndex >= 0 && rollbackFallbackIndex < ledgerRestoreIndex)
   assert.doesNotMatch(publisher, /missing_group_requests\s*==\s*0/)
   assert.match(publisher, /missing\s*>\s*BASELINE_MISSING_GROUP_REQUESTS/)
+  assert.match(publisher, /release_data_quality_url[^\n]*BASELINE_QUALITY_FROM[^\n]*BASELINE_QUALITY_TO/)
 })
 
 test('dispatcher selects all two-stage update and rollback executors from ledger operations', () => {

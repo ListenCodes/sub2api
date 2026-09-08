@@ -241,6 +241,14 @@ Every production deployment must:
   or health gate; database restore is never automatic.
 - Avoid touching PostgreSQL and Redis unless the change explicitly requires it.
 
+An explicit, current user instruction may authorize a one-shot emergency apply
+with `SUB2API_SKIP_EXTERNAL_HEALTH_CHECKS=1`. This exception does not bypass the
+prepared manifest, immutable digest pair, verified backups, container health,
+or automatic rollback. Install the override only for the authorized apply,
+remove it immediately after the operation reaches a terminal state, and then
+run and record the complete strict health suite. Never persist this override or
+infer authorization from urgency, an earlier release, or a failed gate.
+
 The production Compose file requires `SUB2API_IMAGE` and
 `EXTENSIONS_SELF_IMAGE`; both values are `ghcr.io/...@sha256:...`. Do not add a
 production build context or a mutable application tag.

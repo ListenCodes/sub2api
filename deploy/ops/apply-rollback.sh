@@ -71,8 +71,14 @@ CURRENT_EXTENSIONS_DIGEST="$(jq -r '.current_extensions_digest' "$manifest")"
 BACKUP_DIR="$(jq -r '.backup_dir' "$manifest")"
 TARGET_DIR="$BACKUP_DIR/target"
 BASELINE_MISSING_GROUP_REQUESTS="$(jq -r '.baseline_missing_group_requests // empty' "$manifest")"
+BASELINE_QUALITY_FROM="$(jq -r '.baseline_quality_from // empty' "$manifest")"
+BASELINE_QUALITY_TO="$(jq -r '.baseline_quality_to // empty' "$manifest")"
 if [[ -n "$BASELINE_MISSING_GROUP_REQUESTS" ]]; then
   [[ "$BASELINE_MISSING_GROUP_REQUESTS" =~ ^[0-9]+$ ]] || fail_before_mutation 'prepared data-quality baseline is invalid' PREPARED_MANIFEST_INVALID failed
+fi
+if [[ -n "$BASELINE_QUALITY_FROM" || -n "$BASELINE_QUALITY_TO" ]]; then
+  [[ -n "$BASELINE_QUALITY_FROM" && -n "$BASELINE_QUALITY_TO" ]] \
+    || fail_before_mutation 'prepared data-quality window is incomplete' PREPARED_MANIFEST_INVALID failed
 fi
 STATE_PATH="$(ledger_state_path)"
 BASE_RECORD_PATH="$(ledger_release_path "$BASE_RELEASE_ID")"
@@ -90,7 +96,7 @@ wait_container_healthy() {
 }
 
 check_data_quality() {
-  local rendered="$1" enabled secret timestamp nonce signature quality missing data_as_of
+  local rendered="$1" enabled secret timestamp nonce signature quality missing data_as_of quality_url
   DATA_QUALITY_DIAGNOSTICS='{}'
   enabled="$(jq -r '.services["extensions-self"].environment.ACCOUNT_MONITOR_ENABLED // "false" | ascii_downcase' "$rendered")"
   [[ "$enabled" == false ]] && return 0
@@ -103,7 +109,11 @@ import hashlib, hmac, os
 message = (os.environ["MONITOR_TIMESTAMP"] + "\n" + os.environ["MONITOR_NONCE"] + "\n").encode()
 print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).hexdigest())
 ')" || return 1
-  quality="$(docker exec extensions-self wget -qO- -T 10 --header="X-Risk-Timestamp: $timestamp" --header="X-Risk-Nonce: $nonce" --header="X-Risk-Signature: $signature" --header='X-Risk-Actor-ID: 1' http://extensions-self:8090/api/v1/admin/account-monitor/data-quality)" || return 1
+  quality_url='http://extensions-self:8090/api/v1/admin/account-monitor/data-quality'
+  if [[ -n "$BASELINE_QUALITY_FROM" ]]; then
+    quality_url="$(release_data_quality_url "$quality_url" "$BASELINE_QUALITY_FROM" "$BASELINE_QUALITY_TO")" || return 1
+  fi
+  quality="$(docker exec extensions-self wget -qO- -T 10 --header="X-Risk-Timestamp: $timestamp" --header="X-Risk-Nonce: $nonce" --header="X-Risk-Signature: $signature" --header='X-Risk-Actor-ID: 1' "$quality_url")" || return 1
   if ! jq -e '.source_connected == true and (.missing_group_requests | type == "number" and floor == . and . >= 0) and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null; then
     DATA_QUALITY_DIAGNOSTICS="$(jq -c '{source_connected,missing_group_requests,data_as_of}' <<< "$quality" 2>/dev/null || printf '{}')"
     return 1
@@ -112,7 +122,8 @@ print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).h
   data_as_of="$(jq -r '.data_as_of' <<< "$quality")"
   if [[ -n "$BASELINE_MISSING_GROUP_REQUESTS" ]] && (( missing > BASELINE_MISSING_GROUP_REQUESTS )); then
     DATA_QUALITY_DIAGNOSTICS="$(jq -cn --argjson actual "$missing" --argjson baseline "$BASELINE_MISSING_GROUP_REQUESTS" --arg as_of "$data_as_of" \
-      '{source_connected:true,missing_group_requests:$actual,baseline_missing_group_requests:$baseline,data_as_of:$as_of}')"
+      --arg window_from "$BASELINE_QUALITY_FROM" --arg window_to "$BASELINE_QUALITY_TO" \
+      '{source_connected:true,missing_group_requests:$actual,baseline_missing_group_requests:$baseline,data_as_of:$as_of,quality_window:{from:$window_from,to:$window_to}}')"
     return 1
   fi
   return 0
@@ -123,12 +134,12 @@ run_complete_health() {
   docker compose --project-name deploy -f "$COMPOSE_BASE" -f "$COMPOSE_CUSTOM" --env-file "$ENV_FILE" ps --status running >/dev/null || return 1
   for container in extensions-self sub2api sub2api-postgres sub2api-redis risk-control-postgres; do wait_container_healthy "$container" || return 1; done
   if [[ "${SUB2API_SKIP_EXTERNAL_HEALTH_CHECKS:-0}" != 1 ]]; then
-    curl -fsS --max-time 15 "$INTERNAL_HEALTH_URL" >/dev/null || return 1
+    curl -fsS --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 5 --max-time 15 "$INTERNAL_HEALTH_URL" >/dev/null || return 1
     docker exec extensions-self wget -qO- -T 5 http://extensions-self:8090/healthz >/dev/null || return 1
-    curl -fsS --max-time 15 "$HOMEPAGE_HEALTH_URL" >/dev/null || return 1
-    curl -fsS --max-time 15 "$PUBLIC_HEALTH_URL" >/dev/null || return 1
-    curl -fsS --max-time 15 "$ADMIN_HEALTH_URL" >/dev/null || return 1
-    curl -fsS --max-time 15 "$EXTENSION_ROUTE_URL" >/dev/null || return 1
+    curl -fsS --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 5 --max-time 15 "$HOMEPAGE_HEALTH_URL" >/dev/null || return 1
+    curl -fsS --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 5 --max-time 15 "$PUBLIC_HEALTH_URL" >/dev/null || return 1
+    curl -fsS --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 5 --max-time 15 "$ADMIN_HEALTH_URL" >/dev/null || return 1
+    curl -fsS --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 5 --max-time 15 "$EXTENSION_ROUTE_URL" >/dev/null || return 1
     check_data_quality "$rendered" || return 1
   fi
 }

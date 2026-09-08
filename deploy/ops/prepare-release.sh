@@ -78,7 +78,8 @@ validate_snapshot_against_base_record() {
 }
 
 capture_data_quality_baseline() {
-  local rendered="$1" enabled secret timestamp nonce signature quality missing
+  local rendered="$1" enabled secret timestamp nonce signature quality missing quality_url
+  IFS=$'\t' read -r BASELINE_QUALITY_FROM BASELINE_QUALITY_TO < <(release_data_quality_window) || return 1
   BASELINE_MISSING_GROUP_REQUESTS=0
   BASELINE_DATA_AS_OF=''
   [[ -r "$rendered" ]] || return 1
@@ -93,10 +94,11 @@ import hashlib, hmac, os
 message = (os.environ["MONITOR_TIMESTAMP"] + "\n" + os.environ["MONITOR_NONCE"] + "\n").encode()
 print(hmac.new(os.environ["MONITOR_SECRET"].encode(), message, hashlib.sha256).hexdigest())
 ')" || return 1
+  quality_url="$(release_data_quality_url 'http://extensions-self:8090/api/v1/admin/account-monitor/data-quality' "$BASELINE_QUALITY_FROM" "$BASELINE_QUALITY_TO")" || return 1
   quality="$(docker exec extensions-self wget -qO- -T 10 \
     --header="X-Risk-Timestamp: $timestamp" --header="X-Risk-Nonce: $nonce" \
     --header="X-Risk-Signature: $signature" --header='X-Risk-Actor-ID: 1' \
-    http://extensions-self:8090/api/v1/admin/account-monitor/data-quality)" || return 1
+    "$quality_url")" || return 1
   jq -e '.source_connected == true and (.missing_group_requests | type == "number" and floor == . and . >= 0) and (.data_as_of | type == "string" and length > 0)' <<< "$quality" >/dev/null || return 1
   missing="$(jq -r '.missing_group_requests' <<< "$quality")"
   BASELINE_MISSING_GROUP_REQUESTS="$missing"
@@ -383,6 +385,7 @@ jq -n \
   --arg target_env_sha "$TARGET_ENV_SHA256" --arg target_manifest_sha "$TARGET_ARTIFACT_MANIFEST_SHA256" \
   --arg backup_dir "$BACKUP_DIR" --arg backup_manifest_sha "$BACKUP_MANIFEST_SHA256" \
   --arg baseline_data_as_of "$BASELINE_DATA_AS_OF" --argjson baseline_missing "$BASELINE_MISSING_GROUP_REQUESTS" \
+  --arg baseline_quality_from "$BASELINE_QUALITY_FROM" --arg baseline_quality_to "$BASELINE_QUALITY_TO" \
   --arg prepared_at "$prepared_at" --arg expires_at "$expires_at" --arg workflow_url "$WORKFLOW_URL" \
   '{schema_version:1,operation_kind:$operation_kind,update_kind:$update_kind,custom_docs_only:$custom_docs_only,base_release_id:$base_release_id,
     base_custom_high_water:$base_high_water,target_release_id:$target_release_id,
@@ -398,6 +401,7 @@ jq -n \
     target_rendered_compose_sha256:$target_rendered_sha,target_env_sha256:$target_env_sha,
     target_artifact_manifest_sha256:$target_manifest_sha,backup_dir:$backup_dir,backup_manifest_sha256:$backup_manifest_sha,
     baseline_missing_group_requests:$baseline_missing,baseline_data_as_of:$baseline_data_as_of,
+    baseline_quality_from:$baseline_quality_from,baseline_quality_to:$baseline_quality_to,
     prepared_at:$prepared_at,expires_at:$expires_at,workflow_url:$workflow_url,images_verified:true,
     compose_contract:"deploy-explicit-pair-v1",backup_contract:"complete-paired-snapshot-v1"}' \
   > "$MANIFEST_SOURCE"

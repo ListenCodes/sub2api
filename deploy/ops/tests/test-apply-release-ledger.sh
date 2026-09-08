@@ -121,9 +121,9 @@ case "${1:-}" in
     if [[ "$*" == *' sub2api-postgres '* && "$*" == *' psql '* ]]; then
       exit 0
     fi
-    if [[ "$FIXTURE_SCENARIO" == rollback-health-config ]]; then
+    if [[ "$FIXTURE_SCENARIO" == rollback-health-config || "$FIXTURE_SCENARIO" == data-quality-fixed-window ]]; then
       if [[ "$*" == *'/api/v1/admin/account-monitor/data-quality'* ]]; then
-        printf '{"source_connected":true,"missing_group_requests":0,"data_as_of":"2026-07-23T08:00:00Z"}\n'
+        printf '{"source_connected":true,"missing_group_requests":5,"data_as_of":"2026-07-23T08:00:00Z"}\n'
       else
         printf 'ok\n'
       fi
@@ -240,7 +240,7 @@ EOF
 cat > "$root/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$FIXTURE_CALLS"
-[[ "$FIXTURE_SCENARIO" != rollback-health-config ]] || exit 0
+[[ "$FIXTURE_SCENARIO" != rollback-health-config && "$FIXTURE_SCENARIO" != data-quality-fixed-window ]] || exit 0
 exit 97
 EOF
   cat > "$root/bin/flock" <<'EOF'
@@ -273,7 +273,7 @@ seed_case() {
   printf 'services:\n  sub2api:\n    image: ${SUB2API_IMAGE}\n# current base\n' > "$root/repo/deploy/docker-compose.yml"
   printf 'services:\n  extensions-self:\n    image: ${EXTENSIONS_SELF_IMAGE}\n# current custom\n' > "$root/repo/deploy/docker-compose.custom.yml"
   base_monitor_enabled=false
-  [[ "$scenario" != rollback-health-config ]] || base_monitor_enabled=true
+  [[ "$scenario" != rollback-health-config && "$scenario" != data-quality-fixed-window ]] || base_monitor_enabled=true
   printf 'SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@%s\nEXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@%s\nACCOUNT_MONITOR_ENABLED=%s\nKEEP=value\n' \
     "$OLD_MAIN_DIGEST" "$OLD_EXT_DIGEST" "$base_monitor_enabled" > "$root/repo/deploy/.env"
   cp -p "$root/repo/deploy/docker-compose.yml" "$backup/docker-compose.yml"
@@ -282,10 +282,12 @@ seed_case() {
 
   printf 'services:\n  sub2api:\n    image: ${SUB2API_IMAGE}\n# target base\n' > "$backup/target/docker-compose.yml"
   printf 'services:\n  extensions-self:\n    image: ${EXTENSIONS_SELF_IMAGE}\n# target custom\n' > "$backup/target/docker-compose.custom.yml"
-  printf 'SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@%s\nEXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@%s\nACCOUNT_MONITOR_ENABLED=false\nKEEP=value\n' \
-    "$NEW_MAIN_DIGEST" "$NEW_EXT_DIGEST" > "$backup/target/.env"
+  target_monitor_enabled=false
+  [[ "$scenario" != data-quality-fixed-window ]] || target_monitor_enabled=true
+  printf 'SUB2API_IMAGE=ghcr.io/listencodes/sub2api-custom@%s\nEXTENSIONS_SELF_IMAGE=ghcr.io/listencodes/sub2api-extensions@%s\nACCOUNT_MONITOR_ENABLED=%s\nKEEP=value\n' \
+    "$NEW_MAIN_DIGEST" "$NEW_EXT_DIGEST" "$target_monitor_enabled" > "$backup/target/.env"
   fixture_compose_json "ghcr.io/listencodes/sub2api-custom@$NEW_MAIN_DIGEST" \
-    "ghcr.io/listencodes/sub2api-extensions@$NEW_EXT_DIGEST" false > "$backup/target/rendered-compose.json"
+    "ghcr.io/listencodes/sub2api-extensions@$NEW_EXT_DIGEST" "$target_monitor_enabled" > "$backup/target/rendered-compose.json"
 
   base_hash="$(sha256sum "$root/repo/deploy/docker-compose.yml" | awk '{print $1}')"
   custom_hash="$(sha256sum "$root/repo/deploy/docker-compose.custom.yml" | awk '{print $1}')"
@@ -413,7 +415,7 @@ invoke_apply() {
   [[ "${DEBUG_APPLY:-0}" != 1 ]] || apply_command=(bash -x "$ROOT_DIR/deploy/ops/apply-release.sh")
   [[ "$scenario" != projection-write-failure ]] || failpoint=before_projection
   [[ "$scenario" != state-write-failure ]] || failpoint=before_state
-  [[ "$scenario" != rollback-health-config ]] || skip_external=0
+  [[ "$scenario" != rollback-health-config && "$scenario" != data-quality-fixed-window ]] || skip_external=0
   PATH="$root/bin:$PATH" FIXTURE_CALLS="$root/calls" FIXTURE_SCENARIO="$scenario" \
     FIXTURE_REPO_STATE="$root/repo-state" FIXTURE_RUNTIME_DIR="$root/runtime" \
     FIXTURE_NEW_MAIN_REF="ghcr.io/listencodes/sub2api-custom@$NEW_MAIN_DIGEST" FIXTURE_TARGET_COMMIT="$TARGET_COMMIT" \
@@ -465,6 +467,11 @@ apply_scenario_mutation() {
     running-container-drift) printf 'other\n' > "$root/runtime/sub2api" ;;
     kind-semantic-drift)
       jq --arg commit "$OTHER_COMMIT" '.target_official_version="v0.1.164" | .stable_release_tag="v0.1.164" | .stable_release_commit=$commit' \
+        "$manifest" > "$manifest.tmp" && mv "$manifest.tmp" "$manifest"
+      sha256sum "$manifest" > "$root/data/release-prepared/$job_id/manifest.sha256"
+      ;;
+    data-quality-fixed-window)
+      jq '.baseline_missing_group_requests=5 | .baseline_data_as_of="2026-07-23T08:00:00Z" | .baseline_quality_from="2026-07-22T07:50:00Z" | .baseline_quality_to="2026-07-23T07:50:00Z"' \
         "$manifest" > "$manifest.tmp" && mv "$manifest.tmp" "$manifest"
       sha256sum "$manifest" > "$root/data/release-prepared/$job_id/manifest.sha256"
       ;;
@@ -588,6 +595,10 @@ run_success_case() {
     main_line="$(grep -n 'docker compose .* up .* sub2api$' "$root/calls" | head -n 1 | cut -d: -f1)"
     [[ -n "$extensions_line" && -n "$main_line" && "$extensions_line" -lt "$main_line" ]] || fail "$scenario did not switch extensions before main"
   fi
+  if [[ "$scenario" == data-quality-fixed-window ]]; then
+    grep -qF 'data-quality?from=2026-07-22T07:50:00Z&to=2026-07-23T07:50:00Z' "$root/calls" \
+      || fail 'data-quality apply did not reuse the prepared fixed window'
+  fi
 }
 
 run_pre_mutation_refusal() {
@@ -662,7 +673,7 @@ run_inconsistent_recovery_refusal() {
 
 if [[ -n "${FIXTURE_ONLY:-}" ]]; then
   case "$FIXTURE_ONLY" in
-    success|official-success|combined-success|projection-write-failure|state-write-failure|duplicate|recovery|partial-record|partial-projection|partial-expired|runtime-only|runtime-only-expired)
+    success|official-success|combined-success|data-quality-fixed-window|projection-write-failure|state-write-failure|duplicate|recovery|partial-record|partial-projection|partial-expired|runtime-only|runtime-only-expired)
       run_success_case "$FIXTURE_ONLY"
       ;;
     expired|current-release-drift|high-water-drift|origin-drift|compose-drift|env-drift|digest-drift|backup-drift|missing-image|dirty-source|running-container-drift|kind-semantic-drift|terminal-active|recovery-attach-failure)
@@ -680,7 +691,7 @@ fi
 
 assert_inherited_lock_contract
 scenarios=(
-  success official-success combined-success
+  success official-success combined-success data-quality-fixed-window
   expired current-release-drift high-water-drift origin-drift compose-drift env-drift digest-drift
   backup-drift missing-image dirty-source running-container-drift kind-semantic-drift recovery-attach-failure
   extension-failure main-failure health-failure rollback-health-config
