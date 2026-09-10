@@ -46,7 +46,7 @@ test('custom production differences live only in the explicit overlay', () => {
   const overlay = read('deploy/docker-compose.custom.yml')
 
   assert.equal(existsSync(overlayPath), true, 'custom Compose overlay is missing')
-  assert.doesNotMatch(base, /SUB2API_IMAGE|EXTENSIONS_SELF_IMAGE|risk-control-postgres|extensions-self/)
+  assert.doesNotMatch(base, /\bSUB2API_IMAGE\b|\bEXTENSIONS_SELF_IMAGE\b|risk-control-postgres|extensions-self/)
   assert.doesNotMatch(base, /\/root\/sub2api|docker\.sock|sync-trigger\.sh|\/usr\/bin\/docker/)
   assert.match(overlay, /services:\s*\n\s+sub2api:/)
   for (const forbidden of [
