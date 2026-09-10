@@ -447,7 +447,7 @@ describe('UserRiskControlUserDrawer review case workflow', () => {
 	})
 
 	it('does not send an account mutation when recovery state cannot be stored', async () => {
-		const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
+		const storage = vi.spyOn(Object.getPrototypeOf(window.sessionStorage), 'setItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
 		const wrapper = mountDrawer({ risk_score: 80, risk_level: 'high', risk_type: 'login_failure' })
 		await flushPromises()
 		await wrapper.get('[data-testid="ban-user"]').trigger('click')

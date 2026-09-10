@@ -378,11 +378,12 @@ function statusFromError(error: unknown) { if (typeof error !== 'object' || erro
 function isDefinitiveStatusFailure(error: unknown) { const status = statusFromError(error); return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429 }
 function errorMessage(error: unknown, fallback: string) { if (typeof error === 'object' && error !== null && typeof (error as { message?: unknown }).message === 'string' && String((error as { message: string }).message).trim()) return String((error as { message: string }).message); return error instanceof Error && error.message.trim() ? error.message : fallback }
 function accountRecoveryKey() { return `sub2api:risk-account-recovery:${activeUser.value.id}` }
-function persistAccountRecovery() { try { if (accountRecovery.value) sessionStorage.setItem(accountRecoveryKey(), JSON.stringify(accountRecovery.value)) } catch { return false } emit('status-recovery', activeUser.value.id, Boolean(accountRecovery.value)); return true }
-function clearAccountRecovery() { try { sessionStorage.removeItem(accountRecoveryKey()) } catch (error) { void error } accountRecovery.value = null; emit('status-recovery', activeUser.value.id, false) }
+function sessionStore() { return window.sessionStorage }
+function persistAccountRecovery() { try { if (accountRecovery.value) sessionStore().setItem(accountRecoveryKey(), JSON.stringify(accountRecovery.value)) } catch { return false } emit('status-recovery', activeUser.value.id, Boolean(accountRecovery.value)); return true }
+function clearAccountRecovery() { try { sessionStore().removeItem(accountRecoveryKey()) } catch (error) { void error } accountRecovery.value = null; emit('status-recovery', activeUser.value.id, false) }
 function restoreAccountRecovery() {
 	try {
-		const raw = sessionStorage.getItem(accountRecoveryKey())
+		const raw = sessionStore().getItem(accountRecoveryKey())
 		const value = raw ? JSON.parse(raw) as Partial<AccountRecovery> : null
 		accountRecovery.value = value?.reason && value.requestId && value.status && value.pendingStep ? value as AccountRecovery : null
 	} catch { accountRecovery.value = null }
@@ -390,11 +391,11 @@ function restoreAccountRecovery() {
 	accountActionWarning.value = accountRecovery.value ? accountRecovery.value.pendingStep === 'status_confirmation' ? '上次请求结果未知，请使用原请求确认' : '账号状态已更新，仍有步骤需要恢复' : ''
 }
 function resolutionRecoveryKey() { return `sub2api:risk-case-resolution-recovery:${activeUser.value.case_id || 0}` }
-function persistResolutionRecovery() { try { if (resolutionRecovery.value) sessionStorage.setItem(resolutionRecoveryKey(), JSON.stringify(resolutionRecovery.value)); return true } catch { return false } }
-function clearResolutionRecovery() { try { sessionStorage.removeItem(resolutionRecoveryKey()) } catch (error) { void error } resolutionRecovery.value = null; resolutionRequestID.value = '' }
+function persistResolutionRecovery() { try { if (resolutionRecovery.value) sessionStore().setItem(resolutionRecoveryKey(), JSON.stringify(resolutionRecovery.value)); return true } catch { return false } }
+function clearResolutionRecovery() { try { sessionStore().removeItem(resolutionRecoveryKey()) } catch (error) { void error } resolutionRecovery.value = null; resolutionRequestID.value = '' }
 function restoreResolutionRecovery() {
 	try {
-		const raw = sessionStorage.getItem(resolutionRecoveryKey())
+		const raw = sessionStore().getItem(resolutionRecoveryKey())
 		const value = raw ? JSON.parse(raw) as Partial<ResolutionRecovery> : null
 		const valid = value && value.caseId === activeUser.value.case_id && value.userId === activeUser.value.id && value.reason && value.requestId && value.feedback && value.accountAction && value.expectedRevision
 		resolutionRecovery.value = valid ? value as ResolutionRecovery : null

@@ -13,6 +13,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Keep the full jsdom suite within the memory available on CI runners.
+    pool: 'forks',
+    minWorkers: 1,
+    maxWorkers: 2,
     setupFiles: ['./src/__tests__/setup.ts'],
     include: ['src/**/*.{test,spec}.{js,ts,jsx,tsx}'],
     exclude: ['node_modules', 'dist'],
