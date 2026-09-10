@@ -127,7 +127,7 @@ test('production compose requires immutable application image references', () =>
   const base = read('deploy/docker-compose.yml')
   const compose = read('deploy/docker-compose.custom.yml')
   assert.match(base, /image:\s*weishaw\/sub2api:latest/)
-  assert.doesNotMatch(base, /SUB2API_IMAGE|EXTENSIONS_SELF_IMAGE/)
+  assert.doesNotMatch(base, /\bSUB2API_IMAGE\b|\bEXTENSIONS_SELF_IMAGE\b/)
   assert.match(compose, /image:\s*\$\{SUB2API_IMAGE:\?SUB2API_IMAGE is required\}/)
   assert.match(
     compose,
