@@ -236,6 +236,10 @@ checking_release -> validating_tag -> merging_release
 9. 健康后写入 `release-state.json`。
 10. 仅在健康发布后，按 `data-quality.available_from/to` 执行必要的分段回填。
 
+数据质量回归比较固定使用 prepare 时生成的同一段 24 小时 UTC 区间，区间结束时间比
+prepare 早 10 分钟；apply 不再使用新的滚动窗口与旧基线比较。HTTP 健康探针会短暂重试，
+GitHub Checks API 的网络失败或匿名限流也会在原 90 分钟总超时内等待恢复。
+
 生产 Compose 验证命令固定为：
 
 ```bash
@@ -357,10 +361,15 @@ Release 校验、合并冲突、Actions 失败、镜像缺失、分支基线变�
 3. 从当前生产 commit 创建 `emergency/vps-YYYYMMDD`。
 4. 做最小修复，运行测试，commit 并推送应急分支。
 5. 将应急分支合入 `custom-release`，等待同一套 Actions 和双 GHCR 镜像。
-6. 仍由管理员按钮触发 digest 发布，不绕过门禁。
+6. 仍由管理员按钮触发 digest 发布，默认不绕过门禁。
 7. 记录 commit、Actions、双 digest、备份、部署、健康和回滚资料。
 
 不得直接修改运行中容器，也不能让 VPS 未提交代码成为唯一副本。
+
+只有用户在当前任务中明确要求“强制发布/跳过门禁”时，才允许对已经 prepared 的任务
+一次性设置 `SUB2API_SKIP_EXTERNAL_HEALTH_CHECKS=1`。该例外不跳过 manifest、双 digest、
+备份、容器健康和自动回退；任务进入终态后必须立即移除临时 systemd drop-in，并补跑、
+记录完整严格健康检查。不得把紧急程度、历史授权或一次失败自行解释为持续授权。
 
 ## 9. 发布后检查清单
 
@@ -389,7 +398,9 @@ Release 校验、合并冲突、Actions 失败、镜像缺失、分支基线变�
 | 新官方稳定 Release 且无冲突 | 12-20 分钟 |
 | Actions 排队或冷缓存 | 可能 20-30 分钟 |
 
-Actions 等待默认每 75 秒轮询一次，最长等待 90 分钟。超时或失败不会绕过门禁发布。
+Actions 等待默认每 75 秒轮询一次，最长等待 90 分钟；API 暂时不可达或限流时每 180 秒
+重试，只有持续到总超时才以 `ACTIONS_API_FAILED` 结束。超时或 required check 失败不会
+自行绕过门禁发布。
 
 ## 11. 标准报告格式
 

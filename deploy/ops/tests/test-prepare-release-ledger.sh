@@ -309,6 +309,9 @@ run_case() {
   done
   jq -e '.prepared_at | fromdateiso8601 > 0' "$manifest" >/dev/null || fail "$scenario prepared_at is invalid"
   jq -e '.expires_at | fromdateiso8601 > 0' "$manifest" >/dev/null || fail "$scenario expires_at is invalid"
+  jq -e '.baseline_quality_from | fromdateiso8601 > 0' "$manifest" >/dev/null || fail "$scenario baseline_quality_from is invalid"
+  jq -e '.baseline_quality_to | fromdateiso8601 > 0' "$manifest" >/dev/null || fail "$scenario baseline_quality_to is invalid"
+  assert_eq 86400 "$(( $(date -u -d "$(jq -r '.baseline_quality_to' "$manifest")" +%s) - $(date -u -d "$(jq -r '.baseline_quality_from' "$manifest")" +%s) ))" "$scenario data-quality window"
   backup_dir="$(jq -r '.backup_dir' "$manifest")"
   [[ -s "$backup_dir/target/docker-compose.yml" && -s "$backup_dir/target/docker-compose.custom.yml" && -s "$backup_dir/target/.env" && -s "$backup_dir/target/rendered-compose.json" ]] || fail "$scenario target artifacts are incomplete"
   grep -q 'target base' "$backup_dir/target/docker-compose.yml" || fail "$scenario rendered the production base Compose"

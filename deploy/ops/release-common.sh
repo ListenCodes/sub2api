@@ -155,6 +155,26 @@ release_install_manifest_files() {
   release_manifest_targets_safe "$manifest_dir"
 }
 
+release_data_quality_window() {
+  local cooldown_seconds="${SUB2API_DATA_QUALITY_COOLDOWN_SECONDS:-600}"
+  local window_seconds="${SUB2API_DATA_QUALITY_WINDOW_SECONDS:-86400}"
+  local now_epoch to_epoch from_epoch
+  [[ "$cooldown_seconds" =~ ^[0-9]+$ && "$window_seconds" =~ ^[1-9][0-9]*$ ]] || return 1
+  now_epoch="$(date -u +%s)" || return 1
+  to_epoch=$((now_epoch - cooldown_seconds))
+  from_epoch=$((to_epoch - window_seconds))
+  (( from_epoch > 0 && from_epoch < to_epoch )) || return 1
+  printf '%s\t%s\n' \
+    "$(date -u -d "@$from_epoch" '+%Y-%m-%dT%H:%M:%SZ')" \
+    "$(date -u -d "@$to_epoch" '+%Y-%m-%dT%H:%M:%SZ')"
+}
+
+release_data_quality_url() {
+  local base_url="$1" from="$2" to="$3"
+  [[ -n "$base_url" && "$from" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T && "$to" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] || return 1
+  printf '%s?from=%s&to=%s\n' "$base_url" "$from" "$to"
+}
+
 release_manifest_valid() {
   local job_id="$1" manifest manifest_dir expected actual expires backup_dir backup_root_real backup_dir_real operation_kind
   release_ensure_prepared_root || return 1
@@ -179,6 +199,10 @@ release_manifest_valid() {
     and (.base_custom_high_water | type == "number" and floor == . and . >= 0)
     and ((.baseline_missing_group_requests // 0) | type == "number" and floor == . and . >= 0)
     and ((.baseline_data_as_of // "") | type == "string")
+    and ((.baseline_quality_from // "") | type == "string")
+    and ((.baseline_quality_to // "") | type == "string")
+    and (if (.baseline_quality_from // "") == "" and (.baseline_quality_to // "") == "" then true
+      else (.baseline_quality_from | fromdateiso8601) < (.baseline_quality_to | fromdateiso8601) end)
     and (.target_release_id | type == "string" and test("^release-[A-Za-z0-9-]+$"))
     and (.current_official_version | type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
     and (.current_custom_version | type == "string" and test("^v1\\.0\\.[0-9]+$"))
@@ -242,6 +266,10 @@ release_manifest_valid() {
       and (.base_custom_high_water | type == "number" and floor == . and . >= 0)
       and ((.baseline_missing_group_requests // 0) | type == "number" and floor == . and . >= 0)
       and ((.baseline_data_as_of // "") | type == "string")
+      and ((.baseline_quality_from // "") | type == "string")
+      and ((.baseline_quality_to // "") | type == "string")
+      and (if (.baseline_quality_from // "") == "" and (.baseline_quality_to // "") == "" then true
+        else (.baseline_quality_from | fromdateiso8601) < (.baseline_quality_to | fromdateiso8601) end)
       and (.source_commit | type == "string" and test("^[0-9a-f]{40}$"))
       and (.target_commit | type == "string" and test("^[0-9a-f]{40}$"))
       and (.target_official_version | type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))

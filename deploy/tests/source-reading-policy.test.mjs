@@ -15,6 +15,55 @@ const stableBaselineCommit = stableBaseline.commit_sha
 
 assert.match(stableBaselineCommit, /^[0-9a-f]{40}$/, 'Stable baseline commit must be a full SHA')
 
+function isRevertedStableIntegration(mergeCommit, releaseTag) {
+  const firstParentChild = execFileSync(
+    'git',
+    ['log', '--first-parent', '--reverse', '--format=%H%x00%P%x00%s', `${mergeCommit}..HEAD`],
+    { cwd: repoRoot, encoding: 'utf8' }
+  ).trim().split(/\r?\n/).filter(Boolean)[0]
+  if (!firstParentChild) return false
+
+  const [revertCommit, revertParent, revertSubject] = firstParentChild.split('\0')
+  if (
+    revertParent !== mergeCommit ||
+    revertSubject !== `Revert "merge: integrate stable Release ${releaseTag}"`
+  ) return false
+
+  try {
+    execFileSync('git', ['diff', '--quiet', `${mergeCommit}^1`, revertCommit], {
+      cwd: repoRoot,
+      stdio: 'ignore'
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function stableComparisonCommits() {
+  const history = execFileSync(
+    'git',
+    ['log', '--first-parent', '--merges', '--format=%H%x00%s', 'HEAD'],
+    { cwd: repoRoot, encoding: 'utf8' }
+  )
+
+  for (const entry of history.trim().split(/\r?\n/).filter(Boolean)) {
+    const [mergeCommit, subject] = entry.split('\0')
+    const releaseTag = subject?.match(/^merge: integrate stable Release (v\d+\.\d+\.\d+)$/)?.[1]
+    if (!releaseTag || isRevertedStableIntegration(mergeCommit, releaseTag)) continue
+
+    const releaseCommit = execFileSync('git', ['rev-parse', `${mergeCommit}^2`], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    }).trim()
+    return [releaseCommit, stableBaselineCommit]
+  }
+
+  return [stableBaselineCommit]
+}
+
+const comparisonCommits = stableComparisonCommits()
+
 // Official tests are accepted only while byte-identical to the recorded Stable
 // baseline. This budget therefore covers custom-owned differences only.
 const permanentAllowlist = new Map([])
@@ -45,16 +94,19 @@ function repoPath(path) {
 }
 
 function matchesStableBaseline(path, source) {
-  try {
-    const stableSource = execFileSync(
-      'git',
-      ['show', `${stableBaselineCommit}:${path}`],
-      { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
-    )
-    return source === stableSource
-  } catch {
-    return false
+  for (const commit of comparisonCommits) {
+    try {
+      const stableSource = execFileSync(
+        'git',
+        ['show', `${commit}:${path}`],
+        { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      )
+      if (source === stableSource) return true
+    } catch {
+      // The path may not exist in an older comparison commit.
+    }
   }
+  return false
 }
 
 function escapeRegExp(value) {

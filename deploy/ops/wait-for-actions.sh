@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY="${SUB2API_GITHUB_REPOSITORY:-ListenCodes/sub2api}"
 POLL_SECONDS="${SUB2API_ACTIONS_POLL_SECONDS:-75}"
 TIMEOUT_SECONDS="${SUB2API_ACTIONS_TIMEOUT_SECONDS:-5400}"
+ERROR_RETRY_SECONDS="${SUB2API_ACTIONS_ERROR_RETRY_SECONDS:-180}"
 CHECKS_FIXTURE="${SUB2API_CHECKS_JSON_FILE:-}"
 RESULT_FILTER="${SUB2API_ACTIONS_RESULT_FILTER:-$SCRIPT_DIR/actions-check-result.jq}"
 USER_AGENT='sub2api-release-actions-waiter/1'
@@ -22,6 +23,7 @@ fail() {
 [[ "${1:-}" =~ ^[0-9a-f]{40}$ ]] || fail 'candidate commit must be a full SHA' ACTIONS_INVALID_COMMIT
 COMMIT="$1"
 [[ -r "$RESULT_FILTER" ]] || fail 'Actions result filter is missing' ACTIONS_EVIDENCE_INVALID
+[[ "$ERROR_RETRY_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail 'Actions API retry interval is invalid' ACTIONS_EVIDENCE_INVALID
 
 read_checks() {
   if [[ -n "$CHECKS_FIXTURE" ]]; then
@@ -37,7 +39,12 @@ read_checks() {
 
 started="$(date +%s)"
 while true; do
-  checks_json="$(read_checks)" || fail 'GitHub checks API request failed' ACTIONS_API_FAILED
+  if ! checks_json="$(read_checks)"; then
+    now="$(date +%s)"
+    (( now - started < TIMEOUT_SECONDS )) || fail 'GitHub checks API request failed until timeout' ACTIONS_API_FAILED
+    sleep "$ERROR_RETRY_SECONDS"
+    continue
+  fi
   result="$(jq -c --argjson expected "$EXPECTED_CHECKS" -f "$RESULT_FILTER" <<< "$checks_json" 2>/dev/null)" \
     || fail 'GitHub checks response was invalid' ACTIONS_EVIDENCE_INVALID
   outcome="$(jq -r 'if .ok == true then "success" elif .ok == false then "failed" else "pending" end' <<< "$result")"

@@ -280,7 +280,10 @@ skipped required check records `failed_check`, `check_url`, `conclusion`,
 `workflow_url`, a specific `error_code`, and `production_changed=false` in the
 same durable operation. Missing or malformed check evidence fails closed;
 `images` is a required check and cannot be skipped. Do not replace this evidence
-with the generic label "required GitHub Actions".
+with the generic label "required GitHub Actions". Transient transport failures
+and anonymous API rate limits are retried inside the existing 90-minute overall
+timeout; only continuous API failure through that deadline becomes
+`ACTIONS_API_FAILED`.
 
 Installing a newer script set does not rewrite an already-running or historical
 operation. Let an operation created by older scripts reach a terminal state
@@ -601,8 +604,11 @@ For the first enabled release, use this order:
    while full keys and credentials are denied.
 5. Verify the paired GHCR digests and recreate only `extensions-self`, then `sub2api`.
 6. Verify `/admin/extensions/account-monitor`, `/admin/extensions/group-monitor`,
-   signed `data-quality`, risk pages, the custom homepage, and its public-groups
-   endpoint. The apply health gate must fail if the live-rate endpoint is unavailable.
+    signed `data-quality`, risk pages, the custom homepage, and its public-groups
+    endpoint. The apply health gate must fail if the live-rate endpoint is unavailable.
+    The data-quality regression comparison uses the same prepared 24-hour UTC
+    interval for both readings and ends that interval ten minutes before prepare,
+    so ordinary traffic and collector lookback cannot move the comparison window.
 7. Reconcile sampled success, failure, retry-after-failure, model, cost, and
    media counts. Record the actual available historical range.
 
@@ -826,6 +832,14 @@ recreated. A failed extension, main, or health step restores the old local
 digest pair and matching prepared Compose/backup evidence before reporting
 failure. `publish-custom.sh` is a deprecated fail-closed shim and is not a
 release entry point.
+
+The normal path never bypasses these gates. A current, explicit user instruction
+may authorize a one-shot emergency apply with
+`SUB2API_SKIP_EXTERNAL_HEALTH_CHECKS=1`; the prepared manifest, local immutable
+digest pair, validated backup, container health, and automatic rollback remain
+mandatory. Remove the systemd drop-in immediately after terminal success or
+failure and run the complete strict suite afterward. Urgency or an earlier
+authorization is not sufficient.
 
 The `/admin/system/update` endpoint remains a prepare-only compatibility alias.
 Legacy single-phase jobs are rejected with

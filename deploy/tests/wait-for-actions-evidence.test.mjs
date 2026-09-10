@@ -141,3 +141,10 @@ test('site bootstrap installs the versioned Actions result filter', () => {
   )
   assert.match(source, /rm -f -- "\$INSTALL_ROOT\/actions-check-result\.jq"/)
 })
+
+test('the Actions waiter tolerates transient API failures within the overall timeout', () => {
+  const source = readFileSync(waiter, 'utf8')
+  assert.match(source, /SUB2API_ACTIONS_ERROR_RETRY_SECONDS/)
+  assert.match(source, /if ! checks_json="\$\(read_checks\)"; then[\s\S]*sleep "\$ERROR_RETRY_SECONDS"[\s\S]*continue/)
+  assert.match(source, /GitHub checks API request failed until timeout/)
+})
