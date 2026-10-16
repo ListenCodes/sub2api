@@ -1,0 +1,206 @@
+name: Custom Release
+
+on:
+  push:
+    branches:
+      - custom-release
+      - 'integration/release-*'
+    paths-ignore:
+      - '*.md'
+      - '**/*.md'
+      - 'AGENTS.md'
+      - '**/AGENTS.md'
+      - '.gitignore'
+      - '**/.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: |
+          expected_go_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          actual_go_version="$(go env GOVERSION)"
+          test "$actual_go_version" = "go${expected_go_version}"
+      - name: Backend unit tests
+        working-directory: backend
+        run: make test-unit
+      - name: Backend integration tests
+        working-directory: backend
+        run: make test-integration
+
+  golangci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          install-mode: goinstall
+          args: --timeout=30m
+          working-directory: backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: pnpm run typecheck
+      - name: Frontend Vitest
+        working-directory: frontend
+        run: pnpm run test:run
+      - name: Frontend production build
+        working-directory: frontend
+        run: pnpm run build
+
+  extensions:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: risk_control_test
+          POSTGRES_USER: risk_test
+          POSTGRES_PASSWORD: risk_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U risk_test -d risk_control_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RISK_CONTROL_TEST_DATABASE_URL: postgres://risk_test:risk_test_password@127.0.0.1:5432/risk_control_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: extensions-self/risk-control/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: |
+            extensions-self/account-monitor/go.sum
+            extensions-self/risk-control/go.sum
+      - name: Account monitor tests
+        working-directory: extensions-self/account-monitor
+        run: go test ./...
+      - name: Risk control tests
+        working-directory: extensions-self/risk-control
+        run: go test ./...
+
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Fetch recorded Stable baseline
+        shell: bash
+        run: |
+          stable_tag="$(node -p "JSON.parse(require('fs').readFileSync('deploy/stable-release-baseline.json', 'utf8')).tag")"
+          stable_commit="$(node -p "JSON.parse(require('fs').readFileSync('deploy/stable-release-baseline.json', 'utf8')).commit_sha")"
+          git fetch --force --no-tags https://github.com/Wei-Shaw/sub2api.git "refs/tags/${stable_tag}:refs/tags/${stable_tag}"
+          test "$(git rev-parse "refs/tags/${stable_tag}^{commit}")" = "$stable_commit"
+      - name: Deployment contracts
+        run: node --test deploy/tests/*.test.mjs
+      - name: Site bootstrap fixtures
+        run: bash deploy/tests/site-bootstrap-test.sh
+      - name: Operations contracts
+        shell: pwsh
+        run: ./deploy/ops/tests/test-script-contract.ps1
+      - name: Stable Release resolver tests
+        run: bash deploy/ops/tests/test-release-resolver.sh
+      - name: Release pipeline fixtures
+        run: bash deploy/ops/tests/test-release-pipeline.sh
+      - name: Shell syntax
+        run: find deploy/ops -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      go_version: ${{ steps.release.outputs.go_version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: release
+        name: Read stable Release and Go versions
+        run: |
+          tag="$(jq -er '.tag' deploy/stable-release-baseline.json)"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          go_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          [[ "$go_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "go_version=${go_version}" >> "$GITHUB_OUTPUT"
+
+  images:
+    needs: [backend, golangci, frontend, extensions, deployment, metadata]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push main image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/listencodes/sub2api-custom:custom-${{ github.sha }}
+          build-args: |
+            GOLANG_IMAGE=golang:${{ needs.metadata.outputs.go_version }}-alpine
+            VERSION=${{ needs.metadata.outputs.version }}
+            COMMIT=${{ github.sha }}
+            IMAGE_VERSION=${{ needs.metadata.outputs.version }}
+            IMAGE_REVISION=${{ github.sha }}
+      - name: Build and push extensions image
+        uses: docker/build-push-action@v6
+        with:
+          context: extensions-self
+          file: extensions-self/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/listencodes/sub2api-extensions:custom-${{ github.sha }}
+          build-args: |
+            IMAGE_VERSION=${{ needs.metadata.outputs.version }}
+            IMAGE_REVISION=${{ github.sha }}
