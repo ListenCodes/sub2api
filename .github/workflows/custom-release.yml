@@ -207,3 +207,5 @@ jobs:
 
 # ci: rerun release checks after Actions settings re-save
 
+# ci: Actions execution enabled
+
