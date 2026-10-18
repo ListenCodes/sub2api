@@ -204,3 +204,6 @@ jobs:
           build-args: |
             IMAGE_VERSION=${{ needs.metadata.outputs.version }}
             IMAGE_REVISION=${{ github.sha }}
+
+# ci: rerun release checks after Actions settings re-save
+
