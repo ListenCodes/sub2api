@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -237,6 +238,7 @@ func TestResolveRiskCaseMarksPermanentAccountPolicyErrorsNotRetryable(t *testing
 		updateErr error
 	}{
 		{name: "admin cannot be disabled", updateErr: service.ErrCannotDisableAdminUser},
+		{name: "stable admin protection", updateErr: infraerrors.BadRequest("ADMIN_DISABLE_FORBIDDEN", "cannot disable admin user; change the role to user first")},
 		{name: "user no longer exists", getErr: service.ErrUserNotFound},
 	}
 	for _, test := range tests {
